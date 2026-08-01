@@ -42,7 +42,7 @@ Calendar watch ─→ Scheduler ─→ Capture (per meeting, mode A1/A2/B/C/D)
 | Orchestration | Postgres FSM, `FOR UPDATE SKIP LOCKED` workers | durable, inspectable, zero extra infra; upgrade path → Temporal |
 | Data | PostgreSQL 16 + pgvector + FTS | relational + vector + graph edges in one store |
 | Blobs | S3-compatible (Cloudflare R2) | zero egress fees |
-| Agents | Claude API — Sonnet / Haiku / Opus tiered | cost control by task difficulty |
+| Agents | **Claude via Vertex AI** — Sonnet / Haiku / Opus tiered | cost control by task difficulty; GCP-native billing/auth alongside the Google Speech-to-Text vendor credentials |
 | Frontend | Next.js + TypeScript | report, chat, corrections, approvals |
 | Deploy | Docker Compose (pilot) → K8s (scale) | same images both stages |
 

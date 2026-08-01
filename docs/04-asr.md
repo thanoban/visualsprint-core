@@ -19,9 +19,7 @@
 ## The cascade
 
 ```
-audio → VAD → pyannote diarization (language-independent)
-                ↓
-        VoxLingua107 language-ID per span (~0.5–1 s windows, merge adjacent)
+audio → VAD (Silero) → VoxLingua107 language-ID per span (~0.75 s windows, merge adjacent)
                 ↓
    ┌────────────┼────────────────┐
  English      Sinhala          Tamil
@@ -34,7 +32,13 @@ audio → VAD → pyannote diarization (language-independent)
         final transcript, per-utterance lang_tags + confidence
 ```
 
+Diarization (speaker identity) is a **separate concern from this cascade** — it's the `Diarizer` interface, fused with platform speaker labels at keyframe/identity time (Phase 3), not a step inside ASR routing itself.
+
 **Known cost:** the cascade is weakest at switch points (VAD+LID+ASR errors compound there). Eval reports **switch-point accuracy separately** — tracked, never hidden in average WER. LLM repair is the mitigation and quality lever.
+
+## Implementation status
+
+VAD, LID, and the Google/Azure/Groq routing cascade with auto-failover are implemented (`backend/app/asr/`, `backend/app/adapters/asr_*.py`) and satisfy the `Transcriber` protocol, so the orchestrator's `transcribe` stage (`backend/app/orchestrator/worker.py`) consumes them as a drop-in. **Not yet runtime-verified** — no live Google/Azure/Groq credentials configured, and `torch`/`speechbrain` (VAD/LID backends) aren't installed in dev yet. The gold set, eval harness, and LLM repair pass are not started.
 
 ## Gold set (weeks 1–3)
 

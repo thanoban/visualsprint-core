@@ -4,10 +4,10 @@ Solo-dev week estimates.
 
 | Phase | Weeks | Deliverable |
 |---|---|---|
-| **0. Foundations** ✅ | 1–2 | Monorepo, schema, FSM orchestrator, blob store, all six swap-point interfaces |
-| **0b. ASR baseline** | 1–3 | Gold set + eval harness; rank Google vs Azure; freeze regression baseline |
-| **1. Capture** | 3–6 | **Mode D upload first** ✅ (walking skeleton) → Mode A2 artifacts (Meet REST, Zoom Cloud Rec) → A1 RTMS. Calendar watch, disclosure, coverage telemetry |
-| **2. ASR cascade** | 4–7 | VAD + LID + routing + failover + LLM repair; correction UI + glossary (flywheel live) |
+| **0. Foundations** ✅ | 1–2 | Monorepo, schema, FSM orchestrator, blob store, all six swap-point interfaces — **runtime-verified**: migration applied, upload→acquire→transcribe proven end-to-end (`tests/test_upload_pipeline.py`) |
+| **0b. ASR baseline** | 1–3 | Gold set + eval harness; rank Google vs Azure; freeze regression baseline — **not started** |
+| **1. Capture** | 3–6 | **Mode D upload** ✅ runtime-verified → Mode A2 artifacts (Meet REST ✅ code, Zoom Cloud Rec ✅ code — both unit-tested against fakes, not live APIs) → A1 RTMS (not started). Calendar watch, disclosure, coverage telemetry not started |
+| **2. ASR cascade** | 4–7 | VAD + LID + routing + failover ✅ implemented (`backend/app/asr/`, `backend/app/adapters/asr_*.py`) and wired into the pipeline's `transcribe` stage (`worker.py::_get_transcriber`), but **not runtime-verified against real audio/vendor credentials** — the walking-skeleton test substitutes a fake Transcriber. LLM repair pass, correction UI + glossary flywheel not started |
 | **3. Understanding** | 7–12 | Keyframes, OCR/VLM, speech↔screen grounding, five agents, evidence + confidence |
 | **4. Memory + Chat** | 11–15 | Lifecycle edges, hybrid retrieval, **org-memory chat with evidence chips** — MongoDB acceptance test passes |
 | **5. Product + Automation** | 14–18 | Report UI, coverage display, approval UI; follow-up email, Slack recap, Jira/GitHub task automations |

@@ -34,7 +34,7 @@ A transcript alone cannot give the full context of a meeting — the real inform
 
 ## Product surfaces
 
-1. **Meeting report** — generated only from verified knowledge items; confidence badges, evidence links, coverage banner.
+1. **Meeting report** — generated only from verified knowledge items; confidence badges, **inline screenshot thumbnails for screen evidence** (not just links), coverage banner.
 2. **Org-memory chat** — "Claude Code for your meetings": full org meeting history, every claim cites clickable evidence chips. Includes meeting-prep briefings.
 3. **Automation layer** — human-gated proposals from verified knowledge: follow-up email drafts, Slack/Teams recaps, Jira/GitHub/Linear tasks, calendar follow-ups, blocker escalations, commitment reminders. Post-MVP: field-level CRM sync.
 4. **Correction & glossary UI** — fixes improve the org glossary immediately and accrue (with consent) into the only si-ta-en code-switched meeting corpus in existence: product feature now, strategic moat forever.

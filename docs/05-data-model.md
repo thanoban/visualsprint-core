@@ -10,6 +10,7 @@ Implemented in [`backend/app/db/models.py`](../backend/app/db/models.py). UUID s
 ## Meetings & capture
 - `meeting` — platform, scheduling
 - `capture_session` — mode A1/A2/B/C/D, FSM state, disclosure log
+- `audio_track` — one acquired audio track per session (uri, participant person/display-name if known). Zoom's per-participant audio yields one row per speaker; mixed-audio modes (Meet/Teams/Mode D) yield exactly one row with participant fields null. Mode D writes this directly at upload time; other modes will write it from `PlatformAdapter.acquire()` once wired
 - `participant` — roster entry, links to person
 - `coverage_interval` — *(session, span, modality, ok/degraded/missing, reason)* → capture honesty
 
