@@ -137,6 +137,25 @@ class CaptureSession(TimestampMixin, Base):
     meeting: Mapped[Meeting] = relationship()
 
 
+class AudioTrack(TimestampMixin, Base):
+    """One acquired audio track for a capture session — mirrors
+    interfaces.platform.AudioTrack. Mode D writes this directly at upload time;
+    other modes will write it from PlatformAdapter.acquire() once wired.
+    A session with per-participant tracks (Zoom) has one row per participant;
+    a mixed-audio session (Meet/Teams/D) has exactly one row with participant
+    fields null."""
+
+    __tablename__ = "audio_track"
+    __table_args__ = (Index("ix_audiotrack_session", "capture_session_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    uri: Mapped[str] = mapped_column(String(1000))
+    participant_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
+    participant_display_name: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
 class Participant(TimestampMixin, Base):
     __tablename__ = "participant"
     __table_args__ = (Index("ix_participant_session", "capture_session_id"),)

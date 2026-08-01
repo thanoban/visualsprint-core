@@ -29,9 +29,22 @@ asr = [
     "google-cloud-speech>=2.27",
     "azure-cognitiveservices-speech>=1.40",
     "groq>=0.11",
+    "soundfile>=0.12",   # audio slicing for VAD/LID/vendor windows
+    "numpy>=1.26",
+    "torch>=2.2",        # Silero VAD, VoxLingua107 backend
+    "speechbrain>=1.0",  # VoxLingua107 language ID
 ]
 agents = [
-    "anthropic>=0.40",
+    "anthropic[vertex]>=0.40",
+]
+screen = [
+    "opencv-python>=4.10",
+    "imagehash>=4.3",
+    "scikit-image>=0.24",
+    "numpy>=1.26",
+    "Pillow>=10.4",
+    "paddleocr>=2.9",
+    "pyannote.audio>=3.3",
 ]
 
 [build-system]

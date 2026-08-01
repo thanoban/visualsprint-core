@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
 from app.db.base import get_db
-from app.db.models import CaptureSession, ConsentRecord, Meeting, Org
+from app.db.models import AudioTrack, CaptureSession, ConsentRecord, Meeting, Org
 from app.orchestrator.queue import enqueue_pipeline
 
 router = APIRouter(prefix="/api/v1/meetings", tags=["meetings"])
@@ -67,6 +67,11 @@ async def upload_meeting(
     audio_uri = await blob.put(
         f"audio/{org_id}/{session.id}{suffix}", data, file.content_type or "application/octet-stream"
     )
+
+    # Mode D is "acquired" the moment the file lands — one mixed track, no
+    # participant (uploader identity isn't a roster). Other modes populate
+    # this from PlatformAdapter.acquire() instead of here.
+    db.add(AudioTrack(org_id=org_id, capture_session_id=session.id, uri=audio_uri))
 
     # Mode D consent: the uploader attests they may share this recording.
     db.add(

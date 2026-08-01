@@ -25,12 +25,17 @@ class Settings(BaseSettings):
     azure_speech_key: str | None = None
     azure_speech_region: str | None = None
     groq_api_key: str | None = None
+    huggingface_token: str | None = None  # pyannote diarization pipelines are HF-gated
 
-    # --- Agents ---
+    # --- Agents (Claude via Vertex AI; auth is GCP Application Default Credentials) ---
     anthropic_api_key: str | None = None
+    vertex_project_id: str | None = None
+    vertex_region: str = "us-east5"
     model_extract: str = "claude-sonnet-5"
     model_classify: str = "claude-haiku-4-5-20251001"
     model_memory: str = "claude-opus-4-8"
+    model_verify: str = "claude-sonnet-5"
+    model_report: str = "claude-sonnet-5"
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0
