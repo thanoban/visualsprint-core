@@ -38,7 +38,7 @@ Diarization (speaker identity) is a **separate concern from this cascade** — i
 
 ## Implementation status
 
-VAD, LID, and the Google/Azure/Groq routing cascade with auto-failover are implemented (`backend/app/asr/`, `backend/app/adapters/asr_*.py`) and satisfy the `Transcriber` protocol, so the orchestrator's `transcribe` stage (`backend/app/orchestrator/worker.py`) consumes them as a drop-in. **Not yet runtime-verified** — no live Google/Azure/Groq credentials configured, and `torch`/`speechbrain` (VAD/LID backends) aren't installed in dev yet. The gold set, eval harness, and LLM repair pass are not started.
+VAD, LID, and the Google/Azure/Groq routing cascade with auto-failover are implemented (`backend/app/asr/`, `backend/app/adapters/asr_*.py`) and satisfy the `Transcriber` protocol, so the orchestrator's `transcribe` stage (`backend/app/orchestrator/worker.py`) consumes them as a drop-in. **Not yet runtime-verified** — no live Google/Azure/Groq credentials configured. The credential-free evaluation harness is implemented in `backend/app/evaluation/asr_eval.py`; it ranks saved provider outputs on WER, code-switch WER, switch-point F1, entity accuracy, coverage, and per-language WER, and can fail on regression against a frozen report. The consented 5–10 hour gold corpus and LLM repair pass are not started.
 
 ## Gold set (weeks 1–3)
 
