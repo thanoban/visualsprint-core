@@ -1,0 +1,22 @@
+name: visualsprint
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: visualsprint-db
+    environment:
+      POSTGRES_USER: visualsprint
+      POSTGRES_PASSWORD: visualsprint_dev
+      POSTGRES_DB: visualsprint
+    ports:
+      - "5433:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U visualsprint"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dbdata:

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+credentials*.json
+
+# Data / blobs (local dev)
+.blobstore/
+*.flac
+*.wav
+*.mp3
+*.mp4
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
