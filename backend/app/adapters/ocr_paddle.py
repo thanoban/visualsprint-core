@@ -26,7 +26,9 @@ from app.interfaces.ocr import OcrBlock, OcrResult
 
 DEFAULT_LANG = "en"  # PaddleOCR lang code; "ta" available, "si" unconfirmed — see module docstring
 
-RawOcrBlock = tuple[str, tuple[float, float, float, float], float]  # text, normalized bbox, confidence
+RawOcrBlock = tuple[
+    str, tuple[float, float, float, float], float
+]  # text, normalized bbox, confidence
 
 
 class OcrModelBackend(Protocol):
@@ -80,7 +82,10 @@ class PaddleOcrEngine:
     async def recognize(self, image_uri: str) -> OcrResult:
         async with self._materialize_image(image_uri) as image_path:
             raw_blocks = self._backend.run(image_path)
-        blocks = [OcrBlock(text=text, bbox=bbox, confidence=confidence) for text, bbox, confidence in raw_blocks]
+        blocks = [
+            OcrBlock(text=text, bbox=bbox, confidence=confidence)
+            for text, bbox, confidence in raw_blocks
+        ]
         return OcrResult(blocks=blocks)
 
     @asynccontextmanager
@@ -95,10 +100,10 @@ class PaddleOcrEngine:
         blob_store = self._blob_store or LocalBlobStore()
         data = await blob_store.get(image_uri)
         suffix = Path(image_uri).suffix or ".jpg"
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
-            tmp.close()
-            yield tmp.name
+            tmp_path = tmp.name
+        try:
+            yield tmp_path
         finally:
-            Path(tmp.name).unlink(missing_ok=True)
+            Path(tmp_path).unlink(missing_ok=True)

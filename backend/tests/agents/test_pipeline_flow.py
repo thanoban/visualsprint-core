@@ -6,14 +6,17 @@ about which columns build_report_input selects.
 """
 
 from app.agents.action import run_action_intelligence
-from app.agents.context import CandidateExtractionResult, CandidateKnowledgeItem, run_context_intelligence
+from app.agents.context import (
+    CandidateExtractionResult,
+    CandidateKnowledgeItem,
+    run_context_intelligence,
+)
 from app.agents.memory import MemoryDecision, run_memory_intelligence
 from app.agents.verification import VerificationResult, run_evidence_verification
 from app.db.models import (
     ActionStatus,
     CaptureSession,
     Confidence,
-    KnowledgeEdge,
     KnowledgeItem,
     KnowledgeType,
     LifecycleState,
@@ -40,8 +43,13 @@ def _seed_session_with_utterance(db, *, text: str = "we decided to use Postgres"
     db.flush()
     db.add(
         Utterance(
-            org_id=org.id, capture_session_id=session.id, start_s=0.0, end_s=2.0,
-            text=text, asr_confidence=0.9, attribution_confidence=0.0,
+            org_id=org.id,
+            capture_session_id=session.id,
+            start_s=0.0,
+            end_s=2.0,
+            text=text,
+            asr_confidence=0.9,
+            attribution_confidence=0.0,
         )
     )
     db.commit()
@@ -71,7 +79,9 @@ async def test_context_then_verification_never_leaks_rationale(db):
     assert item.confidence == Confidence.AMBIGUOUS
     assert item.confidence_rationale == ""  # not-yet-verified marker
 
-    verify_llm = FakeLlmClient(VerificationResult(confidence=Confidence.VERIFIED, rationale="evidence supports it"))
+    verify_llm = FakeLlmClient(
+        VerificationResult(confidence=Confidence.VERIFIED, rationale="evidence supports it")
+    )
     await run_evidence_verification(db, session_id, verify_llm)
 
     assert len(verify_llm.calls) == 1
@@ -94,21 +104,26 @@ async def test_memory_assigns_lifecycle_and_creates_edge(db):
     org_id = db.get(CaptureSession, session_id).org_id
 
     prior = KnowledgeItem(
-        org_id=org_id, capture_session_id=session_id, type=KnowledgeType.DECISION,
-        statement="Use MongoDB for the database", confidence=Confidence.VERIFIED,
-        confidence_rationale="prior meeting", lifecycle_state=LifecycleState.NEW,
+        org_id=org_id,
+        capture_session_id=session_id,
+        type=KnowledgeType.DECISION,
+        statement="Use MongoDB for the database",
+        confidence=Confidence.VERIFIED,
+        confidence_rationale="prior meeting",
+        lifecycle_state=LifecycleState.NEW,
     )
     new_item = KnowledgeItem(
-        org_id=org_id, capture_session_id=session_id, type=KnowledgeType.DECISION,
-        statement="Use Postgres for the database", confidence=Confidence.VERIFIED,
+        org_id=org_id,
+        capture_session_id=session_id,
+        type=KnowledgeType.DECISION,
+        statement="Use Postgres for the database",
+        confidence=Confidence.VERIFIED,
         confidence_rationale="this meeting",
     )
     db.add_all([prior, new_item])
     db.commit()
 
-    llm = FakeLlmClient(
-        MemoryDecision(lifecycle_state=LifecycleState.SUPERSEDED, edges=[])
-    )
+    llm = FakeLlmClient(MemoryDecision(lifecycle_state=LifecycleState.SUPERSEDED, edges=[]))
     processed = await run_memory_intelligence(db, session_id, llm)
 
     assert new_item.id in processed
@@ -126,9 +141,13 @@ async def test_action_never_writes_anything_but_pending_approval(db):
     db.flush()
 
     commitment = KnowledgeItem(
-        org_id=org_id, capture_session_id=session_id, type=KnowledgeType.COMMITMENT,
-        statement="Udula will fix the deploy script", confidence=Confidence.VERIFIED,
-        confidence_rationale="clear commitment", owner_person_id=owner.id,
+        org_id=org_id,
+        capture_session_id=session_id,
+        type=KnowledgeType.COMMITMENT,
+        statement="Udula will fix the deploy script",
+        confidence=Confidence.VERIFIED,
+        confidence_rationale="clear commitment",
+        owner_person_id=owner.id,
     )
     db.add(commitment)
     db.commit()
@@ -137,7 +156,9 @@ async def test_action_never_writes_anything_but_pending_approval(db):
     from app.interfaces.actions import ActionKind
 
     llm = FakeLlmClient(
-        ActionDraft(kind=ActionKind.TASK_CREATE, title="Fix deploy script", body="...", target_hint="udula")
+        ActionDraft(
+            kind=ActionKind.TASK_CREATE, title="Fix deploy script", body="...", target_hint="udula"
+        )
     )
     created_ids = await run_action_intelligence(db, session_id, llm)
 

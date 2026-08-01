@@ -10,7 +10,9 @@ class Settings(BaseSettings):
 
     # --- Core ---
     env: str = "dev"
-    database_url: str = "postgresql+psycopg://visualsprint:visualsprint_dev@localhost:5433/visualsprint"
+    database_url: str = (
+        "postgresql+psycopg://visualsprint:visualsprint_dev@localhost:5433/visualsprint"
+    )
 
     # --- Blob storage (S3-compatible; R2 in prod, local dir in dev) ---
     blob_backend: str = "local"  # "local" | "s3"

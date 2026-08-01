@@ -8,7 +8,9 @@ from typing import Protocol
 
 
 class BlobStore(Protocol):
-    async def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    async def put(
+        self, key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
         """Store bytes; returns a stable blob URI (e.g. 'blob://audio/<org>/<meeting>.flac')."""
         ...
 

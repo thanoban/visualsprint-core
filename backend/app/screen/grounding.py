@@ -59,11 +59,15 @@ def score_grounding(utterance: UtteranceLike, keyframe: KeyframeLike) -> Groundi
     else:
         method = GroundingMethod.TEMPORAL
 
-    return GroundingScore(utterance_id=utterance.id, keyframe_id=keyframe.id, score=total, method=method)
+    return GroundingScore(
+        utterance_id=utterance.id, keyframe_id=keyframe.id, score=total, method=method
+    )
 
 
 def ground_utterances(
-    utterances: list[UtteranceLike], keyframes: list[KeyframeLike], threshold: float = DEFAULT_THRESHOLD
+    utterances: list[UtteranceLike],
+    keyframes: list[KeyframeLike],
+    threshold: float = DEFAULT_THRESHOLD,
 ) -> list[GroundingScore]:
     scores: list[GroundingScore] = []
     for utterance in utterances:

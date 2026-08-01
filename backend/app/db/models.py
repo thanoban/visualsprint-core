@@ -375,9 +375,7 @@ class ProposedAction(TimestampMixin, Base):
     status: Mapped[ActionStatus] = mapped_column(
         Enum(ActionStatus, native_enum=False, length=24), default=ActionStatus.PENDING_APPROVAL
     )
-    approved_by_person_id: Mapped[str | None] = mapped_column(
-        ForeignKey("person.id"), default=None
-    )
+    approved_by_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     external_url: Mapped[str | None] = mapped_column(String(1000), default=None)
@@ -409,7 +407,9 @@ class ConsentRecord(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
     subject: Mapped[str] = mapped_column(String(255))  # who consented (or was notified)
-    method: Mapped[str] = mapped_column(String(64))  # bot_disclosure | chat_announcement | host_setting
+    method: Mapped[str] = mapped_column(
+        String(64)
+    )  # bot_disclosure | chat_announcement | host_setting
     detail: Mapped[str] = mapped_column(Text, default="")
 
 
@@ -444,7 +444,9 @@ class PipelineJob(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
-    stage: Mapped[str] = mapped_column(String(32))  # acquire|transcribe|understand|verify|remember|propose|report
+    stage: Mapped[str] = mapped_column(
+        String(32)
+    )  # acquire|transcribe|understand|verify|remember|propose|report
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, native_enum=False, length=16), default=JobStatus.QUEUED
     )

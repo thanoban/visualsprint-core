@@ -125,11 +125,15 @@ def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
 
     Session = get_sessionmaker()
     with Session() as db:
-        utterances = db.execute(
-            select(Utterance)
-            .where(Utterance.capture_session_id == session_id)
-            .order_by(Utterance.start_s)
-        ).scalars().all()
+        utterances = (
+            db.execute(
+                select(Utterance)
+                .where(Utterance.capture_session_id == session_id)
+                .order_by(Utterance.start_s)
+            )
+            .scalars()
+            .all()
+        )
 
     assert len(utterances) == 2
     assert utterances[0].text == "API eka deploy panna ready"

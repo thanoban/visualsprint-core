@@ -104,9 +104,11 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     if session is None:
         raise RuntimeError(f"capture_session {job.capture_session_id} not found")
 
-    tracks = db.execute(
-        select(AudioTrack).where(AudioTrack.capture_session_id == session.id)
-    ).scalars().all()
+    tracks = (
+        db.execute(select(AudioTrack).where(AudioTrack.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
     if not tracks:
         raise RuntimeError("no audio_track to transcribe — acquire stage should have failed first")
 

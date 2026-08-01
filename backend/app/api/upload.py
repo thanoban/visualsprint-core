@@ -34,9 +34,15 @@ async def upload_meeting(
     org_id: str = Form(default=""),
     db: Session = Depends(get_db),
 ) -> UploadResponse:
-    suffix = ("." + file.filename.rsplit(".", 1)[-1].lower()) if file.filename and "." in file.filename else ""
+    suffix = (
+        ("." + file.filename.rsplit(".", 1)[-1].lower())
+        if file.filename and "." in file.filename
+        else ""
+    )
     if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(415, f"unsupported file type '{suffix}'; allowed: {sorted(ALLOWED_SUFFIXES)}")
+        raise HTTPException(
+            415, f"unsupported file type '{suffix}'; allowed: {sorted(ALLOWED_SUFFIXES)}"
+        )
 
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
@@ -55,7 +61,9 @@ async def upload_meeting(
     elif db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")
 
-    meeting = Meeting(org_id=org_id, title=title or (file.filename or "Uploaded meeting"), platform="upload")
+    meeting = Meeting(
+        org_id=org_id, title=title or (file.filename or "Uploaded meeting"), platform="upload"
+    )
     db.add(meeting)
     db.flush()
 
@@ -65,7 +73,9 @@ async def upload_meeting(
 
     blob = get_blobstore()
     audio_uri = await blob.put(
-        f"audio/{org_id}/{session.id}{suffix}", data, file.content_type or "application/octet-stream"
+        f"audio/{org_id}/{session.id}{suffix}",
+        data,
+        file.content_type or "application/octet-stream",
     )
 
     # Mode D is "acquired" the moment the file lands — one mixed track, no

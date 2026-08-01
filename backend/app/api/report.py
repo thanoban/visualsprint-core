@@ -131,7 +131,9 @@ async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> Evidence
 
 
 @router.get("/{capture_session_id}/report", response_model=MeetingReport)
-async def get_meeting_report(capture_session_id: str, db: Session = Depends(get_db)) -> MeetingReport:
+async def get_meeting_report(
+    capture_session_id: str, db: Session = Depends(get_db)
+) -> MeetingReport:
     session = db.get(CaptureSession, capture_session_id)
     if session is None:
         raise HTTPException(404, "capture session not found")
@@ -155,9 +157,7 @@ async def get_meeting_report(capture_session_id: str, db: Session = Depends(get_
             owner_name = person.display_name if person else None
 
         evidence_rows = (
-            db.query(KnowledgeEvidence)
-            .filter(KnowledgeEvidence.knowledge_item_id == item.id)
-            .all()
+            db.query(KnowledgeEvidence).filter(KnowledgeEvidence.knowledge_item_id == item.id).all()
         )
         evidence: list[EvidenceRef] = []
         for row in evidence_rows:

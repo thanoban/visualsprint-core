@@ -70,10 +70,15 @@ class ChatResponse(BaseModel):
 
 
 def _session_ids_for_meeting(db: Session, meeting_id: str) -> list[str]:
-    return [row[0] for row in db.query(CaptureSession.id).filter(CaptureSession.meeting_id == meeting_id).all()]
+    return [
+        row[0]
+        for row in db.query(CaptureSession.id).filter(CaptureSession.meeting_id == meeting_id).all()
+    ]
 
 
-def _fts_candidates(db: Session, org_id: str, question: str, meeting_id: str | None) -> list[KnowledgeItem]:
+def _fts_candidates(
+    db: Session, org_id: str, question: str, meeting_id: str | None
+) -> list[KnowledgeItem]:
     """Postgres full-text search over statements — the working retrieval path today."""
     q = db.query(KnowledgeItem).filter(KnowledgeItem.org_id == org_id)
     if meeting_id:
@@ -136,7 +141,9 @@ def _expand_edges(db: Session, items: list[KnowledgeItem]) -> list[KnowledgeItem
     return db.query(KnowledgeItem).filter(KnowledgeItem.id.in_(related_ids)).all()
 
 
-def _template_answer(question: str, matches: list[KnowledgeItem], related: list[KnowledgeItem]) -> str:
+def _template_answer(
+    question: str, matches: list[KnowledgeItem], related: list[KnowledgeItem]
+) -> str:
     if not matches:
         return (
             f'No verified knowledge items matched "{question}" yet. '
@@ -169,7 +176,9 @@ async def _llm_answer(
 ) -> str:
     lines = [f"QUESTION: {question}", "", "MATCHED KNOWLEDGE ITEMS:"]
     for item in matches:
-        lines.append(f"- id={item.id} type={item.type.value} confidence={item.confidence.value}: {item.statement}")
+        lines.append(
+            f"- id={item.id} type={item.type.value} confidence={item.confidence.value}: {item.statement}"
+        )
     if related:
         lines.append("")
         lines.append("RELATED ITEMS (via knowledge_edge, one hop):")
@@ -184,7 +193,9 @@ async def _llm_answer(
     return result.answer
 
 
-async def _build_chip(db: Session, blob, item: KnowledgeItem, row: KnowledgeEvidence) -> EvidenceChip | None:
+async def _build_chip(
+    db: Session, blob, item: KnowledgeItem, row: KnowledgeEvidence
+) -> EvidenceChip | None:
     session = db.get(CaptureSession, item.capture_session_id)
     meeting = db.get(Meeting, session.meeting_id) if session else None
     meeting_title = meeting.title if meeting else "Unknown meeting"
@@ -257,8 +268,10 @@ async def chat(
 
     related = [item for item in _expand_edges(db, matches) if item.id not in seen]
 
-    answer = await _llm_answer(llm, req.question, matches, related) if llm is not None else _template_answer(
-        req.question, matches, related
+    answer = (
+        await _llm_answer(llm, req.question, matches, related)
+        if llm is not None
+        else _template_answer(req.question, matches, related)
     )
 
     blob = get_blobstore()

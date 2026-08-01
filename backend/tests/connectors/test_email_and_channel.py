@@ -27,7 +27,10 @@ async def test_email_draft_creates_gmail_draft_never_sends():
         token_provider=StaticTokenProvider("fake-token"), http_client=_client_with(handler)
     )
     payload = ActionPayload(
-        kind=ActionKind.EMAIL_DRAFT, title="Follow-up: standup", body="Notes...", target={"to": "team@acme.test"}
+        kind=ActionKind.EMAIL_DRAFT,
+        title="Follow-up: standup",
+        body="Notes...",
+        target={"to": "team@acme.test"},
     )
     result = await connector.execute(payload)
 
@@ -37,7 +40,8 @@ async def test_email_draft_creates_gmail_draft_never_sends():
 
 async def test_email_draft_requires_a_recipient():
     connector = EmailDraftConnector(
-        token_provider=StaticTokenProvider("fake-token"), http_client=_client_with(lambda r: httpx.Response(200))
+        token_provider=StaticTokenProvider("fake-token"),
+        http_client=_client_with(lambda r: httpx.Response(200)),
     )
     payload = ActionPayload(kind=ActionKind.EMAIL_DRAFT, title="x", body="y", target={})
     with pytest.raises(ConnectorError, match="requires 'to'"):
@@ -48,8 +52,12 @@ async def test_email_draft_surfaces_gmail_error_not_a_silent_success():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="invalid credentials")
 
-    connector = EmailDraftConnector(token_provider=StaticTokenProvider("bad"), http_client=_client_with(handler))
-    payload = ActionPayload(kind=ActionKind.EMAIL_DRAFT, title="x", body="y", target={"to": "a@b.test"})
+    connector = EmailDraftConnector(
+        token_provider=StaticTokenProvider("bad"), http_client=_client_with(handler)
+    )
+    payload = ActionPayload(
+        kind=ActionKind.EMAIL_DRAFT, title="x", body="y", target={"to": "a@b.test"}
+    )
     with pytest.raises(ConnectorError, match="401"):
         await connector.execute(payload)
 
@@ -63,7 +71,9 @@ async def test_channel_recap_posts_to_slack_webhook():
 
     connector = ChannelRecapConnector(http_client=_client_with(handler))
     payload = ActionPayload(
-        kind=ActionKind.CHANNEL_RECAP, title="Decision recap", body="We chose Postgres.",
+        kind=ActionKind.CHANNEL_RECAP,
+        title="Decision recap",
+        body="We chose Postgres.",
         target={"provider": "slack", "webhook_url": "https://hooks.slack.test/x"},
     )
     result = await connector.execute(payload)
@@ -72,6 +82,8 @@ async def test_channel_recap_posts_to_slack_webhook():
 
 async def test_channel_recap_rejects_unknown_provider():
     connector = ChannelRecapConnector(http_client=_client_with(lambda r: httpx.Response(200)))
-    payload = ActionPayload(kind=ActionKind.CHANNEL_RECAP, title="x", body="y", target={"provider": "discord"})
+    payload = ActionPayload(
+        kind=ActionKind.CHANNEL_RECAP, title="x", body="y", target={"provider": "discord"}
+    )
     with pytest.raises(ConnectorError, match="unsupported channel_recap provider"):
         await connector.execute(payload)

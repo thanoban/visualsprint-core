@@ -17,7 +17,9 @@ _URL_PATTERN = re.compile(r"\bhttps?://[^\s<>\"'\)]+", re.IGNORECASE)
 _STACK_TRACE_LINE_PATTERNS = (
     re.compile(r"Traceback \(most recent call last\)"),
     re.compile(r"^\s*File \"[^\"]+\", line \d+", re.MULTILINE),
-    re.compile(r"^\s*at [\w.$]+\([\w.<>$]*(?::\d+)?\)", re.MULTILINE),  # java-style `at a.b.C(D.java:10)`
+    re.compile(
+        r"^\s*at [\w.$]+\([\w.<>$]*(?::\d+)?\)", re.MULTILINE
+    ),  # java-style `at a.b.C(D.java:10)`
     re.compile(r"\b\w*(?:Exception|Error)\b:", re.IGNORECASE),
 )
 
@@ -48,12 +50,22 @@ def extract_entities(
     ticket_pattern = _ticket_id_pattern(ticket_prefixes)
     for match in ticket_pattern.finditer(text):
         entities.append(
-            DetectedEntity(entity_type=EntityType.TICKET_ID, text=match.group(0), start=match.start(), end=match.end())
+            DetectedEntity(
+                entity_type=EntityType.TICKET_ID,
+                text=match.group(0),
+                start=match.start(),
+                end=match.end(),
+            )
         )
 
     for match in _URL_PATTERN.finditer(text):
         entities.append(
-            DetectedEntity(entity_type=EntityType.URL, text=match.group(0), start=match.start(), end=match.end())
+            DetectedEntity(
+                entity_type=EntityType.URL,
+                text=match.group(0),
+                start=match.start(),
+                end=match.end(),
+            )
         )
 
     for pattern in _STACK_TRACE_LINE_PATTERNS:
@@ -61,7 +73,10 @@ def extract_entities(
             line_start, line_end = _line_span(text, match.start())
             entities.append(
                 DetectedEntity(
-                    entity_type=EntityType.STACK_TRACE, text=text[line_start:line_end], start=line_start, end=line_end
+                    entity_type=EntityType.STACK_TRACE,
+                    text=text[line_start:line_end],
+                    start=line_start,
+                    end=line_end,
                 )
             )
 

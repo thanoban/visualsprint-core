@@ -15,13 +15,15 @@ class LocalBlobStore:
     def _path(self, uri: str) -> Path:
         if not uri.startswith(SCHEME):
             raise ValueError(f"not a blob uri: {uri}")
-        rel = uri[len(SCHEME):]
+        rel = uri[len(SCHEME) :]
         p = (self.root / rel).resolve()
         if not p.is_relative_to(self.root.resolve()):
             raise ValueError("path escape rejected")
         return p
 
-    async def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+    async def put(
+        self, key: str, data: bytes, content_type: str = "application/octet-stream"
+    ) -> str:
         uri = f"{SCHEME}{key}"
         p = self._path(uri)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -36,4 +38,4 @@ class LocalBlobStore:
 
     async def presigned_url(self, uri: str, expires_s: int = 3600) -> str:
         # Dev: served by the API's /blobs route; no signing.
-        return f"/api/v1/blobs/{uri[len(SCHEME):]}"
+        return f"/api/v1/blobs/{uri[len(SCHEME) :]}"

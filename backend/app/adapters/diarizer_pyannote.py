@@ -25,7 +25,9 @@ RawSpeakerTurn = tuple[float, float, str]  # start_s, end_s, cluster_label
 
 
 class DiarizerModelBackend(Protocol):
-    def run(self, audio_path: str, min_speakers: int, max_speakers: int) -> list[RawSpeakerTurn]: ...
+    def run(
+        self, audio_path: str, min_speakers: int, max_speakers: int
+    ) -> list[RawSpeakerTurn]: ...
 
 
 class _PyannoteBackend:
@@ -45,11 +47,15 @@ class _PyannoteBackend:
             )
         from pyannote.audio import Pipeline
 
-        self._pipeline = Pipeline.from_pretrained(self._pipeline_name, use_auth_token=self._hf_token)
+        self._pipeline = Pipeline.from_pretrained(
+            self._pipeline_name, use_auth_token=self._hf_token
+        )
 
     def run(self, audio_path: str, min_speakers: int, max_speakers: int) -> list[RawSpeakerTurn]:
         self._ensure_loaded()
-        annotation = self._pipeline(audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
+        annotation = self._pipeline(
+            audio_path, min_speakers=min_speakers, max_speakers=max_speakers
+        )
         return [
             (float(segment.start), float(segment.end), str(label))
             for segment, _, label in annotation.itertracks(yield_label=True)
@@ -59,11 +65,15 @@ class _PyannoteBackend:
 class PyannoteDiarizer:
     """`Diarizer` Protocol implementation backed by pyannote.audio."""
 
-    def __init__(self, backend: DiarizerModelBackend | None = None, hf_token: str | None = None) -> None:
+    def __init__(
+        self, backend: DiarizerModelBackend | None = None, hf_token: str | None = None
+    ) -> None:
         token = hf_token if hf_token is not None else get_settings().huggingface_token
         self._backend = backend or _PyannoteBackend(hf_token=token)
 
-    async def diarize(self, audio_uri: str, min_speakers: int = 1, max_speakers: int = 20) -> DiarizationResult:
+    async def diarize(
+        self, audio_uri: str, min_speakers: int = 1, max_speakers: int = 20
+    ) -> DiarizationResult:
         raw_turns = self._backend.run(audio_uri, min_speakers, max_speakers)
         turns = [
             SpeakerTurn(start_s=start, end_s=end, cluster_id=_normalize_cluster_id(label))

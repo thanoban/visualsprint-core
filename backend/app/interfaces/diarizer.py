@@ -22,4 +22,6 @@ class DiarizationResult(BaseModel):
 
 
 class Diarizer(Protocol):
-    async def diarize(self, audio_uri: str, min_speakers: int = 1, max_speakers: int = 20) -> DiarizationResult: ...
+    async def diarize(
+        self, audio_uri: str, min_speakers: int = 1, max_speakers: int = 20
+    ) -> DiarizationResult: ...

@@ -17,7 +17,9 @@ class S3BlobStore:
         s = get_settings()
         if not s.s3_endpoint_url:
             raise RuntimeError("S3 blobstore selected but VS_S3_ENDPOINT_URL is not set")
-        raise NotImplementedError("S3/R2 backend lands with Mode A2 (Phase 1); use blob_backend=local")
+        raise NotImplementedError(
+            "S3/R2 backend lands with Mode A2 (Phase 1); use blob_backend=local"
+        )
 
 
 def get_blobstore():

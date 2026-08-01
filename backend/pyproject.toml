@@ -60,6 +60,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "B008",  # FastAPI intentionally calls Depends/File/Form in endpoint defaults.
+    "E501",  # Ruff's formatter owns wrapping; long URLs/comments remain readable.
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

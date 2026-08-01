@@ -160,13 +160,13 @@ class TranscriptionCascade:
         blob_store = self._blob_store or LocalBlobStore()
         data = await blob_store.get(audio_uri)
         suffix = Path(audio_uri).suffix or ".wav"
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
-            tmp.close()
-            yield tmp.name
+            tmp_path = tmp.name
+        try:
+            yield tmp_path
         finally:
-            Path(tmp.name).unlink(missing_ok=True)
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 def _to_segment(span: LabeledSpan, result: RawVendorResult) -> TranscriptSegment:

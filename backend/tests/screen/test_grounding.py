@@ -36,7 +36,9 @@ def test_temporal_overlap_scores_above_zero():
 
 def test_no_overlap_scores_zero_without_lexical_match():
     utterance = FakeUtterance(id="u1", start_s=0.0, end_s=2.0, text="hello everyone")
-    keyframe = FakeKeyframe(id="k1", valid_from_s=100.0, valid_to_s=110.0, ocr_text="nothing relevant")
+    keyframe = FakeKeyframe(
+        id="k1", valid_from_s=100.0, valid_to_s=110.0, ocr_text="nothing relevant"
+    )
 
     result = score_grounding(utterance, keyframe)
 
@@ -45,7 +47,9 @@ def test_no_overlap_scores_zero_without_lexical_match():
 
 def test_lexical_match_boosts_overlapping_pair_to_both():
     utterance = FakeUtterance(id="u1", start_s=10.0, end_s=12.0, text="PAY-442 is blocking us")
-    keyframe = FakeKeyframe(id="k1", valid_from_s=8.0, valid_to_s=20.0, ocr_text="Ticket PAY-442 status: open")
+    keyframe = FakeKeyframe(
+        id="k1", valid_from_s=8.0, valid_to_s=20.0, ocr_text="Ticket PAY-442 status: open"
+    )
 
     result = score_grounding(utterance, keyframe)
 
@@ -59,7 +63,9 @@ def test_lexical_match_boosts_overlapping_pair_to_both():
 
 def test_lexical_match_without_temporal_overlap_scores_lexical():
     utterance = FakeUtterance(id="u1", start_s=0.0, end_s=1.0, text="PAY-442 is blocking us")
-    keyframe = FakeKeyframe(id="k1", valid_from_s=500.0, valid_to_s=510.0, ocr_text="Ticket PAY-442 status: open")
+    keyframe = FakeKeyframe(
+        id="k1", valid_from_s=500.0, valid_to_s=510.0, ocr_text="Ticket PAY-442 status: open"
+    )
 
     result = score_grounding(utterance, keyframe)
 
@@ -70,7 +76,11 @@ def test_lexical_match_without_temporal_overlap_scores_lexical():
 def test_lexical_match_checks_detected_entities_too():
     utterance = FakeUtterance(id="u1", start_s=0.0, end_s=1.0, text="check JIRA-9 please")
     keyframe = FakeKeyframe(
-        id="k1", valid_from_s=500.0, valid_to_s=510.0, ocr_text="", detected_entities=[{"text": "JIRA-9"}]
+        id="k1",
+        valid_from_s=500.0,
+        valid_to_s=510.0,
+        ocr_text="",
+        detected_entities=[{"text": "JIRA-9"}],
     )
 
     result = score_grounding(utterance, keyframe)

@@ -2,7 +2,13 @@
 them as schema facts, not as behavior someone could quietly regress.
 """
 
-from app.agents.report import KeyframeRef, ReportEvidence, ReportInput, ReportKnowledgeItem, UtteranceRef
+from app.agents.report import (
+    KeyframeRef,
+    ReportEvidence,
+    ReportInput,
+    ReportKnowledgeItem,
+    UtteranceRef,
+)
 from app.agents.verification import CandidateForVerification
 
 
@@ -26,10 +32,14 @@ def test_report_input_chain_has_no_transcript_capable_field():
     """Rule 2: Report Intelligence's input schema cannot contain raw
     transcript text. Checked across every model ReportInput can reach --
     UtteranceRef in particular must carry only id/timing/speaker, never text."""
-    reachable = _all_str_field_names(ReportInput, ReportKnowledgeItem, ReportEvidence, UtteranceRef, KeyframeRef)
+    reachable = _all_str_field_names(
+        ReportInput, ReportKnowledgeItem, ReportEvidence, UtteranceRef, KeyframeRef
+    )
     forbidden = {"text", "content", "transcript", "utterance_text"}
     leaked = reachable & forbidden
-    assert not leaked, f"ReportInput's schema chain gained a field that could hold transcript text: {leaked}"
+    assert not leaked, (
+        f"ReportInput's schema chain gained a field that could hold transcript text: {leaked}"
+    )
 
     utterance_fields = set(UtteranceRef.model_fields.keys())
     assert utterance_fields == {"utterance_id", "start_s", "end_s", "speaker_person_id"}, (
