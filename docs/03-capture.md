@@ -30,32 +30,47 @@ Downstream consumes one normalized `capture_session`; weaker modes yield honestl
 
 - Meet REST requires Workspace Business Standard+ — detect tier at onboarding, route to best available mode.
 - Teams Graph transcript access is **tenant-admin-gated from 29 Jul 2026** — detect the access error explicitly, fall back to B/C with the limitation stated.
+- **Platforms are actively tightening against third-party bots.** Microsoft announced 13 Mar 2026 that Teams detects external meeting bots, labels them "Unverified" in the lobby, and requires the organizer to explicitly admit them. This degrades Mode B on Teams (a human must click admit, every meeting) and is a further argument for the Graph API path over the bot fallback. Mode B must therefore handle "stuck in lobby, never admitted" as a first-class coverage-gap outcome, not a hang.
 - Zoom RTMS commercial terms (credits, approval, consent flow) unconfirmed — verify week 1; Cloud Recording API is the same-quality fallback.
 - **Store all audio as FLAC forever** — every meeting stays re-transcribable as ASR improves; the corpus is the moat.
 
-## Transcript-without-recording — available on all three platforms
+## Nobody gets native access to someone else's platform — not even Zoom
 
-Transcription is a **separate toggle from recording on every platform**, not a Zoom quirk. This matters for adoption: orgs that refuse recording (common — recording feels heavier legally and culturally) can enable transcription only, and we still get speaker-labelled timing.
+Verified against vendor docs, and it settles the "can't we just do what AI Companion does?" question:
 
-| Platform | Mechanism | Independent of recording? |
+**Zoom AI Companion is native only inside Zoom.** On Meet and Teams it joins **as a guest bot** — Zoom's docs state it "will appear as a guest," joins Teams as an "*unverified guest*," and posts a chat message announcing it is transcribing.
+
+| Platform | Zoom AI Companion | Gemini | Copilot | **Us** |
+|---|---|---|---|---|
+| Zoom | ✅ native | ❌ | ❌ | **RTMS** (native-equivalent) |
+| Meet | 🤖 guest bot | ✅ native | ❌ | **Meet REST API** |
+| Teams | 🤖 guest bot | ❌ | ✅ native | **Teams Graph API** |
+
+**Consequence: first-party native access is unobtainable for any third party, so it is not a goal.** The reachable ceiling is (a) the platform's sanctioned media API, or (b) a disclosed guest bot — and Zoom itself falls back to (b) cross-platform.
+
+**Our A2 path is less intrusive than Zoom's own cross-platform method.** Zoom uses bots on Meet/Teams likely because it *competes* with those platforms; depending on a rival's API is strategically awkward. We don't compete with them, so official APIs are open to us — no bot in the room, nothing in the lobby.
+
+| Platform | Our access | What we take |
 |---|---|---|
-| Meet | `artifactConfig.autoTranscriptionGeneration`, separate from `autoRecordingGeneration` | ✅ documented as independent |
-| Teams | "Start transcription" separate from "Start recording"; Graph `callTranscript` | ✅ |
-| Zoom | AI Companion transcript, `GET /meetings/{meetingId}/transcript` (webhook `postmeeting.aic_transcript_completed`; pass the **past-instance UUID**, not the scheduled meeting id) | ✅ works with cloud recording never enabled |
+| Zoom | **RTMS** WebSocket — per-participant PCM + screen share, no bot | raw audio ⭐ |
+| Meet | Meet REST artifacts — recording from Drive | raw audio + speaker labels |
+| Teams | Graph `callRecording` | raw audio + speaker labels |
 
-### Why this can never be our transcript — the language ceiling
-
-Platform transcripts run on the platform's **own ASR**. There is no parameter to add languages, and this is exactly the gap the product exists to fill:
+**We never use their transcript as our transcript**, because platform ASR has a hard language ceiling we cannot lift:
 
 | Platform | Transcript languages | Sinhala | Tamil |
 |---|---|---|---|
-| Zoom AI Companion | 46 caption languages, but only **9** transcript/summary outputs (en, zh, ja, es, fr, de, pt, it, ar) | ❌ | ❌ |
+| Zoom AI Companion | 46 caption languages, but only **9** transcript/summary outputs | ❌ | ❌ |
 | Teams | ~41 transcription languages (incl. Hindi) | ❌ | ❌ |
 | Meet | ~103 caption languages | ✅ | ✅ |
 
-**The "100+ languages" both vendors advertise is *translation of an existing transcript*, not recognition.** Translating an already-wrong Sinhala transcript cannot recover the speech — the error is baked in at recognition time, so translation is worthless to us.
+There is no parameter to add languages — that ASR is theirs. The "100+ languages" both vendors advertise is *translation of an existing transcript*, not recognition: translating an already-wrong Sinhala transcript cannot recover the speech, since the error is baked in at recognition time.
 
-**Consequence:** these transcripts stay a *cross-check and identity signal only* — speaker labels and timing, never text we trust. Our own Google ⇄ Azure cascade over the platform's **audio** remains the only path to si/ta code-switching. Where a platform offers transcript but no audio at all, that session degrades to a text-only fallback capped at low confidence and visibly labelled as such — never presented as a real transcript.
+**So: capture natively like AI Companion, then run our own Google ⇄ Azure cascade for si/ta code-switching.** Their transcripts are used only for speaker labels and timing (identity fusion), never for text we trust.
+
+### Transcript-without-recording — a lighter onboarding ask
+
+Transcription is a separate toggle from recording on **all three** platforms (Meet: `artifactConfig.autoTranscriptionGeneration` vs `autoRecordingGeneration`; Teams: "Start transcription" vs "Start recording"; Zoom: AI Companion transcript works with cloud recording off). Useful when an org refuses recording — but it yields **no audio**, so such a session degrades to a text-only fallback, capped at low confidence and visibly labelled, never presented as a real transcript.
 
 ## Screen → keyframes
 
