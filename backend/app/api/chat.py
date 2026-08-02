@@ -1,12 +1,12 @@
 """Evidence-grounded cross-meeting chat — POST /api/v1/chat.
 
-Hybrid retrieval over `knowledge_item`: Postgres full-text search (working path
-today) plus a structurally-correct pgvector similarity query that stays inert
-until a question-embedding pipeline exists (see `_vector_candidates`). Matches
-are expanded one hop along `knowledge_edge` to surface superseding/recurring/
-related items. The answer is synthesized ONLY from the retrieved
-`KnowledgeItem.statement` values and their evidence metadata — never raw
-transcript text — matching docs/05-data-model.md § Retrieval.
+Hybrid retrieval over `knowledge_item`: Postgres full-text search (always on)
+plus a pgvector similarity query (`_vector_candidates`) that activates once a
+real `Embedder` is injected via `get_optional_embedder` — see that function's
+docstring. Matches are expanded one hop along `knowledge_edge` to surface
+superseding/recurring/related items. The answer is synthesized ONLY from the
+retrieved `KnowledgeItem.statement` values and their evidence metadata — never
+raw transcript text — matching docs/05-data-model.md § Retrieval.
 """
 
 import re
@@ -30,6 +30,7 @@ from app.db.models import (
     Person,
     Utterance,
 )
+from app.interfaces.embedder import Embedder
 from app.interfaces.llm import LlmClient
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -104,11 +105,12 @@ def _vector_candidates(
 ) -> list[KnowledgeItem]:
     """pgvector cosine-similarity search over `KnowledgeItem.embedding`.
 
-    TODO: embedding population pending agents pipeline — no Embedder swap
-    point exists yet, so callers always pass `query_embedding=None` today and
-    this returns []. The query itself is wired correctly (pgvector cosine
-    distance ordering, org/meeting scoped, embedding-not-null filtered) so it
-    activates with zero changes here once a question embedding is available.
+    Returns [] when `query_embedding` is None (no `Embedder` was injected —
+    see `get_optional_embedder`) or the dialect isn't Postgres (SQLite test
+    DBs can't represent the pgvector `Vector` column). Matches will only
+    exist among items whose own `embedding` was populated — today that's
+    Memory Intelligence (`app/agents/memory.py`), which embeds a
+    `KnowledgeItem.statement` the first time it processes that item.
     """
     if query_embedding is None:
         return []
@@ -248,13 +250,25 @@ def get_optional_llm_client() -> LlmClient | None:
     return None
 
 
+def get_optional_embedder() -> Embedder | None:
+    """No shared Embedder factory exists outside the agents workstream yet.
+
+    This endpoint is fully functional without one (FTS-only retrieval).
+    Override this dependency to inject a real `Embedder` (e.g.
+    `VertexEmbedder`) and vector retrieval activates automatically — without
+    ever importing a vendor SDK here.
+    """
+    return None
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
     db: Session = Depends(get_db),
     llm: LlmClient | None = Depends(get_optional_llm_client),
+    embedder: Embedder | None = Depends(get_optional_embedder),
 ) -> ChatResponse:
-    query_embedding: list[float] | None = None  # TODO: embedding population pending agents pipeline
+    query_embedding = await embedder.embed(req.question) if embedder is not None else None
 
     fts_matches = _fts_candidates(db, req.org_id, req.question, req.meeting_id)
     vector_matches = _vector_candidates(db, req.org_id, query_embedding, req.meeting_id)

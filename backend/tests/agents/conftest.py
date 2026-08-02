@@ -25,6 +25,25 @@ def db():
         engine.dispose()
 
 
+class FakeEmbedder:
+    """Deterministic fake `Embedder` — same text always yields the same
+    vector, and distinct texts yield orthogonal-ish vectors, so tests can
+    assert both "an embedding got populated" and (in real-Postgres tests)
+    meaningful similarity ordering without needing live Vertex AI credentials."""
+
+    def __init__(self, dim: int = 1024) -> None:
+        self.dim = dim
+        self.calls: list[str] = []
+
+    async def embed(self, text: str) -> list[float]:
+        self.calls.append(text)
+        vec = [0.0] * self.dim
+        for i, ch in enumerate(text):
+            vec[(ord(ch) + i) % self.dim] += 1.0
+        norm = sum(v * v for v in vec) ** 0.5 or 1.0
+        return [v / norm for v in vec]
+
+
 class FakeLlmClient:
     """Returns a pre-scripted schema instance and records every call for
     inspection — e.g. asserting the verification prompt never contains

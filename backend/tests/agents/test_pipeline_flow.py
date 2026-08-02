@@ -26,7 +26,7 @@ from app.db.models import (
     Utterance,
 )
 
-from .conftest import FakeLlmClient
+from .conftest import FakeEmbedder, FakeLlmClient
 
 DISTINCTIVE_RATIONALE = "I THINK THIS IS A DECISION BECAUSE THE SPEAKER SOUNDED CONFIDENT"
 
@@ -129,6 +129,44 @@ async def test_memory_assigns_lifecycle_and_creates_edge(db):
     assert new_item.id in processed
     db.commit()
     assert new_item.lifecycle_state == LifecycleState.SUPERSEDED
+
+
+async def test_memory_populates_embedding_once_when_embedder_given(db):
+    """SQLite structural proof: embedding gets populated exactly once (never
+    re-embedded on a second run) and the item's lifecycle/edge logic is
+    unaffected. Real cosine-similarity ordering needs Postgres — see
+    tests/test_vector_search_postgres.py."""
+    session_id = _seed_session_with_utterance(db)
+    org_id = db.get(CaptureSession, session_id).org_id
+
+    item = KnowledgeItem(
+        org_id=org_id,
+        capture_session_id=session_id,
+        type=KnowledgeType.DECISION,
+        statement="Use Postgres for the database",
+        confidence=Confidence.VERIFIED,
+        confidence_rationale="this meeting",
+    )
+    db.add(item)
+    db.commit()
+    assert item.embedding is None
+
+    embedder = FakeEmbedder()
+    llm = FakeLlmClient(MemoryDecision(lifecycle_state=LifecycleState.NEW, edges=[]))
+    await run_memory_intelligence(db, session_id, llm, embedder=embedder)
+    db.commit()
+
+    assert embedder.calls == ["Use Postgres for the database"]
+    assert item.embedding is not None
+    assert len(item.embedding) == embedder.dim
+
+    first_embedding = list(item.embedding)
+    await run_memory_intelligence(db, session_id, llm, embedder=embedder)
+    db.commit()
+    assert embedder.calls == ["Use Postgres for the database"], (
+        "embedder called a second time -- an already-embedded item must not be re-embedded"
+    )
+    assert list(item.embedding) == first_embedding
 
 
 async def test_action_never_writes_anything_but_pending_approval(db):

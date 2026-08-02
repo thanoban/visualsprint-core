@@ -11,7 +11,7 @@ dedicated test below marked accordingly.
 
 import pytest
 
-from app.api.chat import _vector_candidates
+from app.api.chat import _vector_candidates, get_optional_embedder
 from app.db.models import (
     CaptureSession,
     Confidence,
@@ -26,6 +26,7 @@ from app.db.models import (
     Person,
     Utterance,
 )
+from app.main import app
 
 
 def _seed(db):
@@ -151,3 +152,36 @@ def test_vector_candidates_returns_empty_without_embedding(client, db_session):
     # Also confirms the SQLite dialect guard short-circuits even if a caller
     # ever passes a real vector before Postgres is available.
     assert _vector_candidates(db_session, org_id, [0.1] * 1024, None) == []
+
+
+class FakeEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def embed(self, text: str) -> list[float]:
+        self.calls.append(text)
+        return [0.1] * 1024
+
+
+def test_chat_calls_embedder_when_injected(client, db_session):
+    """SQLite structural proof the plumbing works end-to-end: injecting an
+    Embedder via the same override mechanism production uses (`get_optional_
+    embedder`) means it gets called with the question, and the endpoint
+    still responds normally (`_vector_candidates`' dialect guard makes the
+    resulting query_embedding a no-op on SQLite -- real ordering is proven
+    against Postgres in tests/test_vector_search_postgres.py)."""
+    org_id = _seed(db_session)
+    fake = FakeEmbedder()
+    app.dependency_overrides[get_optional_embedder] = lambda: fake
+    try:
+        resp = client.post(
+            "/api/v1/chat",
+            json={"org_id": org_id, "question": "why are we using MongoDB?"},
+        )
+    finally:
+        del app.dependency_overrides[get_optional_embedder]
+
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == ["why are we using MongoDB?"]
+    # FTS still finds the match; the endpoint doesn't require vector hits.
+    assert "MongoDB" in resp.json()["message"]["content"]

@@ -60,6 +60,23 @@ def _get_transcriber():
     return _transcriber
 
 
+_embedder = None
+
+
+def _get_embedder():
+    """Lazy singleton, same pattern as _get_transcriber — overridable in
+    tests via `app.orchestrator.worker._embedder = <fake>`. Memory
+    Intelligence treats a missing embedder as an optional enhancement, not a
+    hard requirement, so this failing loudly (no Vertex credentials) only
+    degrades `remember` to keyword-overlap search, never breaks the stage."""
+    global _embedder
+    if _embedder is None:
+        from app.adapters.embedder_vertex import VertexEmbedder
+
+        _embedder = VertexEmbedder()
+    return _embedder
+
+
 def _get_platform_adapters():
     """Production adapter registry for official artifact capture.
 
@@ -472,7 +489,7 @@ async def _handle_verify(db: object, job: PipelineJob) -> None:
 async def _handle_remember(db: object, job: PipelineJob) -> None:
     from app.agents.memory import run_memory_intelligence
 
-    await run_memory_intelligence(db, job.capture_session_id, _get_llm())
+    await run_memory_intelligence(db, job.capture_session_id, _get_llm(), embedder=_get_embedder())
 
 
 @stage_handler("propose")

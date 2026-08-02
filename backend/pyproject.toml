@@ -36,6 +36,7 @@ asr = [
 ]
 agents = [
     "anthropic[vertex]>=0.40",
+    "google-cloud-aiplatform>=1.70",  # Embedder swap point (app/adapters/embedder_vertex.py)
 ]
 screen = [
     "opencv-python>=4.10",
