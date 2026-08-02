@@ -99,6 +99,86 @@ async def test_context_then_verification_never_leaks_rationale(db):
     assert item.confidence_rationale == "evidence supports it"
 
 
+async def test_context_flags_items_whose_evidence_overlaps_a_coverage_gap(db):
+    """CLAUDE.md rule 6: capture gaps must visibly flag overlapping items."""
+    from app.db.models import CoverageInterval, CoverageStatus
+
+    session_id = _seed_session_with_utterance(db, text="we decided to use Postgres")
+    utterance = db.query(Utterance).filter(Utterance.capture_session_id == session_id).one()
+    org_id = db.get(CaptureSession, session_id).org_id
+
+    db.add(
+        CoverageInterval(
+            org_id=org_id,
+            capture_session_id=session_id,
+            start_s=0.5,  # overlaps the utterance's 0.0-2.0 span
+            end_s=1.5,
+            modality="audio",
+            status=CoverageStatus.DEGRADED,
+            reason="low-confidence transcription (0.20, provider=fake)",
+        )
+    )
+    db.commit()
+
+    llm = FakeLlmClient(
+        CandidateExtractionResult(
+            items=[
+                CandidateKnowledgeItem(
+                    type=KnowledgeType.DECISION,
+                    statement="Use Postgres for the database",
+                    supporting_utterance_ids=[utterance.id],
+                    rationale="stated directly",
+                )
+            ]
+        )
+    )
+    created_ids = await run_context_intelligence(db, session_id, llm)
+    db.commit()
+
+    item = db.get(KnowledgeItem, created_ids[0])
+    assert item.overlaps_coverage_gap is True
+
+
+async def test_context_does_not_flag_items_outside_any_coverage_gap(db):
+    from app.db.models import CoverageInterval, CoverageStatus
+
+    session_id = _seed_session_with_utterance(db, text="we decided to use Postgres")
+    utterance = db.query(Utterance).filter(Utterance.capture_session_id == session_id).one()
+    org_id = db.get(CaptureSession, session_id).org_id
+
+    # Gap exists in the session, but well outside this utterance's 0.0-2.0 span.
+    db.add(
+        CoverageInterval(
+            org_id=org_id,
+            capture_session_id=session_id,
+            start_s=100.0,
+            end_s=101.0,
+            modality="audio",
+            status=CoverageStatus.MISSING,
+            reason="no provider could transcribe this span",
+        )
+    )
+    db.commit()
+
+    llm = FakeLlmClient(
+        CandidateExtractionResult(
+            items=[
+                CandidateKnowledgeItem(
+                    type=KnowledgeType.DECISION,
+                    statement="Use Postgres for the database",
+                    supporting_utterance_ids=[utterance.id],
+                    rationale="stated directly",
+                )
+            ]
+        )
+    )
+    created_ids = await run_context_intelligence(db, session_id, llm)
+    db.commit()
+
+    item = db.get(KnowledgeItem, created_ids[0])
+    assert item.overlaps_coverage_gap is False
+
+
 async def test_memory_assigns_lifecycle_and_creates_edge(db):
     session_id = _seed_session_with_utterance(db)
     org_id = db.get(CaptureSession, session_id).org_id

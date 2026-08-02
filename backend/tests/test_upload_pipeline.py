@@ -24,6 +24,7 @@ from app.db.models import (
     CaptureState,
     ConsentRecord,
     Correction,
+    CoverageInterval,
     GlossaryTerm,
     Keyframe,
     Meeting,
@@ -103,6 +104,7 @@ def _delete_default_org_children(db) -> None:
     db.query(Participant).filter(Participant.org_id == org.id).delete()
     db.query(PipelineJob).filter(PipelineJob.org_id == org.id).delete()
     db.query(ConsentRecord).filter(ConsentRecord.org_id == org.id).delete()
+    db.query(CoverageInterval).filter(CoverageInterval.org_id == org.id).delete()
     db.query(AudioTrack).filter(AudioTrack.org_id == org.id).delete()
     db.query(CaptureSession).filter(CaptureSession.org_id == org.id).delete()
     db.query(Meeting).filter(Meeting.org_id == org.id).delete()
@@ -201,6 +203,76 @@ def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
     # `understand` job is enqueued but hasn't been claimed by a worker yet.
     status = client.get(f"/api/v1/meetings/sessions/{session_id}")
     assert status.json()["state"] == CaptureState.TRANSCRIBING.value
+
+
+def test_transcribe_writes_coverage_gap_for_failed_segment(client, monkeypatch):
+    """CLAUDE.md rule 6, proven through the real transcribe stage handler
+    (not just app.asr.coverage's unit tests): a span the cascade couldn't
+    transcribe becomes a first-class CoverageInterval row, not just a
+    quietly-low-confidence Utterance indistinguishable from a mumbled word."""
+    from app.db.models import CoverageInterval, CoverageStatus
+
+    class PartiallyFailingTranscriber:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def transcribe(self, request):
+            self.calls.append(request.audio_uri)
+            return TranscriptionResult(
+                segments=[
+                    TranscriptSegment(
+                        start_s=0.0,
+                        end_s=2.0,
+                        text="deploy eka ready",
+                        lang_tags=[Lang.EN, Lang.SI],
+                        asr_confidence=0.9,
+                        provider="fake:test",
+                    ),
+                    TranscriptSegment(
+                        start_s=2.0,
+                        end_s=4.0,
+                        text="",  # nothing transcribed for this span
+                        lang_tags=[Lang.UNKNOWN],
+                        asr_confidence=0.0,
+                        provider="unrouted",
+                    ),
+                ],
+                providers_used=["fake:test", "unrouted"],
+            )
+
+    fake = PartiallyFailingTranscriber()
+    monkeypatch.setattr(worker, "_transcriber", fake)
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("standup.wav", FAKE_AUDIO_BYTES, "audio/wav")},
+        data={"title": "Partial capture failure"},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+    assert fake.calls
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        gaps = (
+            db.execute(
+                select(CoverageInterval).where(CoverageInterval.capture_session_id == session_id)
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(gaps) == 1
+    assert gaps[0].status == CoverageStatus.MISSING
+    assert gaps[0].modality == "audio"
+    assert gaps[0].start_s == 2.0
+    assert gaps[0].end_s == 4.0
+    assert "unrouted" in gaps[0].reason
 
 
 def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcriber, monkeypatch):

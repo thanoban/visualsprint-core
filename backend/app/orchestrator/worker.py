@@ -290,18 +290,33 @@ def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str
 
 @stage_handler("transcribe")
 async def _handle_transcribe(db: object, job: PipelineJob) -> None:
-    """Idempotent: clears any utterances from a prior partial attempt at this
-    stage before re-inserting, so a crash-and-retry never duplicates rows.
+    """Idempotent: clears any utterances (and this stage's coverage_interval
+    rows) from a prior partial attempt before re-inserting, so a crash-and-
+    retry never duplicates rows.
 
     Cascade output is passed through the LLM repair pass (app.asr.repair)
     before it becomes Utterance rows -- roster/OCR context the vendor APIs
     never had, used to fix errors at code-switch boundaries. A segment's
-    `repaired` flag is set only when repair actually changed its text."""
+    `repaired` flag is set only when repair actually changed its text.
+
+    Coverage gaps (CLAUDE.md rule 6) are detected from the cascade's RAW
+    segments, before repair -- app.asr.coverage.detect_coverage_gaps reads
+    the same empty-text/low-confidence signal the cascade already produces
+    for an unrouted or failed span. Repair fixes text; it can't rescue a
+    span nothing was transcribed from, so gap detection must not run on its
+    output."""
     from sqlalchemy import select
 
+    from app.asr.coverage import detect_coverage_gaps
     from app.asr.repair import repair_segments
     from app.config import get_settings
-    from app.db.models import AudioTrack, CaptureSession, Utterance
+    from app.db.models import (
+        AudioTrack,
+        CaptureSession,
+        CoverageInterval,
+        CoverageStatus,
+        Utterance,
+    )
     from app.interfaces.transcriber import TranscriptionRequest
 
     session = db.get(CaptureSession, job.capture_session_id)
@@ -317,6 +332,9 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         raise RuntimeError("no audio_track to transcribe — acquire stage should have failed first")
 
     db.query(Utterance).filter(Utterance.capture_session_id == session.id).delete()
+    db.query(CoverageInterval).filter(
+        CoverageInterval.capture_session_id == session.id, CoverageInterval.modality == "audio"
+    ).delete()
 
     roster, glossary_terms, ocr_context = _repair_context(db, session)
     transcriber = _get_transcriber()
@@ -324,6 +342,18 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         result = await transcriber.transcribe(
             TranscriptionRequest(audio_uri=track.uri, org_id=session.org_id)
         )
+        for gap in detect_coverage_gaps(result.segments):
+            db.add(
+                CoverageInterval(
+                    org_id=session.org_id,
+                    capture_session_id=session.id,
+                    start_s=gap.start_s,
+                    end_s=gap.end_s,
+                    modality="audio",
+                    status=CoverageStatus(gap.status.value),
+                    reason=gap.reason,
+                )
+            )
         repaired_segments = await repair_segments(
             result.segments,
             roster=roster,

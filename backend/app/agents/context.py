@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 from app.db.models import (
     CaptureSession,
     Confidence,
+    CoverageInterval,
+    CoverageStatus,
     Keyframe,
     KnowledgeEvidence,
     KnowledgeItem,
@@ -101,6 +103,10 @@ def _resolve_owner(db: Session, org_id: str, owner_hint: str | None) -> str | No
     return None
 
 
+def _overlaps_any_gap(start_s: float, end_s: float, gaps: list[CoverageInterval]) -> bool:
+    return any(start_s < g.end_s and end_s > g.start_s for g in gaps)
+
+
 def _parse_due(due_hint: str | None):
     if not due_hint:
         return None
@@ -143,6 +149,15 @@ async def run_context_intelligence(
 
     known_utterance_ids = {u.id for u in utterances}
     known_keyframe_ids = {k.id for k in keyframes}
+    utterance_by_id = {u.id: u for u in utterances}
+    coverage_gaps = (
+        db.query(CoverageInterval)
+        .filter(
+            CoverageInterval.capture_session_id == capture_session_id,
+            CoverageInterval.status != CoverageStatus.OK,
+        )
+        .all()
+    )
 
     from app.config import get_settings
 
@@ -181,6 +196,15 @@ async def run_context_intelligence(
             rationale=candidate.rationale,
         )
 
+        # CLAUDE.md rule 6: capture gaps must visibly flag overlapping items.
+        # Only utterance evidence is checked -- this pass only produces
+        # audio-modality gaps (app/asr/coverage.py); a keyframe can't overlap
+        # an audio gap in any meaningful sense.
+        overlaps_gap = any(
+            _overlaps_any_gap(utterance_by_id[uid].start_s, utterance_by_id[uid].end_s, coverage_gaps)
+            for uid in utterance_ids
+        )
+
         item = KnowledgeItem(
             org_id=session.org_id,
             capture_session_id=capture_session_id,
@@ -190,6 +214,7 @@ async def run_context_intelligence(
             due_at=_parse_due(candidate.due_hint),
             confidence=Confidence.AMBIGUOUS,
             confidence_rationale="",
+            overlaps_coverage_gap=overlaps_gap,
         )
         db.add(item)
         db.flush()
