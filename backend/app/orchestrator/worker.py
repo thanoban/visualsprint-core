@@ -36,6 +36,7 @@ async def _noop(db: object, job: PipelineJob) -> None:  # placeholder for unbuil
 
 _llm_client = None
 _transcriber = None
+_platform_adapters = None
 
 
 def _get_llm():
@@ -59,6 +60,129 @@ def _get_transcriber():
     return _transcriber
 
 
+def _get_platform_adapters():
+    """Production adapter registry for official artifact capture.
+
+    Real OAuth providers are intentionally not configured yet. The adapters
+    still sit behind the PlatformAdapter protocol, and tests override this
+    registry with fakes so the worker contract stays credential-free.
+    """
+    global _platform_adapters
+    if _platform_adapters is None:
+        from app.adapters.blobstore_s3 import get_blobstore
+        from app.capture.meet_adapter import MeetAdapter
+        from app.capture.token_provider import UnconfiguredTokenProvider
+        from app.capture.zoom_adapter import ZoomAdapter
+
+        blob_store = get_blobstore()
+        _platform_adapters = {
+            "meet": MeetAdapter(
+                token_provider=UnconfiguredTokenProvider("Google Meet OAuth not configured"),
+                blob_store=blob_store,
+            ),
+            "zoom": ZoomAdapter(
+                token_provider=UnconfiguredTokenProvider("Zoom OAuth not configured"),
+                blob_store=blob_store,
+            ),
+        }
+    return _platform_adapters
+
+
+def _person_for_roster_entry(db: object, org_id: str, entry):
+    from sqlalchemy import select
+
+    from app.db.models import Person
+
+    if entry.email:
+        existing = db.execute(
+            select(Person).where(Person.org_id == org_id, Person.email == entry.email).limit(1)
+        ).scalar_one_or_none()
+        if existing:
+            return existing
+
+    existing = db.execute(
+        select(Person)
+        .where(Person.org_id == org_id, Person.display_name == entry.display_name)
+        .limit(1)
+    ).scalar_one_or_none()
+    if existing:
+        if entry.email and not existing.email:
+            existing.email = entry.email
+        return existing
+
+    person = Person(
+        org_id=org_id,
+        display_name=entry.display_name,
+        email=entry.email,
+        aliases=[entry.display_name],
+    )
+    db.add(person)
+    db.flush()
+    return person
+
+
+def _persist_capture_artifacts(db: object, session, artifacts) -> None:
+    from app.db.models import AudioTrack, Participant
+
+    participant_by_key = {}
+    for entry in artifacts.roster:
+        person = _person_for_roster_entry(db, session.org_id, entry)
+        participant = Participant(
+            org_id=session.org_id,
+            capture_session_id=session.id,
+            person_id=person.id,
+            display_name=entry.display_name,
+            platform_user_id=entry.platform_user_id,
+        )
+        db.add(participant)
+        for key in (entry.email, entry.platform_user_id, entry.display_name):
+            if key:
+                participant_by_key[key] = participant
+    db.flush()
+
+    for track in artifacts.audio_tracks:
+        person_id = None
+        display_name = None
+        if track.participant:
+            display_name = track.participant.display_name
+            participant = next(
+                (
+                    participant_by_key[key]
+                    for key in (
+                        track.participant.email,
+                        track.participant.platform_user_id,
+                        track.participant.display_name,
+                    )
+                    if key and key in participant_by_key
+                ),
+                None,
+            )
+            if participant is None:
+                person = _person_for_roster_entry(db, session.org_id, track.participant)
+                participant = Participant(
+                    org_id=session.org_id,
+                    capture_session_id=session.id,
+                    person_id=person.id,
+                    display_name=track.participant.display_name,
+                    platform_user_id=track.participant.platform_user_id,
+                )
+                db.add(participant)
+                db.flush()
+            person_id = participant.person_id
+
+        db.add(
+            AudioTrack(
+                org_id=session.org_id,
+                capture_session_id=session.id,
+                uri=track.uri,
+                participant_person_id=person_id,
+                participant_display_name=display_name,
+            )
+        )
+
+    session.video_uri = artifacts.screen_share_uri or artifacts.video_uri
+
+
 @stage_handler("acquire")
 async def _handle_acquire(db: object, job: PipelineJob) -> None:
     """Mode D: audio already landed in blob storage at upload time (see
@@ -68,11 +192,12 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
     and failing explicitly beats producing an empty session."""
     from sqlalchemy import select
 
-    from app.db.models import AudioTrack, CaptureSession
+    from app.db.models import AudioTrack, CaptureSession, Participant
 
     session = db.get(CaptureSession, job.capture_session_id)
     if session is None:
         raise RuntimeError(f"capture_session {job.capture_session_id} not found")
+    meeting = session.meeting
 
     has_track = db.execute(
         select(AudioTrack.id).where(AudioTrack.capture_session_id == session.id).limit(1)
@@ -85,10 +210,27 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
             )
         return
 
-    raise RuntimeError(
-        f"acquire not yet implemented for mode {session.mode!r} — "
-        "PlatformAdapter.acquire() integration lands in a later phase"
-    )
+    if session.mode != "A2":
+        raise RuntimeError(
+            f"acquire not yet implemented for mode {session.mode!r} — "
+            "only Mode D upload and Mode A2 official artifacts are wired"
+        )
+
+    adapter = _get_platform_adapters().get(meeting.platform if meeting else None)
+    if adapter is None:
+        raise RuntimeError(
+            f"no PlatformAdapter configured for platform {(meeting.platform if meeting else None)!r}"
+        )
+    platform_capture_id = meeting.platform_meeting_id if meeting else None
+    if not platform_capture_id:
+        raise RuntimeError("mode A2 session requires meeting.platform_meeting_id")
+
+    db.query(AudioTrack).filter(AudioTrack.capture_session_id == session.id).delete()
+    db.query(Participant).filter(Participant.capture_session_id == session.id).delete()
+    artifacts = await adapter.acquire(platform_capture_id)
+    if not artifacts.audio_tracks:
+        raise RuntimeError("PlatformAdapter returned no audio tracks")
+    _persist_capture_artifacts(db, session, artifacts)
 
 
 def _repair_context(db: object, session) -> tuple[list[str], list[str]]:
@@ -103,9 +245,7 @@ def _repair_context(db: object, session) -> tuple[list[str], list[str]]:
 
     roster = [
         p.display_name
-        for p in db.execute(
-            select(Participant).where(Participant.capture_session_id == session.id)
-        )
+        for p in db.execute(select(Participant).where(Participant.capture_session_id == session.id))
         .scalars()
         .all()
     ]
@@ -234,12 +374,14 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
 
     existing_keyframe_ids = [
         kf.id
-        for kf in db.execute(select(Keyframe.id).where(Keyframe.capture_session_id == session.id)).all()
+        for kf in db.execute(
+            select(Keyframe.id).where(Keyframe.capture_session_id == session.id)
+        ).all()
     ]
     if existing_keyframe_ids:
-        db.query(UtteranceKeyframe).filter(UtteranceKeyframe.keyframe_id.in_(existing_keyframe_ids)).delete(
-            synchronize_session=False
-        )
+        db.query(UtteranceKeyframe).filter(
+            UtteranceKeyframe.keyframe_id.in_(existing_keyframe_ids)
+        ).delete(synchronize_session=False)
         db.query(Keyframe).filter(Keyframe.capture_session_id == session.id).delete()
 
     if not session.video_uri:
@@ -294,7 +436,9 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
 
     if created:
         utterances = (
-            db.execute(select(Utterance).where(Utterance.capture_session_id == session.id)).scalars().all()
+            db.execute(select(Utterance).where(Utterance.capture_session_id == session.id))
+            .scalars()
+            .all()
         )
         for grounding in ground_utterances(utterances, created):
             db.add(

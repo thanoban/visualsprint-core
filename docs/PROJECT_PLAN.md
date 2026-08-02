@@ -147,6 +147,8 @@ Swapping any implementation touches **zero** downstream code. This is what "buy 
 
 Always disclosed — named participant, chat announcement, logged consent. No stealth capture under any framing.
 
+**Implementation status:** Mode D upload is runtime-verified. Mode A2 Zoom Cloud Recording and Meet REST adapters are implemented and wired into the worker `acquire` stage through the `PlatformAdapter` interface; the worker persists roster rows, normalized audio tracks, per-participant attribution when available, and video/screen-share URIs for the screen stage. This path is unit-tested against fakes only; real OAuth/token providers and live platform smoke tests are still pending.
+
 **Details preserved from research:** Meet REST needs Workspace Business Standard+; Teams Graph transcript access is admin-gated from 29 Jul 2026 (detect at onboarding, fall back explicitly); Zoom RTMS commercial terms unconfirmed (verify week 1; Cloud Recording is the same-quality fallback); store all audio as FLAC forever — every meeting stays re-transcribable as ASR improves, and the corpus is the moat.
 
 ### Screen → keyframes
@@ -203,7 +205,7 @@ Design note: lifecycle **state** lives on items (`NEW/RECURRING/REOPENED/RESOLVE
 |---|---|---|
 | **0. Foundations** | 1–2 | Monorepo, schema, FSM orchestrator, R2, all six swap-point interfaces |
 | **0b. ASR baseline** | 1–3 | Gold set + eval harness; rank Google vs Azure; freeze regression baseline |
-| **1. Capture** | 3–6 | **Mode D upload first** (unblocks whole pipeline in days) → Mode A2 artifacts (Meet REST, Zoom Cloud Rec) → A1 RTMS. Calendar watch, disclosure, coverage telemetry |
+| **1. Capture** | 3–6 | **Mode D upload** runtime-verified → Mode A2 artifacts wired into `acquire` for Meet REST + Zoom Cloud Rec (fake-tested, not live OAuth/API-tested) → A1 RTMS. Calendar watch, disclosure, coverage telemetry |
 | **2. ASR cascade** | 4–7 | VAD + LID + routing + failover + LLM repair; correction UI + glossary (flywheel live) |
 | **3. Understanding** | 7–12 | Keyframes, OCR/VLM, speech↔screen grounding, five agents, evidence + confidence |
 | **4. Memory + Chat** | 11–15 | Lifecycle edges, hybrid retrieval, **org-memory chat with evidence chips** — MongoDB acceptance test passes |

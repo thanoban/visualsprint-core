@@ -24,6 +24,14 @@
 
 Downstream consumes one normalized `capture_session`; weaker modes yield honestly lower confidence labels, never silent degradation.
 
+**Implementation status:** Mode D upload is runtime-verified. Mode A2 Zoom Cloud
+Recording and Meet REST adapters are implemented, unit-tested against fake HTTP,
+and now wired into the worker's `acquire` stage through the `PlatformAdapter`
+interface. The worker persists roster entries as participants, writes normalized
+audio tracks, carries per-participant attribution where the platform provides it,
+and records video/screen-share artifact URIs for the later screen stage. Live
+OAuth/token providers and real-platform smoke tests are still not configured.
+
 **Disclosure always:** named participant, chat announcement, logged consent record. No stealth capture under any framing.
 
 ## Constraints found in research
