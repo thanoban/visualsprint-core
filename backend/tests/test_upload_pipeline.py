@@ -25,6 +25,7 @@ from app.db.models import (
     ConsentRecord,
     Meeting,
     Org,
+    Participant,
     PipelineJob,
     Utterance,
 )
@@ -95,6 +96,7 @@ def _cleanup_default_org():
         org = db.query(Org).filter(Org.name == "default").one_or_none()
         if org is not None:
             db.query(Utterance).filter(Utterance.org_id == org.id).delete()
+            db.query(Participant).filter(Participant.org_id == org.id).delete()
             db.query(PipelineJob).filter(PipelineJob.org_id == org.id).delete()
             db.query(ConsentRecord).filter(ConsentRecord.org_id == org.id).delete()
             db.query(AudioTrack).filter(AudioTrack.org_id == org.id).delete()
@@ -141,7 +143,67 @@ def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
     assert utterances[0].provider == "fake:test"
     assert utterances[1].text == "authentication issue innum fix agala"
 
+    # No participant roster / OCR context exists for this session, so the
+    # LLM repair pass short-circuits (app.asr.repair) rather than requiring
+    # live Vertex AI credentials — repaired stays False, not silently True.
+    assert all(u.repaired is False for u in utterances)
+
     # State tracks the stage that just ran, not the one queued next — the
     # `understand` job is enqueued but hasn't been claimed by a worker yet.
     status = client.get(f"/api/v1/meetings/sessions/{session_id}")
     assert status.json()["state"] == CaptureState.TRANSCRIBING.value
+
+
+def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcriber, monkeypatch):
+    """With a participant roster present, the transcribe stage must actually
+    call through app.asr.repair and persist the repaired text with
+    repaired=True — proving worker.py's wiring, not just repair_segments in
+    isolation (already covered by tests/asr/test_repair.py)."""
+    from app.interfaces.llm import LlmUsage
+
+    class FakeLlm:
+        async def complete_structured(self, *, model, system, user_content, schema, max_tokens=4096):
+            from app.asr.repair import RepairResult
+
+            return (
+                RepairResult(
+                    segments=[
+                        {"index": 0, "text": "API eka deploy panna ready — REPAIRED"},
+                        {"index": 1, "text": "authentication issue innum fix agala"},
+                    ]
+                ),
+                LlmUsage(input_tokens=1, output_tokens=1, model=model),
+            )
+
+    monkeypatch.setattr(worker, "_llm_client", FakeLlm())
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("standup2.wav", FAKE_AUDIO_BYTES, "audio/wav")},
+        data={"title": "Sprint Planning 2"},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        session = db.get(CaptureSession, session_id)
+        db.add(Participant(org_id=session.org_id, capture_session_id=session_id, display_name="Kasun"))
+        db.commit()
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+
+    with Session() as db:
+        utterances = (
+            db.execute(select(Utterance).where(Utterance.capture_session_id == session_id).order_by(Utterance.start_s))
+            .scalars()
+            .all()
+        )
+
+    assert utterances[0].text == "API eka deploy panna ready — REPAIRED"
+    assert utterances[0].repaired is True
+    assert utterances[1].text == "authentication issue innum fix agala"
+    assert utterances[1].repaired is False  # unchanged text -> not flagged as repaired

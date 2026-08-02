@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     model_memory: str = "claude-opus-4-8"
     model_verify: str = "claude-sonnet-5"
     model_report: str = "claude-sonnet-5"
+    model_repair: str = "claude-haiku-4-5-20251001"  # cheap, high-volume: every ASR segment goes through this
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0
