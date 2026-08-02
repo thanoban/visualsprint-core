@@ -169,12 +169,12 @@ export interface MeetingReport {
 }
 
 // ---------------------------------------------------------------------------
-// Types for the org-memory chat page. POST /api/v1/chat exists now
-// (backend/app/api/chat.py) -- TODO: wire this page to it instead of
-// lib/mock-data.ts. Shape derived from docs/01-vision-and-competitive.md
-// ("every claim cites clickable evidence chips") and the north-star
-// acceptance test ("why are we using MongoDB?" -> traced answer with
-// speaker/span/screen).
+// Types for the org-memory chat page. app/chat/page.tsx is wired to the real
+// POST /api/v1/chat (backend/app/api/chat.py), falling back to
+// lib/mock-data.ts's mockAssistantReply only when that fetch fails. Shape
+// derived from docs/01-vision-and-competitive.md ("every claim cites
+// clickable evidence chips") and the north-star acceptance test ("why are we
+// using MongoDB?" -> traced answer with speaker/span/screen).
 // ---------------------------------------------------------------------------
 
 export interface ChatRequest {
@@ -249,4 +249,36 @@ export interface GlossaryTermOut {
   term: string;
   added_by: string | null;
   created_at: string; // ISO datetime
+}
+
+// ---------------------------------------------------------------------------
+// Types for the action-approval UI (backend/app/api/actions.py).
+// ---------------------------------------------------------------------------
+
+/** Mirrors ActionKind in backend/app/interfaces/actions.py */
+export type ActionKind =
+  | "email_draft"
+  | "channel_recap"
+  | "task_create"
+  | "calendar_followup"
+  | "escalation"
+  | "reminder";
+
+/** Mirrors ActionStatus in backend/app/db/models.py */
+export type ActionStatusValue = "pending_approval" | "approved" | "rejected" | "executed" | "failed";
+
+/** Row shape of GET /api/v1/orgs/{org_id}/actions and the approve/reject responses */
+export interface ProposedActionOut {
+  id: string;
+  capture_session_id: string;
+  kind: string;
+  title: string;
+  body: string;
+  target: Record<string, string>;
+  status: ActionStatusValue;
+  approved_by: string | null;
+  approved_at: string | null;
+  executed_at: string | null;
+  external_url: string | null;
+  error: string | null;
 }
