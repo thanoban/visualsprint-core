@@ -17,13 +17,27 @@ from app.orchestrator.pipeline import FIRST_STAGE, next_stage, running_state
 WORKER_ID = f"{socket.gethostname()}:{id(object())}"
 
 
-def enqueue_pipeline(db: Session, org_id: str, capture_session_id: str) -> PipelineJob:
-    """Start the pipeline for a capture session at its first stage."""
-    return enqueue_stage(db, org_id, capture_session_id, FIRST_STAGE)
+def enqueue_pipeline(
+    db: Session, org_id: str, capture_session_id: str, *, run_at: datetime | None = None
+) -> PipelineJob:
+    """Start the pipeline for a capture session at its first stage.
+
+    `run_at` lets a caller schedule the first claim in the future rather than
+    immediately — the scheduler (app/orchestrator/scheduler.py) uses this so
+    a Mode A2 session's `acquire` job doesn't fire until after the meeting
+    has actually ended and the platform has had time to process the
+    recording; Mode D's upload endpoint always wants `None` (now), since the
+    audio is already sitting in blob storage the moment it's called.
+    """
+    return enqueue_stage(db, org_id, capture_session_id, FIRST_STAGE, run_at=run_at)
 
 
-def enqueue_stage(db: Session, org_id: str, capture_session_id: str, stage: str) -> PipelineJob:
+def enqueue_stage(
+    db: Session, org_id: str, capture_session_id: str, stage: str, *, run_at: datetime | None = None
+) -> PipelineJob:
     job = PipelineJob(org_id=org_id, capture_session_id=capture_session_id, stage=stage)
+    if run_at is not None:
+        job.run_at = run_at
     db.add(job)
     db.flush()
     return job

@@ -95,13 +95,21 @@ class CalendarConnection(TimestampMixin, Base):
 
 class Meeting(TimestampMixin, Base):
     __tablename__ = "meeting"
-    __table_args__ = (Index("ix_meeting_org_start", "org_id", "scheduled_start"),)
+    __table_args__ = (
+        Index("ix_meeting_org_start", "org_id", "scheduled_start"),
+        Index("ix_meeting_external_calendar_event", "org_id", "external_calendar_event_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     title: Mapped[str] = mapped_column(String(500), default="")
     platform: Mapped[str] = mapped_column(String(32), default="upload")  # zoom|meet|teams|upload
     platform_meeting_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    # Calendar provider's event id (app/orchestrator/scheduler.py) -- distinct
+    # from platform_meeting_id (the Zoom/Meet/Teams conferencing id used by
+    # capture adapters). Lets repeated calendar polls be idempotent instead
+    # of creating a duplicate Meeting per sync for the same event.
+    external_calendar_event_id: Mapped[str | None] = mapped_column(String(255), default=None)
     scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
