@@ -88,6 +88,7 @@ def _get_platform_adapters():
     if _platform_adapters is None:
         from app.adapters.blobstore_s3 import get_blobstore
         from app.capture.meet_adapter import MeetAdapter
+        from app.capture.teams_adapter import TeamsAdapter
         from app.capture.token_provider import UnconfiguredTokenProvider
         from app.capture.zoom_adapter import ZoomAdapter
 
@@ -99,6 +100,10 @@ def _get_platform_adapters():
             ),
             "zoom": ZoomAdapter(
                 token_provider=UnconfiguredTokenProvider("Zoom OAuth not configured"),
+                blob_store=blob_store,
+            ),
+            "teams": TeamsAdapter(
+                token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured"),
                 blob_store=blob_store,
             ),
         }
