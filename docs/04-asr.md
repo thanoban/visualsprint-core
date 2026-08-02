@@ -46,6 +46,44 @@ VAD, LID, and the Google/Azure/Groq routing cascade with auto-failover are imple
 
 5–10 hrs real consented SL meeting audio, hand-transcribed. Permanent regression asset. Metrics: WER per language, switch-point accuracy, entity accuracy (ticket IDs, Sri Lankan names, tech terms), DER.
 
+### Running the bake-off — the full workflow
+
+The scorer (`app/evaluation/asr_eval.py`) and the hypothesis generator (`scripts/generate_asr_hypotheses.py`) are both implemented; only the gold audio/transcripts are missing (they require real consented recordings, which no amount of code produces). Once audio exists:
+
+1. **Place audio.** Drop 16 kHz mono WAV clips under `backend/gold/audio/`.
+2. **Author gold samples** — one JSON object per line in `backend/gold/samples.jsonl`, matching `app.evaluation.asr_eval.GoldSample`:
+   ```json
+   {"id": "clip1", "reference": "API eka deploy panna ready authentication issue innum fix agala", "language_tags": ["en", "si"], "switch_points": [3], "entities": ["API"]}
+   ```
+   `switch_points` are token-boundary offsets in the *reference* text (see the model's docstring); `entities` are ticket IDs / names / technical terms to check verbatim recall on.
+3. **Write a manifest** at `backend/gold/manifest.jsonl` mapping the same ids to audio files:
+   ```json
+   {"id": "clip1", "audio": "audio/clip1.wav"}
+   ```
+4. **Generate hypotheses per candidate.** Two modes — see the script's own `--help` for the full rationale:
+   ```bash
+   # Whole-pipeline (what production runs): VAD -> LID -> routing -> repair
+   python scripts/generate_asr_hypotheses.py --manifest gold/manifest.jsonl \
+       --provider cascade --output gold/hypotheses/cascade.jsonl
+
+   # One vendor in isolation, forced language — answers "Google or Azure for si?"
+   python scripts/generate_asr_hypotheses.py --manifest gold/manifest.jsonl \
+       --provider google --lang si --output gold/hypotheses/google-si.jsonl
+   python scripts/generate_asr_hypotheses.py --manifest gold/manifest.jsonl \
+       --provider azure --lang si --output gold/hypotheses/azure-si.jsonl
+   ```
+5. **Rank.**
+   ```bash
+   python -m app.evaluation.asr_eval --gold gold/samples.jsonl \
+       --hypothesis cascade=gold/hypotheses/cascade.jsonl \
+       --hypothesis google-si=gold/hypotheses/google-si.jsonl \
+       --hypothesis azure-si=gold/hypotheses/azure-si.jsonl \
+       --output gold/reports/latest.json
+   ```
+   Ranked by WER, then switch-point F1, then entity accuracy. Save the report and pass it back via `--baseline` on the next run to fail CI on regression (`--max-wer-increase`, `--max-switch-f1-drop`, etc.).
+
+Requires the relevant vendor credentials in `.env` (`VS_GOOGLE_CREDENTIALS_JSON`, `VS_AZURE_SPEECH_KEY`/`VS_AZURE_SPEECH_REGION`, `VS_GROQ_API_KEY`) — `--provider cascade` additionally needs `torch`/`speechbrain` installed (the `asr` extra) since VAD/LID load lazily on first real call.
+
 ## Free-tier funding
 
 Google $300 credit (~312 hrs chirp_2) + Azure F0/credit + Groq 240 hrs/mo ongoing → bake-off costs <$5; first pilot months nearly free.

@@ -29,8 +29,13 @@ credentials*.json
 *.mp3
 *.mp4
 
+# Gold set — generated output, never hand-authored (see backend/gold/README.md)
+backend/gold/hypotheses/
+backend/gold/reports/
+
 # IDE / OS
 .vscode/
 .idea/
+.claude/
 Thumbs.db
 .DS_Store
