@@ -1,24 +1,31 @@
 """Keyframe captioning — cheap image-to-text for VLM captions on keyframes.
 
-`LlmClient` (app/interfaces/llm.py) is text-only: `complete_structured` takes
-`user_content: str` and returns a Pydantic-validated result, with no
-image/vision parameter anywhere in the Protocol. Reaching past that boundary
-to call a vision-capable vendor SDK directly from here would break the
-"every external dependency goes through its swap-point interface" rule
-(CLAUDE.md #4) — `llm_vertex.py` is the designated `LlmClient` swap point and
-this module must not edit it or bypass it.
-
-So this file defines its own minimal `VlmCaptioner` Protocol as the intended
-swap point for keyframe captioning, with a placeholder implementation that
-raises until one of two things happens: `LlmClient.complete_structured` gains
-an image parameter, or a separate vision-capable call path is chosen. Either
-way, callers can be written against `caption_keyframe`/`VlmCaptioner` today
-without churn later.
+`LlmClient.complete_structured` (app/interfaces/llm.py) now accepts an
+optional `images: list[bytes]` parameter, so `LlmVisionCaptioner` below is
+the real, wired implementation of `VlmCaptioner`. `NotImplementedVlmCaptioner`
+stays as the explicit "nothing configured" default so a caller that forgets
+to inject a real captioner gets a loud error instead of a silently-empty
+caption that would read as "verified empty" rather than "not attempted".
 """
 
 from __future__ import annotations
 
 from typing import Protocol
+
+from pydantic import BaseModel
+
+from app.interfaces.llm import LlmClient
+
+SYSTEM_PROMPT = """You caption a single screenshot from a work meeting (a
+shared screen, slide, terminal, or diagram) for someone who cannot see it.
+Describe only what is visible: on-screen text, UI elements, diagrams, code,
+error messages. One or two sentences. Do not guess at anything outside the
+frame, and do not speculate about what the meeting is about beyond what the
+image itself shows."""
+
+
+class _CaptionResult(BaseModel):
+    caption: str
 
 
 class VlmCaptioner(Protocol):
@@ -31,19 +38,42 @@ class NotImplementedVlmCaptioner:
     """Placeholder `VlmCaptioner` — structurally complete, raises until wired.
 
     Exists so `caption_keyframe` and its callers are importable and testable
-    (with a fake `VlmCaptioner`) before a real vision path exists. Do not
-    silently return an empty caption here — a caller that isn't checking for
-    this would produce a `Keyframe.vlm_caption` that reads as "verified
-    empty" rather than "not attempted".
+    (with a fake `VlmCaptioner`) without requiring a real `LlmClient`
+    instance. Do not silently return an empty caption here — a caller that
+    isn't checking for this would produce a `Keyframe.vlm_caption` that
+    reads as "verified empty" rather than "not attempted".
     """
 
     async def caption(self, image_bytes: bytes) -> str:
         raise NotImplementedError(
-            "VlmCaptioner has no working implementation yet — LlmClient "
-            "(app/interfaces/llm.py) is text-only (user_content: str, no "
-            "image parameter). Wire this once vision input is added to "
-            "LlmClient, or once another vision-capable call path is chosen."
+            "VlmCaptioner has no working implementation injected — pass an "
+            "LlmVisionCaptioner(llm=...) to caption_keyframe(), or leave "
+            "vlm_caption blank at the call site if captioning isn't wanted "
+            "for this session."
         )
+
+
+class LlmVisionCaptioner:
+    """`VlmCaptioner` backed by any vision-capable `LlmClient` (Claude on
+    Vertex AI supports vision natively). Model tier is caller-supplied
+    rather than hardcoded — the screen stage should pass the same cheap
+    classification-tier model used elsewhere (settings.model_classify),
+    since a caption is a cheap task, not settings.model_extract/report."""
+
+    def __init__(self, llm: LlmClient, model: str) -> None:
+        self._llm = llm
+        self._model = model
+
+    async def caption(self, image_bytes: bytes) -> str:
+        result, _usage = await self._llm.complete_structured(
+            model=self._model,
+            system=SYSTEM_PROMPT,
+            user_content="Caption this screenshot.",
+            schema=_CaptionResult,
+            images=[image_bytes],
+            max_tokens=256,
+        )
+        return result.caption
 
 
 async def caption_keyframe(image_bytes: bytes, captioner: VlmCaptioner | None = None) -> str:

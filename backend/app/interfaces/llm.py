@@ -28,6 +28,16 @@ class LlmClient(Protocol):
         user_content: str,
         schema: type[T],
         max_tokens: int = 4096,
+        images: list[bytes] = [],  # noqa: B006 — Protocol default, never mutated
     ) -> tuple[T, LlmUsage]:
-        """Run one structured completion; raises on schema-invalid output after retries."""
+        """Run one structured completion; raises on schema-invalid output after retries.
+
+        `images` is optional and additive — every existing text-only call
+        site is unaffected by its presence. Raw JPEG/PNG bytes (as produced
+        by app.screen.keyframe_detect's JPEG-encoded KeyframeCandidate);
+        implementations attach them as vision content blocks ahead of
+        `user_content`. A caller passing images to a model that doesn't
+        support vision should get a clear provider-level error, not a
+        silent text-only fallback that pretends the images were considered.
+        """
         ...

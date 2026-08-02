@@ -8,6 +8,7 @@ is forced to call it, and the tool_use input is validated back into the
 Pydantic type. Invalid output is retried (tenacity) before raising.
 """
 
+import base64
 from typing import TypeVar
 
 import structlog
@@ -28,6 +29,18 @@ _TOOL_NAME = "emit_result"
 
 class SchemaValidationError(Exception):
     """Raised when the model's structured output fails Pydantic validation."""
+
+
+def _sniff_media_type(data: bytes) -> str:
+    """Minimal magic-byte check for the two formats this codebase actually
+    produces (keyframe_detect.py always emits JPEG). Not `imghdr` -- removed
+    in Python 3.13 (PEP 594) -- and not a general-purpose sniffer; extend
+    here if a producer of another image format shows up."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    raise ValueError("unrecognized image format — expected JPEG or PNG magic bytes")
 
 
 def _resolve_project_id(explicit: str | None) -> str:
@@ -65,19 +78,36 @@ class VertexLlmClient:
         user_content: str,
         schema: type[T],
         max_tokens: int = 4096,
+        images: list[bytes] = [],  # noqa: B006 — never mutated, see interfaces/llm.py
     ) -> tuple[T, LlmUsage]:
         tool = {
             "name": _TOOL_NAME,
             "description": f"Emit a result matching the {schema.__name__} schema.",
             "input_schema": schema.model_json_schema(),
         }
+        content: str | list[dict] = user_content
+        if images:
+            # Images first, text last — Anthropic's documented ordering for
+            # multi-modal messages where the text refers to the image(s).
+            content = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": _sniff_media_type(image_bytes),
+                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                    },
+                }
+                for image_bytes in images
+            ]
+            content.append({"type": "text", "text": user_content})
         response = self._client.messages.create(
             model=model,
             system=system,
             max_tokens=max_tokens,
             tools=[tool],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
-            messages=[{"role": "user", "content": user_content}],
+            messages=[{"role": "user", "content": content}],
         )
         usage = LlmUsage(
             input_tokens=response.usage.input_tokens,
