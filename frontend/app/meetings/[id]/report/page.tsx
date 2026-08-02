@@ -1,8 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getMockMeetingReport } from "@/lib/mock-data";
+import { use, useEffect, useState } from "react";
+import { API_BASE_URL } from "@/lib/config";
 import type { ConfidenceLevel, EngagementSummary, KnowledgeItem, MeetingReport } from "@/lib/types";
+
+/** `params.id` is a capture_session_id (see lib/types.ts MeetingReport doc),
+ * not a meeting_id — a meeting can have more than one capture session, so
+ * the report is scoped to one session's evidence. */
+async function fetchMeetingReport(captureSessionId: string): Promise<MeetingReport> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/meetings/${captureSessionId}/report`);
+  if (res.status === 404) {
+    throw new Error("No capture session found with this ID.");
+  }
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as MeetingReport;
+}
+
+/** A session that hasn't reached the `remember`/`report` stages yet returns
+ * 200 with every group empty — a legitimate, common state, not an error. */
+function isEmptyReport(report: MeetingReport): boolean {
+  return (
+    report.decisions.length === 0 &&
+    report.commitments.length === 0 &&
+    report.requirements.length === 0 &&
+    report.blockers.length === 0 &&
+    report.questions.length === 0 &&
+    report.facts.length === 0
+  );
+}
 
 const LANG_LABELS: Record<string, string> = { si: "Sinhala", ta: "Tamil", en: "English", und: "unknown" };
 
@@ -149,7 +176,12 @@ function Section({ title, items }: { title: string; items: KnowledgeItem[] }) {
   );
 }
 
-export default function MeetingReportPage({ params }: { params: { id: string } }) {
+export default function MeetingReportPage({ params }: { params: Promise<{ id: string }> }) {
+  // Next.js 15+ made route params async (this repo runs Next 16, despite
+  // package.json's stale "14.2.15" pin) -- `use()` unwraps the promise in a
+  // client component. Accessing `params.id` directly here silently resolves
+  // to undefined and produces a request to `/meetings/undefined/report`.
+  const { id } = use(params);
   const [report, setReport] = useState<MeetingReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -159,9 +191,7 @@ export default function MeetingReportPage({ params }: { params: { id: string } }
     setLoading(true);
     setError(null);
 
-    // TODO: replace with real API once report endpoint exists.
-    // Real call would be: fetch(`${API_BASE_URL}/api/v1/meetings/${params.id}/report`)
-    getMockMeetingReport(params.id)
+    fetchMeetingReport(id)
       .then((data) => {
         if (!cancelled) setReport(data);
       })
@@ -175,7 +205,7 @@ export default function MeetingReportPage({ params }: { params: { id: string } }
     return () => {
       cancelled = true;
     };
-  }, [params.id]);
+  }, [id]);
 
   if (loading) {
     return <p className="text-sm text-slate-500">Loading report…</p>;
@@ -192,14 +222,18 @@ export default function MeetingReportPage({ params }: { params: { id: string } }
   return (
     <div className="space-y-8">
       <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-amber-600 bg-amber-50 border border-amber-200 inline-block rounded px-2 py-1 mb-3">
-          Demo data — report endpoint not wired up yet (see lib/mock-data.ts)
-        </p>
         <h1 className="text-2xl font-semibold text-slate-900">{report.title}</h1>
         <p className="mt-1 text-sm text-slate-500">
           {new Date(report.occurred_at).toLocaleString()} · Meeting {report.meeting_id}
         </p>
       </div>
+
+      {isEmptyReport(report) && (
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          No knowledge items yet. Either the pipeline hasn&apos;t finished processing this meeting, or
+          nothing verifiable was extracted from it.
+        </p>
+      )}
 
       {report.coverage_gaps.length > 0 && (
         <div className="rounded-lg border border-orange-300 bg-orange-50 p-4">
@@ -224,6 +258,7 @@ export default function MeetingReportPage({ params }: { params: { id: string } }
       <Section title="Requirements" items={report.requirements} />
       <Section title="Blockers" items={report.blockers} />
       <Section title="Questions" items={report.questions} />
+      <Section title="Facts" items={report.facts} />
     </div>
   );
 }

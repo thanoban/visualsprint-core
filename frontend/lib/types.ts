@@ -19,6 +19,7 @@ export type CaptureSessionState =
   | "acquiring"
   | "acquired"
   | "transcribing"
+  | "processing_screen"
   | "understanding"
   | "verifying"
   | "remembering"
@@ -32,6 +33,7 @@ export const CAPTURE_SESSION_STATE_ORDER: CaptureSessionState[] = [
   "acquiring",
   "acquired",
   "transcribing",
+  "processing_screen",
   "understanding",
   "verifying",
   "remembering",
@@ -65,13 +67,15 @@ export type KnowledgeItemType =
   | "question"
   | "fact";
 
-/** Mirrors knowledge_item.lifecycle_state */
+/** Mirrors knowledge_item.lifecycle_state. Values are lowercase, matching the
+ * backend's LifecycleState StrEnum (backend/app/db/models.py) as serialized
+ * by report.py's `.value` — not the uppercase display convention. */
 export type LifecycleState =
-  | "NEW"
-  | "RECURRING"
-  | "REOPENED"
-  | "RESOLVED"
-  | "SUPERSEDED";
+  | "new"
+  | "recurring"
+  | "reopened"
+  | "resolved"
+  | "superseded";
 
 /**
  * Confidence badge shown on every knowledge item. Verification never sees
@@ -144,11 +148,14 @@ export interface EngagementSummary {
 }
 
 /**
- * Shape of GET /api/v1/meetings/{id}/report (backend/app/api/report.py).
- * TODO: wire this page to the real endpoint instead of lib/mock-data.ts.
+ * Shape of GET /api/v1/meetings/{capture_session_id}/report
+ * (backend/app/api/report.py). Note the path param is a capture_session_id,
+ * not a meeting_id — a meeting can in principle have more than one capture
+ * session, so the report is scoped to one session's evidence.
  */
 export interface MeetingReport {
   meeting_id: string;
+  capture_session_id: string;
   title: string;
   occurred_at: string; // ISO date
   coverage_gaps: CoverageGap[];
@@ -158,6 +165,7 @@ export interface MeetingReport {
   requirements: KnowledgeItem[];
   blockers: KnowledgeItem[];
   questions: KnowledgeItem[];
+  facts: KnowledgeItem[];
 }
 
 // ---------------------------------------------------------------------------

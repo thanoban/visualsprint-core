@@ -229,7 +229,7 @@ export default function UploadPage() {
             <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800 flex items-center justify-between">
               <span>Pipeline complete.</span>
               <Link
-                href={`/meetings/${uploadResult.meeting_id}/report`}
+                href={`/meetings/${uploadResult.capture_session_id}/report`}
                 className="font-medium underline hover:no-underline"
               >
                 View report →

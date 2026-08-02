@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 2.0
     job_max_attempts: int = 5
 
+    # --- API ---
+    # pydantic-settings decodes list-typed env vars as JSON, e.g.
+    # VS_CORS_ALLOWED_ORIGINS=["https://app.example.com","https://staging.example.com"]
+    cors_allowed_origins: list[str] = ["http://localhost:3000"]
+
 
 @lru_cache
 def get_settings() -> Settings:
