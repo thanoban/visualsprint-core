@@ -10,7 +10,8 @@ from app.db.models import CaptureState
 # stage name -> (state while running, next stage)
 STAGES: dict[str, tuple[CaptureState, str | None]] = {
     "acquire": (CaptureState.ACQUIRING, "transcribe"),
-    "transcribe": (CaptureState.TRANSCRIBING, "understand"),
+    "transcribe": (CaptureState.TRANSCRIBING, "screen"),
+    "screen": (CaptureState.PROCESSING_SCREEN, "understand"),
     "understand": (CaptureState.UNDERSTANDING, "verify"),
     "verify": (CaptureState.VERIFYING, "remember"),
     "remember": (CaptureState.REMEMBERING, "propose"),

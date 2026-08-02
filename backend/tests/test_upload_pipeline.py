@@ -23,11 +23,13 @@ from app.db.models import (
     CaptureSession,
     CaptureState,
     ConsentRecord,
+    Keyframe,
     Meeting,
     Org,
     Participant,
     PipelineJob,
     Utterance,
+    UtteranceKeyframe,
 )
 from app.interfaces.transcriber import (
     Lang,
@@ -85,25 +87,66 @@ def client():
     return TestClient(fastapi_app)
 
 
+def _delete_default_org_children(db) -> None:
+    org = db.query(Org).filter(Org.name == "default").one_or_none()
+    if org is None:
+        return
+    db.query(UtteranceKeyframe).filter(UtteranceKeyframe.org_id == org.id).delete()
+    db.query(Keyframe).filter(Keyframe.org_id == org.id).delete()
+    db.query(Utterance).filter(Utterance.org_id == org.id).delete()
+    db.query(Participant).filter(Participant.org_id == org.id).delete()
+    db.query(PipelineJob).filter(PipelineJob.org_id == org.id).delete()
+    db.query(ConsentRecord).filter(ConsentRecord.org_id == org.id).delete()
+    db.query(AudioTrack).filter(AudioTrack.org_id == org.id).delete()
+    db.query(CaptureSession).filter(CaptureSession.org_id == org.id).delete()
+    db.query(Meeting).filter(Meeting.org_id == org.id).delete()
+    db.delete(org)
+    db.commit()
+
+
+def _cleanup_with_retry() -> None:
+    """Retries once on a transient DB error: this test suite runs many
+    short-lived sessions in quick succession against a live shared dev
+    Postgres (client requests, worker.run_once() calls, this cleanup), and
+    an occasional connection/lock timing race is a known class of flaky-
+    integration-test class, not evidence of a product bug -- the pipeline
+    code itself has zero flakiness across repeated runs."""
+    Session = get_sessionmaker()
+    try:
+        with Session() as db:
+            _delete_default_org_children(db)
+    except Exception as exc:
+        import time
+
+        time.sleep(0.3)
+        with Session() as db:
+            db.rollback()
+            try:
+                _delete_default_org_children(db)
+            except Exception:
+                raise exc from None
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_default_org():
     """The upload endpoint auto-creates an org named 'default' when none is
     supplied; drop everything it touches so repeated test runs don't collide
-    with leftover rows from a prior run against the same dev database."""
+    with leftover rows from a prior run against the same dev database.
+
+    Cleans up BEFORE as well as after each test. Teardown-only cleanup has a
+    real failure mode: if one pytest invocation's teardown itself errors
+    (see _cleanup_with_retry's docstring) before it can delete stray
+    `pipeline_job` rows, the NEXT invocation's worker.run_once() calls claim
+    jobs from the FIFO-ordered global queue without regard to which test
+    created them -- a stale job from a completely different, already-torn-
+    down session gets processed by a test that never intended to reach that
+    stage (observed: a test that only drives acquire+transcribe landed on a
+    stray `understand` job and hit a live Vertex AI call). Belt-and-
+    suspenders: clean at setup so a prior run's failure can never poison the
+    next one, not just at teardown for a clean run's own sake."""
+    _cleanup_with_retry()
     yield
-    Session = get_sessionmaker()
-    with Session() as db:
-        org = db.query(Org).filter(Org.name == "default").one_or_none()
-        if org is not None:
-            db.query(Utterance).filter(Utterance.org_id == org.id).delete()
-            db.query(Participant).filter(Participant.org_id == org.id).delete()
-            db.query(PipelineJob).filter(PipelineJob.org_id == org.id).delete()
-            db.query(ConsentRecord).filter(ConsentRecord.org_id == org.id).delete()
-            db.query(AudioTrack).filter(AudioTrack.org_id == org.id).delete()
-            db.query(CaptureSession).filter(CaptureSession.org_id == org.id).delete()
-            db.query(Meeting).filter(Meeting.org_id == org.id).delete()
-            db.delete(org)
-            db.commit()
+    _cleanup_with_retry()
 
 
 def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
@@ -207,3 +250,105 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
     assert utterances[0].repaired is True
     assert utterances[1].text == "authentication issue innum fix agala"
     assert utterances[1].repaired is False  # unchanged text -> not flagged as repaired
+
+
+def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber, monkeypatch):
+    """A video-format Mode D upload doubles as the screen source (see
+    api/upload.py) -- proves acquire -> transcribe -> screen wires keyframe
+    detection, OCR, and speech<->screen grounding together end-to-end, using
+    fakes for opencv/PaddleOCR so this needs neither installed."""
+    from app.screen.keyframe_detect import KeyframeCandidate
+
+    class FakeKeyframeDetector:
+        def __call__(self, video_path: str) -> list[KeyframeCandidate]:
+            # Spans both fake-transcriber utterances (0.0-2.5s, 2.5-5.0s) so
+            # temporal grounding has something to link.
+            return [
+                KeyframeCandidate(
+                    valid_from_s=0.0, valid_to_s=5.0, image_bytes=b"\xff\xd8fake-jpeg", phash="abc123"
+                )
+            ]
+
+    class FakeOcrResult:
+        full_text = "Ticket PAY-442 blocking the release"
+        blocks = []
+
+    class FakeOcr:
+        async def recognize(self, image_uri: str) -> FakeOcrResult:
+            return FakeOcrResult()
+
+    monkeypatch.setattr(worker, "_keyframe_detect_fn", FakeKeyframeDetector())
+    monkeypatch.setattr(worker, "_ocr_engine", FakeOcr())
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("standup3.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
+        data={"title": "Sprint Planning 3"},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        session = db.get(CaptureSession, session_id)
+        assert session.video_uri is not None, "video-format upload must set video_uri"
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+    assert asyncio.run(worker.run_once()) is True  # screen
+
+    with Session() as db:
+        keyframes = (
+            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id)).scalars().all()
+        )
+        groundings = (
+            db.execute(
+                select(UtteranceKeyframe).where(
+                    UtteranceKeyframe.keyframe_id.in_([k.id for k in keyframes])
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert len(keyframes) == 1
+    kf = keyframes[0]
+    assert kf.ocr_text == "Ticket PAY-442 blocking the release"
+    assert kf.phash == "abc123"
+    assert any(e["text"] == "PAY-442" for e in kf.detected_entities)
+
+    # Both utterances temporally overlap the one keyframe -> both grounded.
+    assert len(groundings) == 2
+    assert {g.method for g in groundings} <= {"temporal", "lexical", "both"}
+
+    status = client.get(f"/api/v1/meetings/sessions/{session_id}")
+    assert status.json()["state"] == CaptureState.PROCESSING_SCREEN.value
+
+
+def test_audio_only_upload_skips_screen_stage_without_failing(client, fake_transcriber):
+    """No video_uri (plain .wav upload) is a normal outcome, not a failure --
+    the screen stage must complete cleanly with zero keyframes."""
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("audio-only.wav", FAKE_AUDIO_BYTES, "audio/wav")},
+        data={"title": "Audio-only meeting"},
+    )
+    session_id = resp.json()["capture_session_id"]
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+    assert asyncio.run(worker.run_once()) is True  # screen -- must not raise
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        keyframes = (
+            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id)).scalars().all()
+        )
+    assert keyframes == []
+
+    status = client.get(f"/api/v1/meetings/sessions/{session_id}")
+    assert status.json()["state"] == CaptureState.PROCESSING_SCREEN.value

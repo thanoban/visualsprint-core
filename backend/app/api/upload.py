@@ -17,6 +17,7 @@ from app.orchestrator.queue import enqueue_pipeline
 router = APIRouter(prefix="/api/v1/meetings", tags=["meetings"])
 
 ALLOWED_SUFFIXES = {".flac", ".wav", ".mp3", ".m4a", ".mp4", ".webm", ".ogg"}
+VIDEO_SUFFIXES = {".mp4", ".webm"}  # doubles as the screen-capture source (docs/03-capture.md)
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 
 
@@ -82,6 +83,13 @@ async def upload_meeting(
     # participant (uploader identity isn't a roster). Other modes populate
     # this from PlatformAdapter.acquire() instead of here.
     db.add(AudioTrack(org_id=org_id, capture_session_id=session.id, uri=audio_uri))
+
+    # A video-format upload doubles as the screen-share source for the
+    # `screen` stage — no separate demux/upload step for Mode D. Audio-only
+    # uploads (.wav/.flac/.mp3/.m4a/.ogg) leave video_uri unset, and the
+    # screen stage treats that as a normal, non-failing outcome.
+    if suffix in VIDEO_SUFFIXES:
+        session.video_uri = audio_uri
 
     # Mode D consent: the uploader attests they may share this recording.
     db.add(

@@ -186,6 +186,130 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     log.info("transcribe.done", session=session.id, tracks=len(tracks))
 
 
+_ocr_engine = None
+_keyframe_detect_fn = None
+
+
+def _get_ocr():
+    global _ocr_engine
+    if _ocr_engine is None:
+        from app.adapters.blobstore_s3 import get_blobstore
+        from app.adapters.ocr_paddle import PaddleOcrEngine
+
+        _ocr_engine = PaddleOcrEngine(blob_store=get_blobstore())
+    return _ocr_engine
+
+
+def _get_keyframe_detect_fn():
+    """Lazy singleton, same pattern as _get_transcriber -- overridable in
+    tests via `app.orchestrator.worker._keyframe_detect_fn = <fake>` so the
+    screen-stage test never needs opencv/imagehash/scikit-image installed."""
+    global _keyframe_detect_fn
+    if _keyframe_detect_fn is None:
+        from app.screen.keyframe_detect import detect_keyframes
+
+        _keyframe_detect_fn = detect_keyframes
+    return _keyframe_detect_fn
+
+
+@stage_handler("screen")
+async def _handle_screen(db: object, job: PipelineJob) -> None:
+    """Idempotent: clears any keyframes/groundings from a prior partial
+    attempt before re-inserting. No video_uri is a normal outcome (audio-only
+    Mode D, or a platform session with no screen share) -- honest absence of
+    screen evidence, not a failure; the stage simply produces zero keyframes."""
+    import tempfile
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.db.models import CaptureSession, Keyframe, Utterance, UtteranceKeyframe
+    from app.screen.entities import extract_entities
+    from app.screen.grounding import ground_utterances
+
+    session = db.get(CaptureSession, job.capture_session_id)
+    if session is None:
+        raise RuntimeError(f"capture_session {job.capture_session_id} not found")
+
+    existing_keyframe_ids = [
+        kf.id
+        for kf in db.execute(select(Keyframe.id).where(Keyframe.capture_session_id == session.id)).all()
+    ]
+    if existing_keyframe_ids:
+        db.query(UtteranceKeyframe).filter(UtteranceKeyframe.keyframe_id.in_(existing_keyframe_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(Keyframe).filter(Keyframe.capture_session_id == session.id).delete()
+
+    if not session.video_uri:
+        log.info("stage.screen.no_video", session=session.id)
+        return
+
+    blob = get_blobstore()
+    detect = _get_keyframe_detect_fn()
+    ocr = _get_ocr()
+
+    local_path = Path(session.video_uri)
+    if local_path.exists():
+        candidates = detect(str(local_path))
+    else:
+        data = await blob.get(session.video_uri)
+        suffix = Path(session.video_uri).suffix or ".mp4"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        try:
+            candidates = detect(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    created: list[Keyframe] = []
+    for cand in candidates:
+        image_uri = await blob.put(
+            f"keyframes/{session.org_id}/{session.id}/{cand.valid_from_s:.2f}.jpg",
+            cand.image_bytes,
+            content_type="image/jpeg",
+        )
+        ocr_result = await ocr.recognize(image_uri)
+        entities = extract_entities(ocr_result.full_text)
+        kf = Keyframe(
+            org_id=session.org_id,
+            capture_session_id=session.id,
+            valid_from_s=cand.valid_from_s,
+            valid_to_s=cand.valid_to_s,
+            image_uri=image_uri,
+            phash=cand.phash,
+            ocr_text=ocr_result.full_text,
+            # VLM captioning isn't wired to a real vision-capable LlmClient
+            # yet (see app/adapters/vlm_caption.py's documented boundary) —
+            # left blank rather than raising, same "optional enhancement,
+            # never a hard requirement" rule the repair pass follows.
+            vlm_caption="",
+            detected_entities=[e.model_dump() for e in entities],
+        )
+        db.add(kf)
+        created.append(kf)
+    db.flush()
+
+    if created:
+        utterances = (
+            db.execute(select(Utterance).where(Utterance.capture_session_id == session.id)).scalars().all()
+        )
+        for grounding in ground_utterances(utterances, created):
+            db.add(
+                UtteranceKeyframe(
+                    org_id=session.org_id,
+                    utterance_id=grounding.utterance_id,
+                    keyframe_id=grounding.keyframe_id,
+                    score=grounding.score,
+                    method=grounding.method,
+                )
+            )
+    db.flush()
+    log.info("screen.done", session=session.id, keyframes=len(created))
+
+
 @stage_handler("understand")
 async def _handle_understand(db: object, job: PipelineJob) -> None:
     from app.agents.context import run_context_intelligence

@@ -111,6 +111,7 @@ class CaptureState(enum.StrEnum):
     ACQUIRING = "acquiring"
     ACQUIRED = "acquired"
     TRANSCRIBING = "transcribing"
+    PROCESSING_SCREEN = "processing_screen"
     UNDERSTANDING = "understanding"
     VERIFYING = "verifying"
     REMEMBERING = "remembering"
@@ -133,6 +134,12 @@ class CaptureSession(TimestampMixin, Base):
     )
     disclosure_log: Mapped[list] = mapped_column(JSON, default=list)  # who/when/how disclosed
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # Screen-share/composited recording for keyframe extraction. Optional —
+    # audio-only sessions (Mode D audio upload, or a platform with no screen
+    # share) simply never get keyframes; the screen stage treats this as a
+    # normal case, not a failure (docs/03-capture.md: no silent degradation,
+    # but honest absence is not degradation).
+    video_uri: Mapped[str | None] = mapped_column(String(1000), default=None)
 
     meeting: Mapped[Meeting] = relationship()
 
