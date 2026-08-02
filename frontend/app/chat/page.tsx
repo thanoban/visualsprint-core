@@ -1,11 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE_URL } from "@/lib/config";
 import { mockAssistantReply } from "@/lib/mock-data";
 import type { ChatMessage, ChatRequest, ChatResponse, EvidenceChip } from "@/lib/types";
 
-const ORG_ID = "default";
+/** No auth/org-selection exists yet -- every page targets the dev-convenience
+ * org NAME "default" (upload.py's auto-create convention). That name is not
+ * the UUID `/api/v1/chat` filters KnowledgeItem rows by, so it must be
+ * resolved via GET /api/v1/orgs/default first. Previously this page sent the
+ * literal string "default" as org_id: chat.py doesn't validate org
+ * existence, so it never errored — it would just silently never match any
+ * real knowledge item once agents populated the DB (see the same bug, but
+ * caught immediately via a 404, in app/glossary/page.tsx). */
+async function resolveDefaultOrgId(): Promise<string> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/default`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const org = (await res.json()) as { id: string; name: string };
+  return org.id;
+}
 
 function EvidenceChipPill({ chip }: { chip: EvidenceChip }) {
   return (
@@ -30,6 +43,13 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
+
+  useEffect(() => {
+    resolveDefaultOrgId()
+      .then(setOrgId)
+      .catch(() => setBackendConnected(false));
+  }, []);
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
@@ -47,16 +67,13 @@ export default function ChatPage() {
     setInput("");
     setSending(true);
 
-    const requestBody: ChatRequest = {
-      org_id: ORG_ID,
-      question,
-      history: messages,
-    };
-
     try {
-      // TODO: replace with real API once chat endpoint exists — this call is
-      // written against the documented future contract and will "just work"
-      // the moment /api/v1/chat exists on the backend.
+      const resolvedOrgId = orgId ?? (await resolveDefaultOrgId());
+      const requestBody: ChatRequest = {
+        org_id: resolvedOrgId,
+        question,
+        history: messages,
+      };
       const res = await fetch(`${API_BASE_URL}/api/v1/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

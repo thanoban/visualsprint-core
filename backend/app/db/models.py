@@ -406,6 +406,22 @@ class Correction(TimestampMixin, Base):
     training_consent: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class GlossaryTerm(TimestampMixin, Base):
+    """Org-level biasing lexicon for the LLM repair pass (app/asr/repair.py):
+    ticket ID patterns, Sri Lankan personal names, technical terms. Populated
+    two ways — directly via the glossary UI, or implicitly whenever a
+    correction names a term worth remembering (source_correction_id set)."""
+
+    __tablename__ = "glossary_term"
+    __table_args__ = (Index("ix_glossary_org", "org_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    term: Mapped[str] = mapped_column(String(255))
+    added_by_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
+    source_correction_id: Mapped[str | None] = mapped_column(ForeignKey("correction.id"), default=None)
+
+
 class ConsentRecord(TimestampMixin, Base):
     __tablename__ = "consent_record"
     __table_args__ = (Index("ix_consent_session", "capture_session_id"),)

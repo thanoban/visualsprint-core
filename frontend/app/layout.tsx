@@ -23,6 +23,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/chat" className="hover:text-brand-600 transition-colors">
                 Chat
               </Link>
+              <Link href="/glossary" className="hover:text-brand-600 transition-colors">
+                Glossary
+              </Link>
             </nav>
           </div>
         </header>

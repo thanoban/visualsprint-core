@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { API_BASE_URL } from "@/lib/config";
 import type { ConfidenceLevel, EngagementSummary, KnowledgeItem, MeetingReport } from "@/lib/types";
 
@@ -221,11 +222,19 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">{report.title}</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {new Date(report.occurred_at).toLocaleString()} · Meeting {report.meeting_id}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">{report.title}</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {new Date(report.occurred_at).toLocaleString()} · Meeting {report.meeting_id}
+          </p>
+        </div>
+        <Link
+          href={`/meetings/${report.capture_session_id}/correct`}
+          className="flex-shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700"
+        >
+          Fix transcript →
+        </Link>
       </div>
 
       {isEmptyReport(report) && (

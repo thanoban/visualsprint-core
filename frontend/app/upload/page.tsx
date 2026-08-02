@@ -225,6 +225,20 @@ export default function UploadPage() {
             </p>
           )}
 
+          {status &&
+            CAPTURE_SESSION_STATE_ORDER.indexOf(status.state) >
+              CAPTURE_SESSION_STATE_ORDER.indexOf("transcribing") && (
+              <div className="rounded-md bg-slate-50 border border-slate-200 px-3 py-2 text-sm text-slate-700 flex items-center justify-between">
+                <span>Transcript ready.</span>
+                <Link
+                  href={`/meetings/${uploadResult.capture_session_id}/correct`}
+                  className="font-medium text-brand-700 underline hover:no-underline"
+                >
+                  Fix transcript →
+                </Link>
+              </div>
+            )}
+
           {status?.state === "done" && (
             <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800 flex items-center justify-between">
               <span>Pipeline complete.</span>

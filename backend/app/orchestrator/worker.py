@@ -250,19 +250,26 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
     _persist_capture_artifacts(db, session, artifacts)
 
 
-def _repair_context(db: object, session) -> tuple[list[str], list[str]]:
-    """Roster + screen-OCR context for the LLM repair pass. Glossary terms
-    aren't sourced yet -- no GlossaryTerm model exists (the correction UI
-    that would populate one is a separate, not-yet-built roadmap item, see
-    docs/06-roadmap.md) -- so repair runs on roster+OCR alone until then;
-    an empty glossary degrades repair quality, it never breaks it."""
+def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str]]:
+    """Roster + org glossary + screen-OCR context for the LLM repair pass.
+
+    Glossary terms come from `GlossaryTerm` (app/api/corrections.py populates
+    it — directly via the glossary UI, or implicitly from a transcript
+    correction). A brand-new org with no corrections yet just gets an empty
+    glossary; repair degrades gracefully to roster+OCR, it never breaks."""
     from sqlalchemy import select
 
-    from app.db.models import Keyframe, Participant
+    from app.db.models import GlossaryTerm, Keyframe, Participant
 
     roster = [
         p.display_name
         for p in db.execute(select(Participant).where(Participant.capture_session_id == session.id))
+        .scalars()
+        .all()
+    ]
+    glossary_terms = [
+        g.term
+        for g in db.execute(select(GlossaryTerm).where(GlossaryTerm.org_id == session.org_id))
         .scalars()
         .all()
     ]
@@ -273,7 +280,7 @@ def _repair_context(db: object, session) -> tuple[list[str], list[str]]:
         .all()
         if kf.ocr_text
     ]
-    return roster, ocr_context
+    return roster, glossary_terms, ocr_context
 
 
 @stage_handler("transcribe")
@@ -306,7 +313,7 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
 
     db.query(Utterance).filter(Utterance.capture_session_id == session.id).delete()
 
-    roster, ocr_context = _repair_context(db, session)
+    roster, glossary_terms, ocr_context = _repair_context(db, session)
     transcriber = _get_transcriber()
     for track in tracks:
         result = await transcriber.transcribe(
@@ -315,7 +322,7 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         repaired_segments = await repair_segments(
             result.segments,
             roster=roster,
-            glossary_terms=[],
+            glossary_terms=glossary_terms,
             ocr_context=ocr_context,
             llm=_get_llm(),
             model=get_settings().model_repair,

@@ -207,3 +207,46 @@ export interface ChatMessage {
 export interface ChatResponse {
   message: ChatMessage;
 }
+
+// ---------------------------------------------------------------------------
+// Types for the correction & glossary UI (backend/app/api/corrections.py).
+// ---------------------------------------------------------------------------
+
+/** Response row of GET /api/v1/meetings/{capture_session_id}/utterances */
+export interface UtteranceOut {
+  id: string;
+  start_s: number;
+  end_s: number;
+  text: string;
+  lang_tags: string[];
+  speaker: string;
+  asr_confidence: number;
+  repaired: boolean;
+}
+
+/** Request body of POST /api/v1/corrections */
+export interface CorrectionRequest {
+  utterance_id: string;
+  corrected_text: string;
+  training_consent?: boolean;
+  corrected_by_person_id?: string;
+  /** Optional: also remember this term for future LLM repair passes. */
+  glossary_term?: string;
+}
+
+/** Response body of POST /api/v1/corrections */
+export interface CorrectionResponse {
+  id: string;
+  utterance_id: string;
+  original_text: string;
+  corrected_text: string;
+  glossary_term_id: string | null;
+}
+
+/** Row shape of GET/POST /api/v1/orgs/{org_id}/glossary */
+export interface GlossaryTermOut {
+  id: string;
+  term: string;
+  added_by: string | null;
+  created_at: string; // ISO datetime
+}

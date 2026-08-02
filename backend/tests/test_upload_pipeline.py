@@ -23,6 +23,8 @@ from app.db.models import (
     CaptureSession,
     CaptureState,
     ConsentRecord,
+    Correction,
+    GlossaryTerm,
     Keyframe,
     Meeting,
     Org,
@@ -91,6 +93,10 @@ def _delete_default_org_children(db) -> None:
     org = db.query(Org).filter(Org.name == "default").one_or_none()
     if org is None:
         return
+    # GlossaryTerm.source_correction_id -> Correction.id -> Utterance.id, so
+    # both must go before Utterance is deleted (app/api/corrections.py).
+    db.query(GlossaryTerm).filter(GlossaryTerm.org_id == org.id).delete()
+    db.query(Correction).filter(Correction.org_id == org.id).delete()
     db.query(UtteranceKeyframe).filter(UtteranceKeyframe.org_id == org.id).delete()
     db.query(Keyframe).filter(Keyframe.org_id == org.id).delete()
     db.query(Utterance).filter(Utterance.org_id == org.id).delete()

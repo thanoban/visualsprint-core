@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.chat import router as chat_router
+from app.api.corrections import router as corrections_router
 from app.api.report import router as report_router
 from app.api.upload import router as upload_router
 from app.config import get_settings
@@ -29,6 +30,7 @@ app.add_middleware(
 app.include_router(upload_router)
 app.include_router(report_router)
 app.include_router(chat_router)
+app.include_router(corrections_router)
 
 
 @app.get("/healthz", tags=["ops"])
