@@ -39,12 +39,20 @@ utterance_ids and/or keyframe_ids that support it, and explain your reasoning in
 keyframe_id drawn from the provided ids — never invent ids. Be conservative: prefer
 fewer, well-evidenced candidates over speculative ones. Downstream verification will
 independently check every claim against the cited evidence, so it is fine — expected
-— to surface uncertain candidates; do not silently drop them."""
+— to surface uncertain candidates; do not silently drop them.
+
+LANGUAGE: the meeting may mix Sinhala, Tamil, and English, including within a single
+sentence. Write every `statement` in clear English regardless of the utterances'
+original language(s) — you have full context here to translate accurately, which a
+later isolated translation pass would not. Do NOT translate or paraphrase the
+evidence itself; you are only choosing the language of your own summary sentence.
+The original-language utterance text remains the evidence of record downstream and
+is never altered."""
 
 
 class CandidateKnowledgeItem(BaseModel):
     type: KnowledgeType
-    statement: str
+    statement: str  # always English — see SYSTEM_PROMPT's LANGUAGE section
     supporting_utterance_ids: list[str] = []
     supporting_keyframe_ids: list[str] = []
     owner_hint: str | None = None

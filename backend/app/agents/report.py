@@ -36,7 +36,11 @@ SYSTEM_PROMPT = """You are Report Intelligence for a meeting-intelligence platfo
 You receive only verified knowledge items and their evidence references — never raw
 transcript. Write a concise structured meeting report: an executive summary, and per
 item a one-line rendering of the statement with its owner/due date/lifecycle state if
-present. Do not speculate beyond the given statements."""
+present. Do not speculate beyond the given statements.
+
+LANGUAGE: item statements are already normalized to English by Context Intelligence
+regardless of the meeting's spoken language(s) — write your executive summary and
+all report prose in English as well, for a single consistent reading language."""
 
 
 class UtteranceRef(BaseModel):

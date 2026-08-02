@@ -34,7 +34,9 @@ A transcript alone cannot give the full context of a meeting — the real inform
 
 ## Product surfaces
 
-1. **Meeting report** — generated only from verified knowledge items; confidence badges, **inline screenshot thumbnails for screen evidence** (not just links), coverage banner.
+1. **Meeting report** — generated only from verified knowledge items; confidence badges, **inline screenshot thumbnails for screen evidence** (not just links), coverage banner, **participant engagement (talk-time-per-person, matching Zoom AI Companion/Fireflies/Otter)** computed directly from utterance rows, no extra capture or LLM cost.
+
+**Report language: always English, regardless of source language mix.** Context Intelligence writes every `statement` in English while it still has full mixed-language context (more accurate than a later isolated translation pass). Evidence **quotes stay verbatim in the original language** — translating a direct quote would misrepresent what was actually said, which breaks the evidence-grounding promise. The UI labels each quote's language explicitly rather than silently presenting translated text as if it were spoken.
 2. **Org-memory chat** — "Claude Code for your meetings": full org meeting history, every claim cites clickable evidence chips. Includes meeting-prep briefings.
 3. **Automation layer** — human-gated proposals from verified knowledge: follow-up email drafts, Slack/Teams recaps, Jira/GitHub/Linear tasks, calendar follow-ups, blocker escalations, commitment reminders. Post-MVP: field-level CRM sync.
 4. **Correction & glossary UI** — fixes improve the org glossary immediately and accrue (with consent) into the only si-ta-en code-switched meeting corpus in existence: product feature now, strategic moat forever.

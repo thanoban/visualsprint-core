@@ -2,7 +2,48 @@
 
 import { useEffect, useState } from "react";
 import { getMockMeetingReport } from "@/lib/mock-data";
-import type { ConfidenceLevel, KnowledgeItem, MeetingReport } from "@/lib/types";
+import type { ConfidenceLevel, EngagementSummary, KnowledgeItem, MeetingReport } from "@/lib/types";
+
+const LANG_LABELS: Record<string, string> = { si: "Sinhala", ta: "Tamil", en: "English", und: "unknown" };
+
+/** Bar-chart participant engagement -- talk-time-per-person, matching what
+ * every competitor (Zoom AI Companion, Fireflies, Otter) ships in their
+ * report. Plain divs, no chart library -- consistent with the rest of this
+ * scaffold's "no heavy UI dependency" approach. */
+function EngagementSection({ engagement }: { engagement: EngagementSummary }) {
+  if (engagement.participants.length === 0) return null;
+  const maxPct = Math.max(...engagement.participants.map((p) => p.talk_time_pct), 1);
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-lg font-semibold text-slate-900">Participant engagement</h2>
+      <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+        {engagement.participants.map((p) => (
+          <div key={p.person_id ?? "unknown"} className="space-y-1">
+            <div className="flex items-center justify-between text-sm">
+              <span className={p.person_id ? "font-medium text-slate-800" : "italic text-slate-500"}>
+                {p.display_name}
+              </span>
+              <span className="text-xs text-slate-500">
+                {formatTimestamp(p.talk_time_s)} · {p.talk_time_pct.toFixed(1)}% · {p.utterance_count} turns
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-slate-100">
+              <div
+                className={`h-2 rounded-full ${p.person_id ? "bg-indigo-500" : "bg-slate-300"}`}
+                style={{ width: `${(p.talk_time_pct / maxPct) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+        <p className="pt-1 text-xs text-slate-400">
+          Total talk time {formatTimestamp(engagement.total_talk_time_s)}. &ldquo;Unknown speaker&rdquo; means
+          mixed audio without per-participant attribution for this capture mode — an honest gap, not a bug.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 const CONFIDENCE_STYLES: Record<ConfidenceLevel, string> = {
   verified: "bg-green-100 text-green-800 border-green-300",
@@ -73,7 +114,16 @@ function ItemCard({ item }: { item: KnowledgeItem }) {
               <div className="font-medium text-slate-700">
                 {ev.speaker} · {formatTimestamp(ev.timestamp_s)}
               </div>
-              {ev.quote && <p className="mt-0.5 italic">&ldquo;{ev.quote}&rdquo;</p>}
+              {ev.quote && (
+                <p className="mt-0.5 italic">
+                  &ldquo;{ev.quote}&rdquo;
+                  {ev.quote_lang_tags && ev.quote_lang_tags.length > 0 && (
+                    <span className="ml-1 not-italic text-slate-400">
+                      ({ev.quote_lang_tags.map((l) => LANG_LABELS[l] ?? l).join("/")}, verbatim)
+                    </span>
+                  )}
+                </p>
+              )}
               {ev.keyframe_caption && <p className="mt-0.5 text-slate-500">{ev.keyframe_caption}</p>}
             </div>
           </div>
@@ -166,6 +216,8 @@ export default function MeetingReportPage({ params }: { params: { id: string } }
           </ul>
         </div>
       )}
+
+      <EngagementSection engagement={report.engagement} />
 
       <Section title="Decisions" items={report.decisions} />
       <Section title="Commitments" items={report.commitments} />

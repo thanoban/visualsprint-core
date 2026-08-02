@@ -1,13 +1,14 @@
 // ---------------------------------------------------------------------------
 // MOCK DATA BOUNDARY
 //
-// Everything in this file is a temporary stand-in for backend endpoints that
-// do not exist yet:
+// Everything in this file is a temporary stand-in. Both real endpoints exist
+// now (backend/app/api/report.py, backend/app/api/chat.py) -- this file is
+// just not wired to them yet:
 //   - GET /api/v1/meetings/{id}/report   (report page)
 //   - POST /api/v1/chat                  (chat page, on fetch failure)
 //
-// TODO: replace with real API once report endpoint exists.
-// TODO: replace with real API once chat endpoint exists.
+// TODO: wire report page to the real endpoint instead of this fixture.
+// TODO: wire chat page to the real endpoint instead of this fixture.
 //
 // This is the ONLY file in the app that should contain fixture data. When the
 // real endpoints land, delete the mock* functions below and replace their
@@ -37,6 +38,15 @@ export async function getMockMeetingReport(meetingId: string): Promise<MeetingRe
         end_s: 701,
       },
     ],
+    engagement: {
+      total_talk_time_s: 1840,
+      participants: [
+        { person_id: "p-1", display_name: "Nimal Perera", talk_time_s: 780, utterance_count: 42, talk_time_pct: 42.4 },
+        { person_id: "p-2", display_name: "Kavindi Silva", talk_time_s: 610, utterance_count: 35, talk_time_pct: 33.2 },
+        { person_id: "p-3", display_name: "Ruwan Fernando", talk_time_s: 340, utterance_count: 21, talk_time_pct: 18.5 },
+        { person_id: null, display_name: "Unknown speaker", talk_time_s: 110, utterance_count: 6, talk_time_pct: 5.9 },
+      ],
+    },
     decisions: [
       {
         id: "ki-1",

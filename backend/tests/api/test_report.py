@@ -41,6 +41,10 @@ def _seed(db):
     db.add(session)
     db.flush()
 
+    other = Person(org_id=org.id, display_name="Udula Silva")
+    db.add(other)
+    db.flush()
+
     utt = Utterance(
         org_id=org.id,
         capture_session_id=session.id,
@@ -48,8 +52,30 @@ def _seed(db):
         start_s=245.0,
         end_s=248.0,
         text="So we're going with Postgres and pgvector instead of a separate vector DB.",
+        lang_tags=["en"],
     )
     db.add(utt)
+    # Engagement fixture: Nimal talks 3s here + 27s below = 30s; Udula 10s;
+    # one unattributed mixed-audio span (person_id=None) = 5s -- must appear
+    # as "Unknown speaker", not silently dropped from the talk-time total.
+    db.add(
+        Utterance(
+            org_id=org.id, capture_session_id=session.id, person_id=person.id,
+            start_s=300.0, end_s=327.0, text="...", lang_tags=["si", "en"],
+        )
+    )
+    db.add(
+        Utterance(
+            org_id=org.id, capture_session_id=session.id, person_id=other.id,
+            start_s=330.0, end_s=340.0, text="...", lang_tags=["ta"],
+        )
+    )
+    db.add(
+        Utterance(
+            org_id=org.id, capture_session_id=session.id, person_id=None,
+            start_s=350.0, end_s=355.0, text="...", lang_tags=["und"],
+        )
+    )
 
     kf = Keyframe(
         org_id=org.id,
@@ -130,6 +156,7 @@ def test_report_groups_items_and_includes_evidence(client, db_session):
     utterance_evidence = next(e for e in decision["evidence"] if e["speaker"] == "Nimal Perera")
     assert utterance_evidence["timestamp_s"] == 245.0
     assert "Postgres" in utterance_evidence["quote"]
+    assert utterance_evidence["quote_lang_tags"] == ["en"]
 
     keyframe_evidence = next(e for e in decision["evidence"] if e["speaker"] == "Screen capture")
     assert keyframe_evidence["keyframe_thumbnail_url"] is not None
@@ -145,3 +172,37 @@ def test_report_groups_items_and_includes_evidence(client, db_session):
 def test_report_404_for_unknown_session(client):
     resp = client.get("/api/v1/meetings/does-not-exist/report")
     assert resp.status_code == 404
+
+
+def test_report_includes_participant_engagement(client, db_session):
+    session_id, _ = _seed(db_session)
+
+    resp = client.get(f"/api/v1/meetings/{session_id}/report")
+    assert resp.status_code == 200, resp.text
+    engagement = resp.json()["engagement"]
+
+    # 3 + 27 (Nimal) + 10 (Udula) + 5 (unattributed) = 45s total.
+    assert engagement["total_talk_time_s"] == 45.0
+    assert len(engagement["participants"]) == 3
+
+    by_name = {p["display_name"]: p for p in engagement["participants"]}
+    nimal = by_name["Nimal Perera"]
+    assert nimal["talk_time_s"] == 30.0
+    assert nimal["utterance_count"] == 2
+    assert round(nimal["talk_time_pct"], 2) == round(30.0 / 45.0 * 100, 2)
+
+    udula = by_name["Udula Silva"]
+    assert udula["talk_time_s"] == 10.0
+
+    # Unattributed (mixed audio, no diarization yet) must surface honestly,
+    # not vanish from the totals or get misattributed to someone.
+    unknown = by_name["Unknown speaker"]
+    assert unknown["talk_time_s"] == 5.0
+    assert unknown["person_id"] is None
+
+    # Sorted by talk time descending, most-engaged participant first.
+    assert [p["display_name"] for p in engagement["participants"]] == [
+        "Nimal Perera",
+        "Udula Silva",
+        "Unknown speaker",
+    ]

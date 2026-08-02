@@ -90,8 +90,12 @@ export interface EvidenceRef {
   speaker: string;
   /** Seconds from meeting start. */
   timestamp_s: number;
-  /** Verbatim or near-verbatim quoted span from the utterance, if applicable. */
+  /** Verbatim or near-verbatim quoted span from the utterance, if applicable.
+   * Never translated -- report/summary text is normalized to English, but a
+   * quote must stay exactly what was said, which is what quote_lang_tags labels. */
   quote?: string;
+  /** e.g. ["si","en"] -- language(s) detected in the quote span, for a "(Sinhala)" label in the UI. */
+  quote_lang_tags?: string[];
   /** Inline screenshot thumbnail URL for screen evidence (keyframe.image_uri). Product requirement: inline, not a link. */
   keyframe_thumbnail_url?: string;
   /** OCR / VLM caption text extracted from the keyframe, for accessibility and context. */
@@ -123,15 +127,32 @@ export interface CoverageGap {
   end_s: number;
 }
 
+/** Per-participant talk time -- backend/app/api/report.py's engagement summary. */
+export interface ParticipantEngagement {
+  person_id: string | null;
+  display_name: string;
+  talk_time_s: number;
+  utterance_count: number;
+  /** Share of total attributed talk time in this session, 0-100. */
+  talk_time_pct: number;
+}
+
+export interface EngagementSummary {
+  total_talk_time_s: number;
+  /** Sorted by talk_time_s descending. */
+  participants: ParticipantEngagement[];
+}
+
 /**
- * Expected future shape of GET /api/v1/meetings/{id}/report.
- * TODO: replace with real API once report endpoint exists (see lib/mock-data.ts).
+ * Shape of GET /api/v1/meetings/{id}/report (backend/app/api/report.py).
+ * TODO: wire this page to the real endpoint instead of lib/mock-data.ts.
  */
 export interface MeetingReport {
   meeting_id: string;
   title: string;
   occurred_at: string; // ISO date
   coverage_gaps: CoverageGap[];
+  engagement: EngagementSummary;
   decisions: KnowledgeItem[];
   commitments: KnowledgeItem[];
   requirements: KnowledgeItem[];
@@ -140,10 +161,12 @@ export interface MeetingReport {
 }
 
 // ---------------------------------------------------------------------------
-// Types for the org-memory chat page. The /api/v1/chat endpoint does NOT
-// exist yet. Shape derived from docs/01-vision-and-competitive.md ("every
-// claim cites clickable evidence chips") and the north-star acceptance test
-// ("why are we using MongoDB?" -> traced answer with speaker/span/screen).
+// Types for the org-memory chat page. POST /api/v1/chat exists now
+// (backend/app/api/chat.py) -- TODO: wire this page to it instead of
+// lib/mock-data.ts. Shape derived from docs/01-vision-and-competitive.md
+// ("every claim cites clickable evidence chips") and the north-star
+// acceptance test ("why are we using MongoDB?" -> traced answer with
+// speaker/span/screen).
 // ---------------------------------------------------------------------------
 
 export interface ChatRequest {

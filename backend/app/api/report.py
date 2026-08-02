@@ -53,8 +53,22 @@ class EvidenceRef(BaseModel):
     speaker: str
     timestamp_s: float
     quote: str | None = None
+    quote_lang_tags: list[str] = []  # e.g. ["si","en"] — quote is verbatim, never translated
     keyframe_thumbnail_url: str | None = None
     keyframe_caption: str | None = None
+
+
+class ParticipantEngagement(BaseModel):
+    person_id: str | None = None
+    display_name: str
+    talk_time_s: float
+    utterance_count: int
+    talk_time_pct: float  # of total attributed talk time in this session
+
+
+class EngagementSummary(BaseModel):
+    total_talk_time_s: float
+    participants: list[ParticipantEngagement] = []
 
 
 class ReportKnowledgeItem(BaseModel):
@@ -85,6 +99,7 @@ class MeetingReport(BaseModel):
     title: str
     occurred_at: str
     coverage_gaps: list[CoverageGap] = []
+    engagement: EngagementSummary = EngagementSummary(total_talk_time_s=0.0, participants=[])
     decisions: list[ReportKnowledgeItem] = []
     commitments: list[ReportKnowledgeItem] = []
     requirements: list[ReportKnowledgeItem] = []
@@ -96,6 +111,49 @@ class MeetingReport(BaseModel):
 def _truncate(text: str, limit: int = QUOTE_MAX_CHARS) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _build_engagement(db: Session, capture_session_id: str) -> EngagementSummary:
+    """Talk-time-per-participant, matching the "who talked how much" report
+    every competitor ships (Zoom AI Companion, Fireflies, Otter). Pure
+    aggregation over Utterance rows already written by the transcribe stage
+    -- no new capture, no LLM call, no extra cost. Attribution confidence is
+    NOT filtered here: an org with only mixed audio (Mode D/Meet, no
+    diarization wired yet) sees every row bucketed under "Unknown speaker"
+    rather than the endpoint pretending to know who spoke -- same "honestly
+    weaker, never silently degraded" rule the rest of the product follows."""
+    utterances = (
+        db.query(Utterance)
+        .filter(Utterance.capture_session_id == capture_session_id, Utterance.text != "")
+        .all()
+    )
+    if not utterances:
+        return EngagementSummary(total_talk_time_s=0.0, participants=[])
+
+    by_speaker: dict[str | None, list[Utterance]] = {}
+    for utt in utterances:
+        by_speaker.setdefault(utt.person_id, []).append(utt)
+
+    total_s = sum(max(0.0, u.end_s - u.start_s) for u in utterances)
+
+    participants: list[ParticipantEngagement] = []
+    for person_id, utts in by_speaker.items():
+        talk_time_s = sum(max(0.0, u.end_s - u.start_s) for u in utts)
+        display_name = "Unknown speaker"
+        if person_id:
+            person = db.get(Person, person_id)
+            display_name = person.display_name if person else "Unknown speaker"
+        participants.append(
+            ParticipantEngagement(
+                person_id=person_id,
+                display_name=display_name,
+                talk_time_s=talk_time_s,
+                utterance_count=len(utts),
+                talk_time_pct=(talk_time_s / total_s * 100.0) if total_s > 0 else 0.0,
+            )
+        )
+    participants.sort(key=lambda p: p.talk_time_s, reverse=True)
+    return EngagementSummary(total_talk_time_s=total_s, participants=participants)
 
 
 async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> EvidenceRef | None:
@@ -113,6 +171,7 @@ async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> Evidence
             speaker=speaker,
             timestamp_s=utt.start_s,
             quote=_truncate(utt.text) if utt.text else None,
+            quote_lang_tags=list(utt.lang_tags or []),
         )
     if row.keyframe_id:
         kf = db.get(Keyframe, row.keyframe_id)
@@ -201,6 +260,7 @@ async def get_meeting_report(
     ]
 
     occurred_at = (meeting.scheduled_start or meeting.created_at).isoformat()
+    engagement = _build_engagement(db, capture_session_id)
 
     return MeetingReport(
         meeting_id=meeting.id,
@@ -208,5 +268,6 @@ async def get_meeting_report(
         title=meeting.title or "Untitled meeting",
         occurred_at=occurred_at,
         coverage_gaps=coverage_gaps,
+        engagement=engagement,
         **groups,
     )
