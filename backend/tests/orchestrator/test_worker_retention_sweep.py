@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.orchestrator.worker as worker
 from app.db.base import Base
-from app.db.models import AudioTrack, CaptureSession, Meeting, Org, Utterance
+from app.db.models import AudioTrack, AuditLog, CaptureSession, Meeting, Org, Utterance
 
 
 @pytest.fixture
@@ -113,3 +113,23 @@ async def test_one_orgs_blob_store_failure_does_not_block_the_others(db):
         utt = db.query(Utterance).join(CaptureSession).join(Org).filter(Org.name == org_name).one()
         assert utt.text == "sensitive content"
     assert org_a.id != org_b.id
+
+
+async def test_a_successful_purge_writes_an_audit_log_entry(db):
+    org = _org_with_expired_session(db, "acme", retention_days=90)
+    blob_store = FakeBlobStore()
+
+    import app.adapters.blobstore_s3 as blobstore_s3
+
+    original = blobstore_s3.get_blobstore
+    blobstore_s3.get_blobstore = lambda: blob_store
+    try:
+        await worker._run_retention_sweep(db)
+    finally:
+        blobstore_s3.get_blobstore = original
+
+    entry = db.query(AuditLog).filter(AuditLog.org_id == org.id).one()
+    assert entry.event == "retention_purged"
+    assert entry.actor == "system"
+    assert entry.detail["retention_days"] == 90
+    assert len(entry.detail["capture_session_ids"]) == 1

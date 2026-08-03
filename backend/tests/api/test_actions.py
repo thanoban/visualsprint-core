@@ -7,7 +7,15 @@ state-machine guards (can't approve/reject twice, can't approve straight
 into EXECUTED without a connector attempt).
 """
 
-from app.db.models import ActionStatus, CaptureSession, Meeting, Org, Person, ProposedAction
+from app.db.models import (
+    ActionStatus,
+    AuditLog,
+    CaptureSession,
+    Meeting,
+    Org,
+    Person,
+    ProposedAction,
+)
 
 
 def _seed(db, *, kind: str = "email_draft", target: dict | None = None):
@@ -158,3 +166,45 @@ def test_reject_rejects_non_pending_action(client, db_session):
 
     resp = client.post(f"/api/v1/actions/{action_id}/reject")
     assert resp.status_code == 409
+
+
+def test_approve_writes_an_audit_log_entry(client, db_session):
+    org_id, action_id, person_id = _seed(db_session)
+
+    client.post(f"/api/v1/actions/{action_id}/approve", json={"approved_by_person_id": person_id})
+
+    entries = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).all()
+    assert len(entries) == 1
+    assert entries[0].event == "action_approved"
+    assert entries[0].actor == person_id
+    assert entries[0].detail["action_id"] == action_id
+
+
+def test_approve_without_a_person_id_attributes_to_system(client, db_session):
+    org_id, action_id, _person_id = _seed(db_session)
+
+    client.post(f"/api/v1/actions/{action_id}/approve", json={})
+
+    entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
+    assert entry.actor == "system"
+
+
+def test_reject_writes_an_audit_log_entry_attributed_to_the_rejector(client, db_session):
+    org_id, action_id, person_id = _seed(db_session)
+
+    client.post(f"/api/v1/actions/{action_id}/reject", json={"rejected_by_person_id": person_id})
+
+    entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
+    assert entry.event == "action_rejected"
+    assert entry.actor == person_id
+    assert entry.detail["action_id"] == action_id
+
+
+def test_reject_with_no_body_still_works_and_attributes_to_system(client, db_session):
+    org_id, action_id, _person_id = _seed(db_session)
+
+    resp = client.post(f"/api/v1/actions/{action_id}/reject")
+
+    assert resp.status_code == 200, resp.text
+    entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
+    assert entry.actor == "system"

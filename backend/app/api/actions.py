@@ -19,6 +19,7 @@ from app.connectors.errors import ConnectorError
 from app.db.base import get_db
 from app.db.models import ActionStatus, Org, Person, ProposedAction
 from app.interfaces.actions import ActionKind, ActionPayload
+from app.orchestrator.audit import log_audit_event
 
 router = APIRouter(prefix="/api/v1", tags=["actions"])
 
@@ -144,6 +145,13 @@ async def approve_action(
     action.approved_by_person_id = req.approved_by_person_id
     action.approved_at = datetime.now(UTC)
     action.error = None
+    log_audit_event(
+        db,
+        org_id=action.org_id,
+        actor=req.approved_by_person_id or "system",
+        event="action_approved",
+        detail={"action_id": action.id, "kind": action.kind, "title": action.payload.get("title", "")},
+    )
     db.commit()
 
     try:
@@ -168,8 +176,14 @@ async def approve_action(
     return _to_out(db, action)
 
 
+class RejectActionRequest(BaseModel):
+    rejected_by_person_id: str | None = None
+
+
 @router.post("/actions/{action_id}/reject", response_model=ProposedActionOut)
-async def reject_action(action_id: str, db: Session = Depends(get_db)) -> ProposedActionOut:
+async def reject_action(
+    action_id: str, req: RejectActionRequest = RejectActionRequest(), db: Session = Depends(get_db)
+) -> ProposedActionOut:
     action = db.get(ProposedAction, action_id)
     if action is None:
         raise HTTPException(404, "action not found")
@@ -177,5 +191,12 @@ async def reject_action(action_id: str, db: Session = Depends(get_db)) -> Propos
         raise HTTPException(409, f"action is not pending approval (status={action.status.value})")
 
     action.status = ActionStatus.REJECTED
+    log_audit_event(
+        db,
+        org_id=action.org_id,
+        actor=req.rejected_by_person_id or "system",
+        event="action_rejected",
+        detail={"action_id": action.id, "kind": action.kind, "title": action.payload.get("title", "")},
+    )
     db.commit()
     return _to_out(db, action)

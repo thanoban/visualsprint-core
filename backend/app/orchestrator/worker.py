@@ -177,6 +177,7 @@ async def _run_retention_sweep(db: object) -> None:
 
     from app.adapters.blobstore_s3 import get_blobstore
     from app.db.models import Org
+    from app.orchestrator.audit import log_audit_event
     from app.orchestrator.retention import purge_expired_raw_evidence
 
     blob_store = get_blobstore()
@@ -184,6 +185,14 @@ async def _run_retention_sweep(db: object) -> None:
     for org in orgs:
         try:
             purged = await purge_expired_raw_evidence(db, org, blob_store)
+            if purged:
+                log_audit_event(
+                    db,
+                    org_id=org.id,
+                    actor="system",
+                    event="retention_purged",
+                    detail={"capture_session_ids": purged, "retention_days": org.retention_days},
+                )
             db.commit()
             if purged:
                 log.info("retention.swept", org=org.id, sessions=len(purged))
