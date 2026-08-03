@@ -588,23 +588,51 @@ async def run_once() -> bool:
         return True
 
 
+async def _serve_health_check(port: int) -> None:
+    """The worker has no HTTP interface of its own -- it's a poll loop, not
+    a request handler. That's fine for docker-compose (no port mapping,
+    nothing depends on it), but deploying this process as a Cloud Run
+    *Service* (google-github-actions/deploy-cloudrun targeting
+    visualsprint-agents, see .github/workflows/deploy.yml) requires
+    something listening on $PORT or Cloud Run kills the container as
+    unhealthy. Reuses starlette/uvicorn -- already dependencies via
+    fastapi[standard]/uvicorn[standard], so this adds nothing new."""
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    async def healthz(request):
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/healthz", healthz), Route("/", healthz)])
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    await uvicorn.Server(config).serve()
+
+
 async def main() -> None:
+    import os
+
     settings = get_settings()
     log.info("worker.start", worker=q.WORKER_ID)
+    health_task = asyncio.create_task(_serve_health_check(int(os.environ.get("PORT", "8080"))))
     reap_counter = 0
-    while True:
-        processed = await run_once()
-        if not processed:
-            await asyncio.sleep(settings.worker_poll_seconds)
-        reap_counter += 1
-        if reap_counter >= 100:
-            reap_counter = 0
-            Session = get_sessionmaker()
-            with Session() as db:
-                n = q.reap_stuck_jobs(db)
-                db.commit()
-                if n:
-                    log.warning("worker.reaped", count=n)
+    try:
+        while True:
+            processed = await run_once()
+            if not processed:
+                await asyncio.sleep(settings.worker_poll_seconds)
+            reap_counter += 1
+            if reap_counter >= 100:
+                reap_counter = 0
+                Session = get_sessionmaker()
+                with Session() as db:
+                    n = q.reap_stuck_jobs(db)
+                    db.commit()
+                    if n:
+                        log.warning("worker.reaped", count=n)
+    finally:
+        health_task.cancel()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,121 @@
+name: Deploy to Cloud Run
+
+# Keyless auth via Workload Identity Federation -- no long-lived GCP JSON key
+# ever touches this repo. The WIF provider (github-provider, in the
+# visualsprint-agent project) trusts this exact repo by attribute condition;
+# see the trust-boundary note at the bottom of this file before changing it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write # required for google-github-actions/auth's WIF exchange
+
+env:
+  REGION: ${{ vars.GCP_REGION }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/visualsprint
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # --- API: lean image, no ASR/agents/screen extras (docs at the top of
+      # backend/Dockerfile explain why) ---
+      - name: Build and push api image
+        run: |
+          docker build backend \
+            --build-arg INSTALL_EXTRAS= \
+            -t "${REGISTRY}/api:${{ github.sha }}" \
+            -t "${REGISTRY}/api:latest"
+          docker push "${REGISTRY}/api:${{ github.sha }}"
+          docker push "${REGISTRY}/api:latest"
+
+      - name: Deploy api to Cloud Run
+        run: |
+          gcloud run deploy visualsprint-api \
+            --image "${REGISTRY}/api:${{ github.sha }}" \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --quiet
+
+      # --- Agents/worker: full image, runs pipeline stages, needs every
+      # extra (torch/paddleocr/pyannote). Deployed as a Cloud Run *Service*
+      # like the others -- worker.py's main() now serves a /healthz
+      # endpoint alongside its poll loop specifically so this passes Cloud
+      # Run's health checks (see app/orchestrator/worker.py). ---
+      - name: Build and push agents image
+        run: |
+          docker build backend \
+            --build-arg INSTALL_EXTRAS=asr,agents,screen \
+            -t "${REGISTRY}/agents:${{ github.sha }}" \
+            -t "${REGISTRY}/agents:latest"
+          docker push "${REGISTRY}/agents:${{ github.sha }}"
+          docker push "${REGISTRY}/agents:latest"
+
+      - name: Deploy agents to Cloud Run
+        run: |
+          gcloud run deploy visualsprint-agents \
+            --image "${REGISTRY}/agents:${{ github.sha }}" \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --command python \
+            --args="-m,app.orchestrator.worker" \
+            --no-cpu-throttling \
+            --min-instances=1 --max-instances=1 \
+            --quiet
+
+      # --- Web: needs the api's live URL baked in at build time (Next.js
+      # inlines NEXT_PUBLIC_* into the client bundle) -- fetched fresh
+      # rather than hardcoded, so this stays correct if the api service URL
+      # ever changes. ---
+      - name: Resolve api URL for the frontend build
+        id: api_url
+        run: |
+          URL=$(gcloud run services describe visualsprint-api \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push web image
+        run: |
+          docker build frontend \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="${{ steps.api_url.outputs.url }}" \
+            -t "${REGISTRY}/web:${{ github.sha }}" \
+            -t "${REGISTRY}/web:latest"
+          docker push "${REGISTRY}/web:${{ github.sha }}"
+          docker push "${REGISTRY}/web:latest"
+
+      - name: Deploy web to Cloud Run
+        run: |
+          gcloud run deploy visualsprint-web \
+            --image "${REGISTRY}/web:${{ github.sha }}" \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --quiet
+
+# --- Setup required once, not per-run ---
+# Repo variables (Settings -> Secrets and variables -> Actions -> Variables
+# tab -- these are non-secret identifiers, WIF needs no secret credential):
+#   GCP_PROJECT_ID                = visualsprint-agent
+#   GCP_REGION                    = us-west1
+#   GCP_WORKLOAD_IDENTITY_PROVIDER = projects/530780341550/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+#   GCP_SERVICE_ACCOUNT           = github-actions-deploy@visualsprint-agent.iam.gserviceaccount.com
+#
+# Trust boundary: the WIF provider's attribute condition currently allows
+# BOTH this repo and VisualSprint-Labs/visualsprint-agent (an earlier,
+# unrelated scaffold project sharing this same GCP project). Narrow it to
+# this repo only once that other repo's access is confirmed no longer
+# needed -- see `gcloud iam workload-identity-pools providers update-oidc`.
