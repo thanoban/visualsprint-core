@@ -8,6 +8,7 @@ phase is built — the walking skeleton runs end-to-end from day one.
 import asyncio
 import traceback
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import structlog
 
@@ -37,6 +38,7 @@ async def _noop(db: object, job: PipelineJob) -> None:  # placeholder for unbuil
 _llm_client = None
 _transcriber = None
 _platform_adapters = None
+_calendar_adapters = None
 
 
 def _get_llm():
@@ -108,6 +110,61 @@ def _get_platform_adapters():
             ),
         }
     return _platform_adapters
+
+
+def _get_calendar_adapters():
+    """Same maturity level as _get_platform_adapters: real OAuth isn't
+    configured yet, so every CalendarConnection currently fails loudly when
+    synced -- caught and logged per-connection in _sync_all_calendars, never
+    crashes the worker or blocks other connections."""
+    global _calendar_adapters
+    if _calendar_adapters is None:
+        from app.adapters.calendar_google import GoogleCalendarAdapter
+        from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
+        from app.capture.token_provider import UnconfiguredTokenProvider
+
+        _calendar_adapters = {
+            "google": GoogleCalendarAdapter(
+                token_provider=UnconfiguredTokenProvider("Google Calendar OAuth not configured")
+            ),
+            "microsoft": MicrosoftCalendarAdapter(
+                token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured")
+            ),
+        }
+    return _calendar_adapters
+
+
+async def _sync_all_calendars(db: object) -> None:
+    """One pass over every CalendarConnection (app/orchestrator/scheduler.py
+    docstring: "not wired to a live cron yet... today it's invoked directly
+    (ops script or test)" -- this is that periodic caller). A failure on one
+    connection (bad/expired token, API outage) is logged and skipped, never
+    stops the rest -- one org's broken calendar link must not silently
+    starve every other org's meeting discovery."""
+    from sqlalchemy import select
+
+    from app.db.models import CalendarConnection
+    from app.orchestrator.scheduler import sync_calendar_connection
+
+    adapters = _get_calendar_adapters()
+    connections = db.execute(select(CalendarConnection)).scalars().all()
+    for connection in connections:
+        adapter = adapters.get(connection.provider)
+        if adapter is None:
+            log.warning(
+                "calendar_sync.unknown_provider", connection=connection.id, provider=connection.provider
+            )
+            continue
+        try:
+            created = await sync_calendar_connection(db, connection, adapter)
+            db.commit()
+            if created:
+                log.info(
+                    "calendar_sync.created_sessions", connection=connection.id, count=len(created)
+                )
+        except Exception as exc:
+            db.rollback()
+            log.warning("calendar_sync.failed", connection=connection.id, error=str(exc))
 
 
 def _person_for_roster_entry(db: object, org_id: str, entry):
@@ -617,6 +674,7 @@ async def main() -> None:
     log.info("worker.start", worker=q.WORKER_ID)
     health_task = asyncio.create_task(_serve_health_check(int(os.environ.get("PORT", "8080"))))
     reap_counter = 0
+    last_calendar_sync = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -631,6 +689,13 @@ async def main() -> None:
                     db.commit()
                     if n:
                         log.warning("worker.reaped", count=n)
+
+            now = datetime.now(UTC)
+            if (now - last_calendar_sync).total_seconds() >= settings.calendar_sync_interval_s:
+                last_calendar_sync = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _sync_all_calendars(db)
     finally:
         health_task.cancel()
 

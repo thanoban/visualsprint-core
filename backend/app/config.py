@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     # --- Worker ---
     worker_poll_seconds: float = 2.0
     job_max_attempts: int = 5
+    # How often the worker polls every CalendarConnection for new events
+    # (app/orchestrator/scheduler.py). Deliberately much coarser than the
+    # job-queue poll -- calendar APIs have real rate limits and events don't
+    # change second-to-second the way pipeline jobs do.
+    calendar_sync_interval_s: float = 300.0
 
     # --- API ---
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
