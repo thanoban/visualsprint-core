@@ -39,6 +39,7 @@ _llm_client = None
 _transcriber = None
 _platform_adapters = None
 _calendar_adapters = None
+_EMBEDDER_UNAVAILABLE = object()
 
 
 def _get_llm():
@@ -65,17 +66,28 @@ def _get_transcriber():
 _embedder = None
 
 
+def _build_embedder():
+    from app.adapters.embedder_vertex import VertexEmbedder
+
+    return VertexEmbedder()
+
+
 def _get_embedder():
     """Lazy singleton, same pattern as _get_transcriber — overridable in
     tests via `app.orchestrator.worker._embedder = <fake>`. Memory
     Intelligence treats a missing embedder as an optional enhancement, not a
-    hard requirement, so this failing loudly (no Vertex credentials) only
-    degrades `remember` to keyword-overlap search, never breaks the stage."""
+    hard requirement, so missing Vertex credentials degrade `remember` to
+    keyword-overlap search, never break the stage."""
     global _embedder
+    if _embedder is _EMBEDDER_UNAVAILABLE:
+        return None
     if _embedder is None:
-        from app.adapters.embedder_vertex import VertexEmbedder
-
-        _embedder = VertexEmbedder()
+        try:
+            _embedder = _build_embedder()
+        except Exception as exc:
+            _embedder = _EMBEDDER_UNAVAILABLE
+            log.warning("embedder.unavailable", error=str(exc))
+            return None
     return _embedder
 
 
@@ -152,7 +164,9 @@ async def _sync_all_calendars(db: object) -> None:
         adapter = adapters.get(connection.provider)
         if adapter is None:
             log.warning(
-                "calendar_sync.unknown_provider", connection=connection.id, provider=connection.provider
+                "calendar_sync.unknown_provider",
+                connection=connection.id,
+                provider=connection.provider,
             )
             continue
         try:
