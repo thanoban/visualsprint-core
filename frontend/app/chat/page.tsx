@@ -87,7 +87,8 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, data.message]);
     } catch {
       setBackendConnected(false);
-      // TODO: replace with real API once chat endpoint exists.
+      // Offline fallback only -- the real call above already happened and
+      // failed (backend unreachable). See lib/mock-data.ts's own docstring.
       setMessages((prev) => [...prev, mockAssistantReply(question)]);
     } finally {
       setSending(false);
