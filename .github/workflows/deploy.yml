@@ -51,6 +51,7 @@ jobs:
           gcloud run deploy visualsprint-api \
             --image "${REGISTRY}/api:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
+            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
             --quiet
 
       # --- Agents/worker: full image, runs pipeline stages, needs every
@@ -74,6 +75,7 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --command python \
             --args="-m,app.orchestrator.worker" \
+            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
             --no-cpu-throttling \
             --min-instances=1 --max-instances=1 \
             --quiet
@@ -119,3 +121,20 @@ jobs:
 # unrelated scaffold project sharing this same GCP project). Narrow it to
 # this repo only once that other repo's access is confirmed no longer
 # needed -- see `gcloud iam workload-identity-pools providers update-oidc`.
+#
+# Database: api and agents both read VS_DATABASE_URL from the Secret
+# Manager secret `visualsprint-database-url` (granted to the runtime service
+# account visualsprint-backend-service-a@..., NOT the deploy SA above --
+# deploying only needs permission to *reference* the secret, not read it).
+# That secret currently holds a placeholder
+# (postgresql+psycopg://NOT_YET_CONFIGURED:...@example.invalid:5432/...) --
+# deploys will keep succeeding but the container will fail its DB connection
+# until a real value is added. No code or workflow changes needed once it
+# is real -- Cloud Run always resolves `:latest` on each new revision:
+#   printf '%s' 'postgresql+psycopg://user:pass@host:5432/db' | \
+#     gcloud secrets versions add visualsprint-database-url \
+#       --project=visualsprint-agent --data-file=-
+# Then redeploy (push, or re-run this workflow) to pick it up. If using
+# Supabase specifically, use the Session pooler connection string, not
+# Transaction pooler -- transaction-mode pooling can break some
+# SQLAlchemy/Alembic behavior.
