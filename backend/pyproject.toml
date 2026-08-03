@@ -47,6 +47,9 @@ screen = [
     "paddleocr>=2.9",
     "pyannote.audio>=3.3",
 ]
+storage = [
+    "botocore>=1.35",  # SigV4 signing only, not the full boto3 SDK -- see adapters/blobstore_s3.py
+]
 
 [build-system]
 requires = ["setuptools>=68"]
