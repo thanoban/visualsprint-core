@@ -39,7 +39,9 @@ _llm_client = None
 _transcriber = None
 _platform_adapters = None
 _calendar_adapters = None
+_vlm_captioner = None
 _EMBEDDER_UNAVAILABLE = object()
+_VLM_CAPTIONER_UNAVAILABLE = object()
 
 
 def _get_llm():
@@ -518,6 +520,29 @@ def _get_ocr():
     return _ocr_engine
 
 
+def _build_vlm_captioner():
+    from app.adapters.vlm_caption import LlmVisionCaptioner
+
+    return LlmVisionCaptioner(llm=_get_llm(), model=get_settings().model_classify)
+
+
+def _get_vlm_captioner():
+    """Optional screen-caption enhancement. If Vertex/vision setup is absent,
+    keyframe OCR and grounding still run; only Keyframe.vlm_caption stays
+    blank. Tests can inject `_vlm_captioner = <fake>` directly."""
+    global _vlm_captioner
+    if _vlm_captioner is _VLM_CAPTIONER_UNAVAILABLE:
+        return None
+    if _vlm_captioner is None:
+        try:
+            _vlm_captioner = _build_vlm_captioner()
+        except Exception as exc:
+            _vlm_captioner = _VLM_CAPTIONER_UNAVAILABLE
+            log.warning("vlm_captioner.unavailable", error=str(exc))
+            return None
+    return _vlm_captioner
+
+
 def _get_keyframe_detect_fn():
     """Lazy singleton, same pattern as _get_transcriber -- overridable in
     tests via `app.orchestrator.worker._keyframe_detect_fn = <fake>` so the
@@ -569,6 +594,7 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
     blob = get_blobstore()
     detect = _get_keyframe_detect_fn()
     ocr = _get_ocr()
+    captioner = _get_vlm_captioner()
 
     local_path = Path(session.video_uri)
     if local_path.exists():
@@ -593,6 +619,14 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
         )
         ocr_result = await ocr.recognize(image_uri)
         entities = extract_entities(ocr_result.full_text)
+        vlm_caption = ""
+        if captioner is not None:
+            try:
+                from app.adapters.vlm_caption import caption_keyframe
+
+                vlm_caption = await caption_keyframe(cand.image_bytes, captioner=captioner)
+            except Exception as exc:
+                log.warning("screen.caption_failed", session=session.id, error=str(exc))
         kf = Keyframe(
             org_id=session.org_id,
             capture_session_id=session.id,
@@ -601,11 +635,7 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
             image_uri=image_uri,
             phash=cand.phash,
             ocr_text=ocr_result.full_text,
-            # VLM captioning isn't wired to a real vision-capable LlmClient
-            # yet (see app/adapters/vlm_caption.py's documented boundary) —
-            # left blank rather than raising, same "optional enhancement,
-            # never a hard requirement" rule the repair pass follows.
-            vlm_caption="",
+            vlm_caption=vlm_caption,
             detected_entities=[e.model_dump() for e in entities],
         )
         db.add(kf)

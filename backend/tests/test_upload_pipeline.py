@@ -85,6 +85,11 @@ def fake_transcriber(monkeypatch):
     monkeypatch.setattr(worker, "_transcriber", None)
 
 
+@pytest.fixture(autouse=True)
+def _reset_screen_captioner(monkeypatch):
+    monkeypatch.setattr(worker, "_vlm_captioner", worker._VLM_CAPTIONER_UNAVAILABLE)
+
+
 @pytest.fixture
 def client():
     return TestClient(fastapi_app)
@@ -283,7 +288,9 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
     from app.interfaces.llm import LlmUsage
 
     class FakeLlm:
-        async def complete_structured(self, *, model, system, user_content, schema, max_tokens=4096):
+        async def complete_structured(
+            self, *, model, system, user_content, schema, max_tokens=4096
+        ):
             from app.asr.repair import RepairResult
 
             return (
@@ -309,7 +316,9 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
     Session = get_sessionmaker()
     with Session() as db:
         session = db.get(CaptureSession, session_id)
-        db.add(Participant(org_id=session.org_id, capture_session_id=session_id, display_name="Kasun"))
+        db.add(
+            Participant(org_id=session.org_id, capture_session_id=session_id, display_name="Kasun")
+        )
         db.commit()
 
     import asyncio
@@ -319,7 +328,11 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
 
     with Session() as db:
         utterances = (
-            db.execute(select(Utterance).where(Utterance.capture_session_id == session_id).order_by(Utterance.start_s))
+            db.execute(
+                select(Utterance)
+                .where(Utterance.capture_session_id == session_id)
+                .order_by(Utterance.start_s)
+            )
             .scalars()
             .all()
         )
@@ -343,7 +356,10 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
             # temporal grounding has something to link.
             return [
                 KeyframeCandidate(
-                    valid_from_s=0.0, valid_to_s=5.0, image_bytes=b"\xff\xd8fake-jpeg", phash="abc123"
+                    valid_from_s=0.0,
+                    valid_to_s=5.0,
+                    image_bytes=b"\xff\xd8fake-jpeg",
+                    phash="abc123",
                 )
             ]
 
@@ -379,7 +395,9 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
 
     with Session() as db:
         keyframes = (
-            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id)).scalars().all()
+            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id))
+            .scalars()
+            .all()
         )
         groundings = (
             db.execute(
@@ -396,6 +414,7 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
     assert kf.ocr_text == "Ticket PAY-442 blocking the release"
     assert kf.phash == "abc123"
     assert any(e["text"] == "PAY-442" for e in kf.detected_entities)
+    assert kf.vlm_caption == ""  # no captioner configured: honest optional blank
 
     # Both utterances temporally overlap the one keyframe -> both grounded.
     assert len(groundings) == 2
@@ -403,6 +422,123 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
 
     status = client.get(f"/api/v1/meetings/sessions/{session_id}")
     assert status.json()["state"] == CaptureState.PROCESSING_SCREEN.value
+
+
+def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
+    client, fake_transcriber, monkeypatch
+):
+    from app.screen.keyframe_detect import KeyframeCandidate
+
+    class FakeKeyframeDetector:
+        def __call__(self, video_path: str) -> list[KeyframeCandidate]:
+            return [
+                KeyframeCandidate(
+                    valid_from_s=0.0,
+                    valid_to_s=5.0,
+                    image_bytes=b"\xff\xd8fake-jpeg",
+                    phash="captioned",
+                )
+            ]
+
+    class FakeOcrResult:
+        full_text = "Sprint board"
+        blocks = []
+
+    class FakeOcr:
+        async def recognize(self, image_uri: str) -> FakeOcrResult:
+            return FakeOcrResult()
+
+    class FakeCaptioner:
+        def __init__(self) -> None:
+            self.calls: list[bytes] = []
+
+        async def caption(self, image_bytes: bytes) -> str:
+            self.calls.append(image_bytes)
+            return "A sprint board with release tasks."
+
+    captioner = FakeCaptioner()
+    monkeypatch.setattr(worker, "_keyframe_detect_fn", FakeKeyframeDetector())
+    monkeypatch.setattr(worker, "_ocr_engine", FakeOcr())
+    monkeypatch.setattr(worker, "_vlm_captioner", captioner)
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("captioned.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
+        data={"title": "Captioned screen"},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        keyframe = db.execute(
+            select(Keyframe).where(Keyframe.capture_session_id == session_id)
+        ).scalar_one()
+
+    assert captioner.calls == [b"\xff\xd8fake-jpeg"]
+    assert keyframe.vlm_caption == "A sprint board with release tasks."
+
+
+def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
+    client, fake_transcriber, monkeypatch
+):
+    from app.screen.keyframe_detect import KeyframeCandidate
+
+    class FakeKeyframeDetector:
+        def __call__(self, video_path: str) -> list[KeyframeCandidate]:
+            return [
+                KeyframeCandidate(
+                    valid_from_s=0.0,
+                    valid_to_s=5.0,
+                    image_bytes=b"\xff\xd8fake-jpeg",
+                    phash="caption-failed",
+                )
+            ]
+
+    class FakeOcrResult:
+        full_text = "Ticket PAY-442"
+        blocks = []
+
+    class FakeOcr:
+        async def recognize(self, image_uri: str) -> FakeOcrResult:
+            return FakeOcrResult()
+
+    class FailingCaptioner:
+        async def caption(self, image_bytes: bytes) -> str:
+            raise RuntimeError("vision model unavailable")
+
+    monkeypatch.setattr(worker, "_keyframe_detect_fn", FakeKeyframeDetector())
+    monkeypatch.setattr(worker, "_ocr_engine", FakeOcr())
+    monkeypatch.setattr(worker, "_vlm_captioner", FailingCaptioner())
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("caption-fail.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
+        data={"title": "Caption failure"},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    import asyncio
+
+    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        keyframe = db.execute(
+            select(Keyframe).where(Keyframe.capture_session_id == session_id)
+        ).scalar_one()
+
+    assert keyframe.ocr_text == "Ticket PAY-442"
+    assert keyframe.vlm_caption == ""
 
 
 def test_audio_only_upload_skips_screen_stage_without_failing(client, fake_transcriber):
@@ -424,7 +560,9 @@ def test_audio_only_upload_skips_screen_stage_without_failing(client, fake_trans
     Session = get_sessionmaker()
     with Session() as db:
         keyframes = (
-            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id)).scalars().all()
+            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id))
+            .scalars()
+            .all()
         )
     assert keyframes == []
 
