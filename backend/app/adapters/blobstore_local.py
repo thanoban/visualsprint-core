@@ -36,6 +36,9 @@ class LocalBlobStore:
     async def exists(self, uri: str) -> bool:
         return self._path(uri).exists()
 
+    async def delete(self, uri: str) -> None:
+        self._path(uri).unlink(missing_ok=True)
+
     async def presigned_url(self, uri: str, expires_s: int = 3600) -> str:
         # Dev: served by the API's /blobs route; no signing.
         return f"/api/v1/blobs/{uri[len(SCHEME) :]}"

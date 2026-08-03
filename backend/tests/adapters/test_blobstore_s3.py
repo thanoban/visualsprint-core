@@ -40,6 +40,11 @@ class FakeS3Client:
         data, _content_type = self.objects[(Bucket, Key)]
         return {"Body": FakeStreamingBody(data)}
 
+    def delete_object(self, *, Bucket, Key):
+        # Real S3 delete_object is idempotent -- succeeds whether or not the
+        # key exists, so this fake must too (no FakeClientError here).
+        self.objects.pop((Bucket, Key), None)
+
     def head_object(self, *, Bucket, Key):
         if (Bucket, Key) not in self.objects:
             raise FakeClientError("404")
@@ -112,6 +117,22 @@ async def test_presigned_url_includes_bucket_key_and_expiry(store: S3BlobStore):
     url = await store.presigned_url(uri, expires_s=900)
 
     assert url == "https://fake-r2.example/test-bucket/keyframes/org1/frame1.jpg?expires=900"
+
+
+async def test_delete_removes_the_object(store: S3BlobStore, client: FakeS3Client):
+    uri = await store.put("audio/org1/x.flac", b"data", "audio/flac")
+    assert await store.exists(uri) is True
+
+    await store.delete(uri)
+
+    assert await store.exists(uri) is False
+
+
+async def test_delete_is_idempotent_on_an_already_missing_object(store: S3BlobStore):
+    # Must not raise -- retention sweeps can legitimately try to delete a
+    # blob twice (e.g. a crash-and-retry), and S3's own delete_object is
+    # spec'd as idempotent, so this adapter must not add a 404 error on top.
+    await store.delete("blob://audio/org1/never-existed.flac")
 
 
 async def test_requires_endpoint_url_when_no_client_injected(monkeypatch):

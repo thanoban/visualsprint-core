@@ -26,6 +26,7 @@ class S3ClientBackend(Protocol):
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, ContentType: str) -> Any: ...
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]: ...
     def head_object(self, *, Bucket: str, Key: str) -> Any: ...
+    def delete_object(self, *, Bucket: str, Key: str) -> Any: ...
     def generate_presigned_url(
         self, operation: str, Params: dict[str, str], ExpiresIn: int
     ) -> str: ...
@@ -105,6 +106,14 @@ class S3BlobStore:
             if error_code in ("404", "NoSuchKey", "NotFound"):
                 return False
             raise
+
+    async def delete(self, uri: str) -> None:
+        # S3's delete_object is spec'd as idempotent -- deleting an already-
+        # absent key returns success, not an error, so no 404-handling
+        # needed here the way exists()/head_object needs it.
+        client = self._ensure_client()
+        key = self._key_from_uri(uri)
+        await asyncio.to_thread(client.delete_object, Bucket=self._bucket, Key=key)
 
     async def presigned_url(self, uri: str, expires_s: int = 3600) -> str:
         client = self._ensure_client()

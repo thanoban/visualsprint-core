@@ -167,6 +167,31 @@ async def _sync_all_calendars(db: object) -> None:
             log.warning("calendar_sync.failed", connection=connection.id, error=str(exc))
 
 
+async def _run_retention_sweep(db: object) -> None:
+    """One pass over every Org with Org.retention_days set (see
+    app/orchestrator/retention.py for what's actually purged and why). A
+    failure on one org (blob-store outage, bad row) is logged and skipped,
+    same resilience pattern as _sync_all_calendars -- one org's problem must
+    not block every other org's retention compliance."""
+    from sqlalchemy import select
+
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.db.models import Org
+    from app.orchestrator.retention import purge_expired_raw_evidence
+
+    blob_store = get_blobstore()
+    orgs = db.execute(select(Org).where(Org.retention_days.is_not(None))).scalars().all()
+    for org in orgs:
+        try:
+            purged = await purge_expired_raw_evidence(db, org, blob_store)
+            db.commit()
+            if purged:
+                log.info("retention.swept", org=org.id, sessions=len(purged))
+        except Exception as exc:
+            db.rollback()
+            log.warning("retention.failed", org=org.id, error=str(exc))
+
+
 def _person_for_roster_entry(db: object, org_id: str, entry):
     from sqlalchemy import select
 
@@ -675,6 +700,7 @@ async def main() -> None:
     health_task = asyncio.create_task(_serve_health_check(int(os.environ.get("PORT", "8080"))))
     reap_counter = 0
     last_calendar_sync = datetime.min.replace(tzinfo=UTC)
+    last_retention_sweep = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -696,6 +722,12 @@ async def main() -> None:
                 Session = get_sessionmaker()
                 with Session() as db:
                     await _sync_all_calendars(db)
+
+            if (now - last_retention_sweep).total_seconds() >= settings.retention_sweep_interval_s:
+                last_retention_sweep = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_retention_sweep(db)
     finally:
         health_task.cancel()
 

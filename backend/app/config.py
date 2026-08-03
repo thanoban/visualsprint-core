@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # job-queue poll -- calendar APIs have real rate limits and events don't
     # change second-to-second the way pipeline jobs do.
     calendar_sync_interval_s: float = 300.0
+    # How often the worker sweeps orgs with Org.retention_days set for
+    # expired raw evidence to purge (app/orchestrator/retention.py). Coarser
+    # still than calendar sync -- not time-critical to the hour, let alone
+    # the minute.
+    retention_sweep_interval_s: float = 3600.0
 
     # --- API ---
     # pydantic-settings decodes list-typed env vars as JSON, e.g.

@@ -1,7 +1,10 @@
 """BlobStore swap point — S3-compatible (Cloudflare R2) in prod, local dir in dev.
 
-Stores FLAC audio (kept forever — re-transcribable as ASR improves; the corpus
-is the moat) and keyframe images.
+Stores FLAC audio (kept forever by default — re-transcribable as ASR
+improves; the corpus is the moat) and keyframe images. The forever-by-default
+stance is an org-level default, not an absolute: app/orchestrator/retention.py
+purges raw audio/keyframe blobs for orgs that set Org.retention_days,
+per-org opt-in only -- never the platform default.
 """
 
 from typing import Protocol
@@ -17,6 +20,10 @@ class BlobStore(Protocol):
     async def get(self, uri: str) -> bytes: ...
 
     async def exists(self, uri: str) -> bool: ...
+
+    async def delete(self, uri: str) -> None:
+        """Idempotent: deleting an already-absent blob must not raise."""
+        ...
 
     async def presigned_url(self, uri: str, expires_s: int = 3600) -> str:
         """Short-lived URL for UI evidence rendering (keyframe thumbnails, audio snippets)."""
