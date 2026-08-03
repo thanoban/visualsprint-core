@@ -254,6 +254,20 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
         raise RuntimeError("PlatformAdapter returned no audio tracks")
     _persist_capture_artifacts(db, session, artifacts)
 
+    from app.capture.consent import record_disclosure
+
+    record_disclosure(
+        db,
+        session,
+        subject="all_participants",
+        method="host_setting",
+        detail=(
+            f"platform={meeting.platform} recording/transcription auto-enabled by org "
+            "settings; disclosed to participants via the platform's own in-meeting "
+            "recording indicator — no bot in the room, per docs/03-capture.md"
+        ),
+    )
+
 
 def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str]]:
     """Roster + org glossary + screen-OCR context for the LLM repair pass.

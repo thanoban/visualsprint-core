@@ -5,7 +5,16 @@ from sqlalchemy.pool import StaticPool
 
 import app.orchestrator.worker as worker
 from app.db.base import Base
-from app.db.models import AudioTrack, CaptureSession, Meeting, Org, Participant, Person, PipelineJob
+from app.db.models import (
+    AudioTrack,
+    CaptureSession,
+    ConsentRecord,
+    Meeting,
+    Org,
+    Participant,
+    Person,
+    PipelineJob,
+)
 from app.interfaces.platform import AudioTrack as ArtifactAudioTrack
 from app.interfaces.platform import CaptureArtifacts, CaptureMode, RosterEntry
 
@@ -118,6 +127,16 @@ async def test_a2_acquire_persists_roster_tracks_and_video_uri(db, monkeypatch):
     assert [t.participant_display_name for t in tracks] == ["Alice", "Bob"]
     assert all(t.participant_person_id for t in tracks)
 
+    consent_records = (
+        db.execute(select(ConsentRecord).where(ConsentRecord.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
+    assert len(consent_records) == 1
+    assert consent_records[0].method == "host_setting"
+    assert consent_records[0].subject == "all_participants"
+    assert session.disclosure_log[0]["method"] == "host_setting"
+
 
 async def test_a2_acquire_is_idempotent_for_retries(db, monkeypatch):
     _org, _meeting, session, job = _seed_a2_session(db, platform="meet")
@@ -158,6 +177,14 @@ async def test_a2_acquire_is_idempotent_for_retries(db, monkeypatch):
     assert tracks[0].participant_person_id is None
     assert [p.display_name for p in participants] == ["Nimal"]
     assert session.video_uri == "blob://meet/platform-123/share.mp4"
+
+    consent_records = (
+        db.execute(select(ConsentRecord).where(ConsentRecord.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
+    assert len(consent_records) == 1
+    assert len(session.disclosure_log) == 1
 
 
 async def test_a2_acquire_requires_platform_meeting_id(db, monkeypatch):

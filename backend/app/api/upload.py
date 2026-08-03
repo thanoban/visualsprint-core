@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
+from app.capture.consent import record_disclosure
 from app.db.base import get_db
-from app.db.models import AudioTrack, CaptureSession, ConsentRecord, Meeting, Org
+from app.db.models import AudioTrack, CaptureSession, Meeting, Org
 from app.orchestrator.queue import enqueue_pipeline
 
 router = APIRouter(prefix="/api/v1/meetings", tags=["meetings"])
@@ -92,14 +93,12 @@ async def upload_meeting(
         session.video_uri = audio_uri
 
     # Mode D consent: the uploader attests they may share this recording.
-    db.add(
-        ConsentRecord(
-            org_id=org_id,
-            capture_session_id=session.id,
-            subject="uploader",
-            method="upload_attestation",
-            detail=f"file={file.filename}",
-        )
+    record_disclosure(
+        db,
+        session,
+        subject="uploader",
+        method="upload_attestation",
+        detail=f"file={file.filename}",
     )
 
     enqueue_pipeline(db, org_id, session.id)
