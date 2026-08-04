@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
 
+    # --- Zoom RTMS (Mode A1 real-time capture; see backend/app/capture/rtms_*.py) ---
+    zoom_client_id: str | None = None
+    zoom_client_secret: str | None = None
+    zoom_webhook_secret_token: str | None = None
+
     # --- ASR vendors (buy-everything strategy; see docs/PROJECT_PLAN.md) ---
     google_credentials_json: str | None = None  # path to service-account JSON
     azure_speech_key: str | None = None
@@ -53,6 +58,12 @@ class Settings(BaseSettings):
     # still than calendar sync -- not time-critical to the hour, let alone
     # the minute.
     retention_sweep_interval_s: float = 3600.0
+    # How often the worker retries transcoding AudioTrack blobs that were
+    # stored non-FLAC because ffmpeg was unavailable at ingest time
+    # (app/orchestrator/transcode_backfill.py). Same coarse cadence as
+    # retention -- this only matters once ffmpeg gets provisioned in an
+    # environment where it wasn't before, not a steady-state concern.
+    transcode_backfill_interval_s: float = 3600.0
 
     # --- API ---
     # pydantic-settings decodes list-typed env vars as JSON, e.g.

@@ -11,6 +11,8 @@ that's tracked by the returned URI's extension.
 import shutil
 import subprocess
 import tempfile
+import wave
+from io import BytesIO
 from pathlib import Path
 
 import httpx
@@ -25,7 +27,7 @@ def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def _transcode_to_flac(src_bytes: bytes, src_suffix: str) -> bytes | None:
+def transcode_to_flac(src_bytes: bytes, src_suffix: str) -> bytes | None:
     """Returns FLAC bytes, or None if ffmpeg is unavailable — caller decides fallback."""
     if not _ffmpeg_available():
         return None
@@ -39,6 +41,42 @@ def _transcode_to_flac(src_bytes: bytes, src_suffix: str) -> bytes | None:
             capture_output=True,
         )
         return dst.read_bytes()
+
+
+def _pcm_to_wav(pcm_bytes: bytes, *, sample_rate: int, channels: int) -> bytes:
+    """Wraps raw L16 PCM (RTMS's on-the-wire audio format) in a WAV header —
+    pure stdlib, no ffmpeg needed for this step, so it always succeeds."""
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)  # L16 = 16-bit signed PCM
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm_bytes)
+    return buf.getvalue()
+
+
+async def pcm_to_flac_blob(
+    pcm_bytes: bytes,
+    blob_store: BlobStore,
+    blob_key: str,
+    *,
+    sample_rate: int = 8000,
+    channels: int = 1,
+) -> str:
+    """RTMS delivers raw PCM frames, not a downloadable file — this is the
+    equivalent of `download_and_store` for that path. `blob_key` must NOT
+    include an extension. Same ffmpeg-unavailable fallback convention as
+    `download_and_store`: store the WAV untranscoded rather than stall the
+    pipeline, with the same backfill-job TODO."""
+    wav_bytes = _pcm_to_wav(pcm_bytes, sample_rate=sample_rate, channels=channels)
+
+    flac_bytes = transcode_to_flac(wav_bytes, ".wav")
+    if flac_bytes is not None:
+        return await blob_store.put(f"{blob_key}.flac", flac_bytes, content_type=FLAC_CONTENT_TYPE)
+
+    # TODO(ffmpeg-unavailable): store source bytes untranscoded; a backfill job must
+    # convert these to FLAC once ffmpeg is provisioned in the runtime environment.
+    return await blob_store.put(f"{blob_key}.wav", wav_bytes, content_type="audio/wav")
 
 
 async def download_and_store(
@@ -58,7 +96,7 @@ async def download_and_store(
     resp.raise_for_status()
     raw = resp.content
 
-    flac_bytes = _transcode_to_flac(raw, source_suffix)
+    flac_bytes = transcode_to_flac(raw, source_suffix)
     if flac_bytes is not None:
         return await blob_store.put(f"{blob_key}.flac", flac_bytes, content_type=FLAC_CONTENT_TYPE)
 
