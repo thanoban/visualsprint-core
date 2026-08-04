@@ -11,6 +11,8 @@ import inspect
 from app.connectors.calendar_followup import CalendarFollowupConnector
 from app.connectors.channel_recap import ChannelRecapConnector
 from app.connectors.email_draft import EmailDraftConnector
+from app.connectors.escalation import EscalationConnector
+from app.connectors.reminder import ReminderConnector
 from app.connectors.task_create import TaskCreateConnector
 from app.interfaces.actions import ActionPayload
 
@@ -19,6 +21,8 @@ CONNECTOR_CLASSES = [
     ChannelRecapConnector,
     TaskCreateConnector,
     CalendarFollowupConnector,
+    EscalationConnector,
+    ReminderConnector,
 ]
 
 

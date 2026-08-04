@@ -114,16 +114,31 @@ def test_approve_can_be_retried_after_failure(client, db_session):
     assert second.json()["status"] == "failed"  # still no credentials, still fails cleanly
 
 
-def test_approve_unknown_kind_records_approval_and_a_clear_error(client, db_session):
-    """escalation/reminder are valid ActionKind values with no connector
-    implementation yet -- approval must still succeed and be recorded."""
+def test_approve_escalation_records_approval_and_a_clear_error(client, db_session):
+    """EscalationConnector delegates to ChannelRecapConnector -- with no
+    target provider set (the seed default), it fails with that connector's
+    own clear error, not a generic 'unconfigured' one."""
     org_id, action_id, person_id = _seed(db_session, kind="escalation")
 
     resp = client.post(f"/api/v1/actions/{action_id}/approve", json={})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "failed"
-    assert "no connector implemented" in body["error"]
+    assert "unsupported channel_recap provider" in body["error"]
+    assert body["approved_at"] is not None
+
+
+def test_approve_reminder_records_approval_and_a_clear_error(client, db_session):
+    """ReminderConnector delegates to EmailDraftConnector -- with no target
+    'to' set (the seed default), it fails with that connector's own clear
+    error."""
+    org_id, action_id, person_id = _seed(db_session, kind="reminder")
+
+    resp = client.post(f"/api/v1/actions/{action_id}/approve", json={})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "email_draft target requires 'to'" in body["error"]
     assert body["approved_at"] is not None
 
 

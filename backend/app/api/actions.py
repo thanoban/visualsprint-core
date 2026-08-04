@@ -60,11 +60,21 @@ def _get_connector(kind: ActionKind):
             _connectors[kind.value] = CalendarFollowupConnector(
                 token_provider=UnconfiguredTokenProvider("Google Calendar OAuth not configured"),
             )
+        elif kind == ActionKind.ESCALATION:
+            from app.connectors.escalation import EscalationConnector
+
+            _connectors[kind.value] = EscalationConnector(
+                slack_token_provider=UnconfiguredTokenProvider("Slack bot token not configured"),
+            )
+        elif kind == ActionKind.REMINDER:
+            from app.connectors.reminder import ReminderConnector
+
+            _connectors[kind.value] = ReminderConnector(
+                token_provider=UnconfiguredTokenProvider("Gmail OAuth not configured"),
+            )
         else:
-            # ESCALATION / REMINDER are valid ActionKind values (Action
-            # Intelligence may propose them) but have no connector
-            # implementation yet -- approval still records cleanly, only
-            # execution is unavailable.
+            # Defensive fallback for a future ActionKind added to the enum
+            # without a matching branch here -- every current kind has one.
             raise ConnectorError(f"no connector implemented yet for action kind {kind.value!r}")
     return _connectors[kind.value]
 
