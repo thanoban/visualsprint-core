@@ -29,6 +29,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/actions" className="hover:text-brand-600 transition-colors">
                 Actions
               </Link>
+              <Link href="/data-rights" className="hover:text-brand-600 transition-colors">
+                Data rights
+              </Link>
             </nav>
           </div>
         </header>

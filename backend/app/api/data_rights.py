@@ -34,6 +34,51 @@ from app.orchestrator.erasure import erase_meeting
 router = APIRouter(prefix="/api/v1", tags=["data-rights"])
 
 
+class OrgSettingsOut(BaseModel):
+    org_id: str
+    retention_days: int | None
+    join_policy: str
+
+
+@router.get("/orgs/{org_id}/settings", response_model=OrgSettingsOut)
+async def get_org_settings(org_id: str, db: Session = Depends(get_db)) -> OrgSettingsOut:
+    org = db.get(Org, org_id)
+    if org is None:
+        raise HTTPException(404, "org not found")
+    return OrgSettingsOut(org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy)
+
+
+class UpdateOrgSettingsRequest(BaseModel):
+    # None is a real, meaningful value here (Org.retention_days: None = keep
+    # forever, the platform default) -- so this can't reuse "field absent"
+    # to mean "no-op". `retention_days_set` disambiguates: only touch the
+    # column when the caller actually included the field, whatever its value.
+    retention_days: int | None = None
+    retention_days_set: bool = False
+
+
+@router.patch("/orgs/{org_id}/settings", response_model=OrgSettingsOut)
+async def update_org_settings(
+    org_id: str, req: UpdateOrgSettingsRequest, db: Session = Depends(get_db)
+) -> OrgSettingsOut:
+    org = db.get(Org, org_id)
+    if org is None:
+        raise HTTPException(404, "org not found")
+    if req.retention_days_set:
+        if req.retention_days is not None and req.retention_days <= 0:
+            raise HTTPException(400, "retention_days must be a positive integer, or null to keep forever")
+        org.retention_days = req.retention_days
+        log_audit_event(
+            db,
+            org_id=org.id,
+            actor="system",
+            event="org_retention_updated",
+            detail={"retention_days": req.retention_days},
+        )
+    db.commit()
+    return OrgSettingsOut(org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy)
+
+
 def _get_org_meeting(db: Session, org_id: str, meeting_id: str) -> Meeting:
     if db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")

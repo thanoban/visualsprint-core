@@ -76,3 +76,77 @@ def test_delete_meeting_404_for_unknown_meeting(client, db_session):
     resp = client.delete(f"/api/v1/orgs/{org.id}/meetings/does-not-exist")
 
     assert resp.status_code == 404
+
+
+def test_get_org_settings_defaults(client, db_session):
+    org = Org(name="Acme")
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/settings")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"org_id": org.id, "retention_days": None, "join_policy": "all"}
+
+
+def test_update_org_settings_sets_retention_days(client, db_session):
+    org = Org(name="Acme")
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/orgs/{org.id}/settings",
+        json={"retention_days": 90, "retention_days_set": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["retention_days"] == 90
+    db_session.refresh(org)
+    assert org.retention_days == 90
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.org_id == org.id)).scalars().all()
+    assert any(a.event == "org_retention_updated" for a in audit)
+
+
+def test_update_org_settings_clears_retention_days_to_keep_forever(client, db_session):
+    org = Org(name="Acme", retention_days=30)
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/orgs/{org.id}/settings",
+        json={"retention_days": None, "retention_days_set": True},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["retention_days"] is None
+    db_session.refresh(org)
+    assert org.retention_days is None
+
+
+def test_update_org_settings_rejects_non_positive_retention(client, db_session):
+    org = Org(name="Acme")
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/api/v1/orgs/{org.id}/settings",
+        json={"retention_days": 0, "retention_days_set": True},
+    )
+
+    assert resp.status_code == 400
+
+
+def test_update_org_settings_noop_without_retention_days_set(client, db_session):
+    org = Org(name="Acme", retention_days=30)
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.patch(f"/api/v1/orgs/{org.id}/settings", json={})
+
+    assert resp.status_code == 200
+    assert resp.json()["retention_days"] == 30

@@ -282,3 +282,44 @@ export interface ProposedActionOut {
   external_url: string | null;
   error: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Types for the data-rights UI (backend/app/api/data_rights.py) -- PDPA
+// export/erasure per meeting, plus org retention settings.
+// ---------------------------------------------------------------------------
+
+/** Response body of GET /api/v1/orgs/{org_id}/meetings/{meeting_id}/export.
+ * Loosely typed to match the backend's raw dict return -- this is a
+ * portability dump, not a UI-driving shape, so only the fields the export
+ * page actually renders are named; everything else is pass-through JSON. */
+export interface ExportedMeetingData {
+  meeting_id: string;
+  title: string;
+  platform: string;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  capture_sessions: Array<{
+    capture_session_id: string;
+    mode: string;
+    state: string;
+    utterances: Array<{ start_s: number; end_s: number; text: string }>;
+    audio_tracks: Array<{ uri: string }>;
+    keyframes: Array<{ image_uri: string }>;
+    knowledge_items: Array<{ type: string; statement: string }>;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
+/** Response body of DELETE /api/v1/orgs/{org_id}/meetings/{meeting_id} */
+export interface EraseMeetingResponse {
+  meeting_id: string;
+  erased: boolean;
+}
+
+/** Response body of GET/PATCH /api/v1/orgs/{org_id}/settings */
+export interface OrgSettingsOut {
+  org_id: string;
+  retention_days: number | null;
+  join_policy: string;
+}
