@@ -75,7 +75,8 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --command python \
             --args="-m,app.orchestrator.worker" \
-            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
+            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json" \
             --no-cpu-throttling \
             --min-instances=1 --max-instances=1 \
             --quiet
@@ -138,3 +139,18 @@ jobs:
 # Supabase specifically, use the Session pooler connection string, not
 # Transaction pooler -- transaction-mode pooling can break some
 # SQLAlchemy/Alembic behavior.
+#
+# Google ASR (chirp_2): the agents service mounts
+# `visualsprint-google-speech-credentials` (a service-account key JSON for
+# visualsprint-asr@visualsprint-agent.iam.gserviceaccount.com, which holds
+# only roles/speech.client -- least privilege, recognition calls only) as a
+# *file* at /secrets/google-speech-credentials.json via --set-secrets'
+# path=secret syntax, and VS_GOOGLE_CREDENTIALS_JSON points at that path
+# (app/config.py's field is a file path, not inline JSON content -- see
+# app/adapters/asr_google.py). Real key already generated and stored; this
+# one is live, not a placeholder. The `api` service does not need it (only
+# the agents/worker image calls the ASR cascade).
+# Azure Speech (VS_AZURE_SPEECH_KEY/_REGION) and Groq (VS_GROQ_API_KEY) are
+# NOT wired here -- both require signing up on the vendor's own site, which
+# has to happen outside this repo/workflow before a secret can be created
+# for them.
