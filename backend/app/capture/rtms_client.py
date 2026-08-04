@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.capture.rtms_protocol import (
-    CLIENT_READY_ACK,
     DATA_HAND_SHAKE_RESP,
     KEEP_ALIVE_REQ,
     MEDIA_DATA_AUDIO,
