@@ -217,6 +217,25 @@ async def _run_retention_sweep(db: object) -> None:
             log.warning("retention.failed", org=org.id, error=str(exc))
 
 
+async def _run_transcode_backfill(db: object) -> None:
+    """One pass retrying non-FLAC AudioTrack blobs (see
+    app/orchestrator/transcode_backfill.py). A failure must not block the
+    worker's poll loop, same resilience convention as retention/calendar
+    sweeps -- one bad blob shouldn't stop the rest from being retried."""
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.orchestrator.transcode_backfill import backfill_flac_transcodes
+
+    blob_store = get_blobstore()
+    try:
+        transcoded = await backfill_flac_transcodes(db, blob_store)
+        db.commit()
+        if transcoded:
+            log.info("transcode_backfill.swept", count=len(transcoded))
+    except Exception as exc:
+        db.rollback()
+        log.warning("transcode_backfill.failed", error=str(exc))
+
+
 def _person_for_roster_entry(db: object, org_id: str, entry):
     from sqlalchemy import select
 
@@ -754,6 +773,7 @@ async def main() -> None:
     reap_counter = 0
     last_calendar_sync = datetime.min.replace(tzinfo=UTC)
     last_retention_sweep = datetime.min.replace(tzinfo=UTC)
+    last_transcode_backfill = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -781,6 +801,14 @@ async def main() -> None:
                 Session = get_sessionmaker()
                 with Session() as db:
                     await _run_retention_sweep(db)
+
+            if (
+                now - last_transcode_backfill
+            ).total_seconds() >= settings.transcode_backfill_interval_s:
+                last_transcode_backfill = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_transcode_backfill(db)
     finally:
         health_task.cancel()
 
