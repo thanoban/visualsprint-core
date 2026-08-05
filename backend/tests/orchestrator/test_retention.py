@@ -1,7 +1,9 @@
-"""Raw-evidence retention sweep. The one guarantee that matters most here:
-KnowledgeItem/KnowledgeEvidence (verified organizational memory) must
-survive a purge completely untouched -- only the raw recording content
-(audio blobs, utterance text, keyframe images/OCR) is ever deleted."""
+"""Raw-evidence retention sweep. The core guarantee: KnowledgeItem's
+substantive fields (statement, type, confidence, owner, due date,
+lifecycle) and KnowledgeEvidence links survive a purge untouched -- only
+the raw recording content (audio blobs, utterance text, keyframe
+images/OCR) and confidence_rationale (which can leak the raw evidence it
+was judging) is ever cleared."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -143,12 +145,17 @@ async def test_session_past_retention_window_has_raw_evidence_purged(db):
     assert kf.vlm_caption == ""
     assert kf.detected_entities == []
     assert track.uri == ""
+    assert item.confidence_rationale == ""
     assert set(blob_store.deleted) == {"blob://audio/acme/x.flac", "blob://keyframes/acme/frame1.jpg"}
 
 
-async def test_knowledge_item_and_evidence_survive_completely_untouched(db):
-    """The core guarantee: verified organizational memory is never purged,
-    only the raw recording it was derived from."""
+async def test_knowledge_item_content_survives_but_rationale_is_scrubbed(db):
+    """The core guarantee: verified organizational memory (statement, type,
+    confidence) is never purged, only the raw recording it was derived from
+    -- with one deliberate exception. confidence_rationale is Evidence
+    Verification's own free-text explanation and can quote/paraphrase the
+    raw evidence it judged, so it's scrubbed alongside the recording rather
+    than treated as memory (see retention.py's module docstring)."""
     org, session, utt, kf, track, item = _seed(db, retention_days=90, meeting_age_days=120)
     blob_store = FakeBlobStore()
 
@@ -156,6 +163,7 @@ async def test_knowledge_item_and_evidence_survive_completely_untouched(db):
 
     assert item.statement == "Use Postgres for the database"
     assert item.confidence == Confidence.VERIFIED
+    assert item.confidence_rationale == ""
     evidence_rows = (
         db.query(KnowledgeEvidence).filter(KnowledgeEvidence.knowledge_item_id == item.id).all()
     )

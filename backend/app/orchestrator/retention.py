@@ -4,10 +4,18 @@ by default -- the corpus is the moat -- this is the per-org exception for
 orgs with their own compliance requirements to purge sooner).
 
 Purges the actual recording content -- audio/video blobs, transcript text,
-keyframe images/OCR/caption -- while leaving every KnowledgeItem,
-KnowledgeEvidence, and KnowledgeEdge completely untouched: verified
-organizational memory is the product's whole value and is structurally
-lower privacy risk than raw recordings, so this sweep never purges it.
+keyframe images/OCR/caption -- while leaving verified organizational
+memory (KnowledgeItem's statement/type/confidence/owner/due_at/
+lifecycle_state/embedding, KnowledgeEvidence, KnowledgeEdge) untouched:
+that's the product's whole value and is structurally lower privacy risk
+than raw recordings, so this sweep never purges it. The one exception is
+KnowledgeItem.confidence_rationale -- Evidence Verification's own free-text
+explanation of *why* it assigned a confidence level, which can quote or
+closely paraphrase the raw evidence it was judging (see
+app/agents/verification.py's SYSTEM_PROMPT). Leaving it behind would let a
+purged meeting's transcript substance keep leaking through the report's
+rationale display, so it's cleared alongside the raw evidence, not treated
+as memory.
 Evidence rows keep their id/timing/speaker after a purge, so a report for
 an old meeting still renders correctly -- app/api/report.py's existing
 `quote = _truncate(utt.text) if utt.text else None` already treats blank
@@ -26,7 +34,15 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AudioTrack, CaptureSession, Keyframe, Meeting, Org, Utterance
+from app.db.models import (
+    AudioTrack,
+    CaptureSession,
+    Keyframe,
+    KnowledgeItem,
+    Meeting,
+    Org,
+    Utterance,
+)
 from app.interfaces.blobstore import BlobStore
 
 log = structlog.get_logger()
@@ -116,6 +132,19 @@ async def _purge_session_raw_evidence(
         kf.ocr_text = ""
         kf.vlm_caption = ""
         kf.detected_entities = []
+        purged_anything = True
+
+    items = (
+        db.execute(
+            select(KnowledgeItem).where(KnowledgeItem.capture_session_id == capture_session_id)
+        )
+        .scalars()
+        .all()
+    )
+    for item in items:
+        if not item.confidence_rationale:
+            continue
+        item.confidence_rationale = ""
         purged_anything = True
 
     if purged_anything:
