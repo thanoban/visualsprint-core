@@ -323,3 +323,10 @@ export interface OrgSettingsOut {
   retention_days: number | null;
   join_policy: string;
 }
+
+/** Element of GET /api/v1/orgs/{org_id}/connections */
+export interface ConnectionOut {
+  provider: string;
+  account_email: string;
+  connected_at: string;
+}

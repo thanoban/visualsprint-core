@@ -32,6 +32,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/data-rights" className="hover:text-brand-600 transition-colors">
                 Data rights
               </Link>
+              <Link href="/settings/connections" className="hover:text-brand-600 transition-colors">
+                Connections
+              </Link>
             </nav>
           </div>
         </header>

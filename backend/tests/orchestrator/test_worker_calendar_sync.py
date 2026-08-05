@@ -116,6 +116,64 @@ async def test_unknown_provider_is_skipped_not_fatal(db):
     await worker._sync_all_calendars(db)  # must not raise, no adapter matches
 
 
-async def test_get_calendar_adapters_covers_google_and_microsoft():
-    adapters = worker._get_calendar_adapters()
-    assert set(adapters.keys()) == {"google", "microsoft"}
+async def test_google_connection_gets_a_real_per_connection_oauth_token_provider(db, monkeypatch):
+    """Without the _calendar_adapters test-injection override set, a google
+    connection must build a real OAuthTokenProvider bound to ITS OWN
+    secret_ref -- not a single shared instance every org's connection
+    would otherwise collide on."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    connection = _connection(db, org, "google")
+
+    monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        adapter = worker._get_calendar_adapter_for_connection(connection)
+    finally:
+        get_settings.cache_clear()
+
+    from app.adapters.calendar_google import GoogleCalendarAdapter
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+
+    assert isinstance(adapter, GoogleCalendarAdapter)
+    assert isinstance(adapter._tokens, OAuthTokenProvider)
+    assert adapter._tokens._secret_ref == connection.secret_ref
+
+
+async def test_microsoft_connection_still_falls_back_to_the_unconfigured_stub(db):
+    """No Microsoft Graph OAuth app registered yet -- same loud-failure
+    stub as before, just built per-connection now for consistency."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    connection = _connection(db, org, "microsoft")
+
+    adapter = worker._get_calendar_adapter_for_connection(connection)
+
+    from app.capture.token_provider import UnconfiguredTokenProvider
+
+    assert isinstance(adapter._tokens, UnconfiguredTokenProvider)
+
+
+async def test_a_google_connection_with_no_oauth_app_configured_is_skipped_not_fatal(db, monkeypatch):
+    """Real deployments may have Google OAuth unconfigured for a while
+    after a connection already exists (e.g. mid-setup) -- that must not
+    crash the sweep for every other org's connections."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    _connection(db, org, "google")
+
+    monkeypatch.delenv("VS_GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("VS_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        await worker._sync_all_calendars(db)  # must not raise
+    finally:
+        get_settings.cache_clear()

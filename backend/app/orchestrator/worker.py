@@ -126,44 +126,64 @@ def _get_platform_adapters():
     return _platform_adapters
 
 
-def _get_calendar_adapters():
-    """Same maturity level as _get_platform_adapters: real OAuth isn't
-    configured yet, so every CalendarConnection currently fails loudly when
-    synced -- caught and logged per-connection in _sync_all_calendars, never
-    crashes the worker or blocks other connections."""
-    global _calendar_adapters
-    if _calendar_adapters is None:
-        from app.adapters.calendar_google import GoogleCalendarAdapter
-        from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
-        from app.capture.token_provider import UnconfiguredTokenProvider
+def _get_calendar_adapter_for_connection(connection):
+    """Returns an adapter for this specific CalendarConnection.
 
-        _calendar_adapters = {
-            "google": GoogleCalendarAdapter(
-                token_provider=UnconfiguredTokenProvider("Google Calendar OAuth not configured")
-            ),
-            "microsoft": MicrosoftCalendarAdapter(
-                token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured")
-            ),
-        }
-    return _calendar_adapters
+    If `_calendar_adapters` (the module-level test-injection seam) is set,
+    it's used directly by provider name -- the same override every
+    existing calendar-sync test already relies on, unchanged.
+
+    Otherwise builds a real per-connection adapter: google now has a real
+    OAuth grant behind it (app/api/oauth.py's callback wrote
+    connection.secret_ref), so its token provider reads and refreshes that
+    specific connection's tokens -- not a single shared instance for every
+    org's Google connection, which is what this used to do and would have
+    been wrong the moment more than one org connected. microsoft has no
+    OAuth app registered yet, so it keeps the loud-failure stub."""
+    if _calendar_adapters is not None:
+        return _calendar_adapters.get(connection.provider)
+
+    from app.adapters.calendar_google import GoogleCalendarAdapter
+    from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
+    from app.adapters.secretstore_gcp import get_secretstore
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+    from app.capture.token_provider import UnconfiguredTokenProvider
+    from app.oauth.providers import get_provider_config
+
+    settings = get_settings()
+    if connection.provider == "google":
+        token_provider = OAuthTokenProvider(
+            secret_ref=connection.secret_ref,
+            provider_config=get_provider_config("google", settings),
+            secret_store=get_secretstore(),
+        )
+        return GoogleCalendarAdapter(token_provider=token_provider)
+    if connection.provider == "microsoft":
+        return MicrosoftCalendarAdapter(
+            token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured")
+        )
+    return None
 
 
 async def _sync_all_calendars(db: object) -> None:
     """One pass over every CalendarConnection (app/orchestrator/scheduler.py
     docstring: "not wired to a live cron yet... today it's invoked directly
     (ops script or test)" -- this is that periodic caller). A failure on one
-    connection (bad/expired token, API outage) is logged and skipped, never
-    stops the rest -- one org's broken calendar link must not silently
-    starve every other org's meeting discovery."""
+    connection (bad/expired token, API outage, missing OAuth app config) is
+    logged and skipped, never stops the rest -- one org's broken calendar
+    link must not silently starve every other org's meeting discovery."""
     from sqlalchemy import select
 
     from app.db.models import CalendarConnection
     from app.orchestrator.scheduler import sync_calendar_connection
 
-    adapters = _get_calendar_adapters()
     connections = db.execute(select(CalendarConnection)).scalars().all()
     for connection in connections:
-        adapter = adapters.get(connection.provider)
+        try:
+            adapter = _get_calendar_adapter_for_connection(connection)
+        except Exception as exc:
+            log.warning("calendar_sync.adapter_unavailable", connection=connection.id, error=str(exc))
+            continue
         if adapter is None:
             log.warning(
                 "calendar_sync.unknown_provider",

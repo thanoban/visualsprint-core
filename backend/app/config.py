@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # authorizes it individually via the standard redirect-consent flow,
     # never by pasting an API key. See CalendarConnection/secret_ref.) ---
     oauth_redirect_base_url: str = "http://localhost:8000"
+    # Where a completed connection redirects the user's browser back to
+    # (frontend/app/settings/connections/page.tsx) -- separate from
+    # oauth_redirect_base_url, which is the *backend's* own callback URL
+    # registered with each vendor.
+    frontend_base_url: str = "http://localhost:3000"
     # Signs the OAuth `state` param (app/oauth/flow.py) so a callback can
     # trust which org a grant belongs to without a separate state-storage
     # table. Required in any environment serving real traffic -- unset is
