@@ -27,6 +27,8 @@ def _oauth_env(monkeypatch):
     monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "slack-csecret")
     monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_ID", "jira-cid")
     monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_SECRET", "jira-csecret")
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_ID", "zoom-cid")
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_SECRET", "zoom-csecret")
     monkeypatch.setenv("VS_OAUTH_REDIRECT_BASE_URL", "https://api.test")
     monkeypatch.setenv("VS_FRONTEND_BASE_URL", "https://app.test")
     yield
@@ -180,27 +182,22 @@ def test_callback_reconnecting_updates_the_existing_connection_not_a_duplicate(
     assert connections[0].secret_ref == "oauth/google/existing"  # unchanged, not regenerated
 
 
-def test_callback_400s_for_a_provider_with_no_connection_upsert_wired_yet(client, db_session, monkeypatch):
+def test_callback_400s_for_an_unknown_provider_name(client, db_session):
+    """All six real vendors are wired now -- the "not wired up yet" branch
+    is purely defensive for a hypothetical future ActionKind/provider,
+    unreachable through the normal flow since get_provider_config already
+    rejects anything not in its PROVIDERS map before this branch is
+    reached. Exercised here by forging a state for a name that was never
+    registered."""
     org = _seed_org(db_session)
-    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_ID", "zoom-cid")
-    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_SECRET", "zoom-csecret")
-    get_settings.cache_clear()
-    state = sign_state(org_id=org.id, provider="zoom", secret="test-signing-secret")
+    state = sign_state(org_id=org.id, provider="not-a-real-vendor", secret="test-signing-secret")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"access_token": "at-1"})
-
-    app.dependency_overrides[get_http_client] = _override_http_client(handler)
-    try:
-        resp = client.get(
-            "/api/v1/oauth/zoom/callback", params={"code": "c", "state": state},
-            follow_redirects=False,
-        )
-    finally:
-        app.dependency_overrides.pop(get_http_client, None)
+    resp = client.get(
+        "/api/v1/oauth/not-a-real-vendor/callback", params={"code": "c", "state": state},
+        follow_redirects=False,
+    )
 
     assert resp.status_code == 400
-    assert "not wired up yet" in resp.json()["detail"]
 
 
 def test_list_connections_404s_for_unknown_org(client):
@@ -492,6 +489,60 @@ def test_callback_502s_when_jira_account_has_no_accessible_sites(client, db_sess
     try:
         resp = client.get(
             "/api/v1/oauth/jira/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code == 502
+
+
+def test_callback_creates_a_zoom_org_connection_with_account_id_as_external_id(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="zoom", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(200, json={"access_token": "zoom-token", "expires_in": 3600})
+        if request.url.path == "/v2/users/me":
+            assert request.headers["authorization"] == "Bearer zoom-token"
+            return httpx.Response(
+                200, json={"account_id": "Abc123XYZ", "email": "ops@acme.test"}
+            )
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/zoom/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    connection = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "zoom")
+        .one()
+    )
+    assert connection.account_label == "ops@acme.test"
+    assert connection.external_id == "Abc123XYZ"
+
+
+def test_callback_502s_when_zoom_users_me_omits_account_id(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="zoom", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(200, json={"access_token": "zoom-token"})
+        return httpx.Response(200, json={"email": "ops@acme.test"})  # no account_id
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/zoom/callback", params={"code": "c", "state": state},
             follow_redirects=False,
         )
     finally:

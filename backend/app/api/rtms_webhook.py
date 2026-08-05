@@ -12,6 +12,15 @@ running first.
 In-process task tracking means a worker restart mid-stream loses that
 session -- same maturity level as every other vendor path in this codebase,
 which is all credential-unconfigured and untested against a live vendor.
+
+Multi-tenant org routing: this one webhook endpoint receives events from
+every Zoom account that's authorized VisualSprint's General OAuth App
+(app/api/oauth.py, VS_ZOOM_OAUTH_CLIENT_ID -- separate from the RTMS
+Server-to-Server app below), so `meeting.rtms_started` must resolve which
+org each event belongs to via `_resolve_org_for_zoom_account` rather than
+assuming a single account, as an earlier version of this file did (it
+routed every webhook to one hardcoded "default" org, which only worked
+because no second account had ever connected).
 """
 
 import asyncio
@@ -26,7 +35,7 @@ from app.capture.rtms_client import RtmsResult, RtmsSession, WebSocketConnector
 from app.capture.rtms_protocol import compute_webhook_validation_response
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import AudioTrack, CaptureSession, Meeting, Org
+from app.db.models import AudioTrack, CaptureSession, Meeting, Org, OrgConnection
 from app.orchestrator.queue import enqueue_stage
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["rtms"])
@@ -54,6 +63,34 @@ def _get_org_by_default(db: Session) -> Org:
         db.add(org)
         db.flush()
     return org
+
+
+def _resolve_org_for_zoom_account(db: Session, account_id: str | None) -> Org:
+    """Maps an incoming webhook to the org that connected this Zoom
+    account (app/api/oauth.py's Zoom callback stores the account_id as
+    OrgConnection.external_id at connect time) -- one webhook endpoint is
+    shared across every account that's authorized the app, with no other
+    field to tell them apart.
+
+    Falls back to the single "default" org when account_id is missing or
+    doesn't match a connection: RTMS's exact webhook payload shape for
+    account_id is not live-verified against a real Zoom webhook (no app
+    is registered yet, same maturity level as every other vendor
+    integration in this codebase, and public documentation on this
+    specific field was inconsistent when checked) -- if that assumption
+    turns out wrong, this must degrade to today's single-account behavior
+    rather than silently misroute or crash a real capture."""
+    if account_id:
+        connection = (
+            db.query(OrgConnection)
+            .filter(OrgConnection.provider == "zoom", OrgConnection.external_id == account_id)
+            .one_or_none()
+        )
+        if connection is not None:
+            org = db.get(Org, connection.org_id)
+            if org is not None:
+                return org
+    return _get_org_by_default(db)
 
 
 async def _run_stream(
@@ -93,7 +130,11 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         rtms_stream_id = payload["rtms_stream_id"]
         server_urls = payload["server_urls"]
 
-        org = _get_org_by_default(db)
+        # account_id's presence/exact position in this specific payload is
+        # unverified (see _resolve_org_for_zoom_account) -- .get(), never
+        # [], so a wrong assumption here degrades to the old single-org
+        # behavior instead of a 500 on every webhook.
+        org = _resolve_org_for_zoom_account(db, payload.get("account_id"))
         meeting = (
             db.query(Meeting)
             .filter(Meeting.platform == "zoom", Meeting.platform_meeting_id == meeting_uuid)

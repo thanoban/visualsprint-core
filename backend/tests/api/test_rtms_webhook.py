@@ -7,7 +7,15 @@ import pytest
 
 from app.api import rtms_webhook
 from app.config import get_settings
-from app.db.models import AudioTrack, CaptureSession, ConsentRecord, Meeting, PipelineJob
+from app.db.models import (
+    AudioTrack,
+    CaptureSession,
+    ConsentRecord,
+    Meeting,
+    Org,
+    OrgConnection,
+    PipelineJob,
+)
 
 
 class FakeWsConn:
@@ -159,3 +167,88 @@ def test_unhandled_event_400s(client):
     )
 
     assert resp.status_code == 400
+
+
+def test_resolve_org_for_zoom_account_falls_back_to_default_when_account_id_is_none(db_session):
+    org = rtms_webhook._resolve_org_for_zoom_account(db_session, None)
+    assert org.name == "default"
+
+
+def test_resolve_org_for_zoom_account_falls_back_to_default_when_unrecognized(db_session):
+    org = rtms_webhook._resolve_org_for_zoom_account(db_session, "some-other-account-id")
+    assert org.name == "default"
+
+
+def test_resolve_org_for_zoom_account_finds_the_connected_org(db_session):
+    connected_org = Org(name="acme")
+    db_session.add(connected_org)
+    db_session.flush()
+    db_session.add(
+        OrgConnection(
+            org_id=connected_org.id,
+            provider="zoom",
+            account_label="ops@acme.test",
+            external_id="zoom-account-abc",
+            secret_ref="oauth/zoom/x",
+        )
+    )
+    db_session.commit()
+
+    org = rtms_webhook._resolve_org_for_zoom_account(db_session, "zoom-account-abc")
+
+    assert org.id == connected_org.id
+
+
+async def test_rtms_started_routes_to_the_connected_org_not_default(client, db_session):
+    """The regression this whole fix closes: two different Zoom accounts
+    must land in two different orgs, not both collapse into "default"."""
+    connected_org = Org(name="acme")
+    db_session.add(connected_org)
+    db_session.flush()
+    db_session.add(
+        OrgConnection(
+            org_id=connected_org.id,
+            provider="zoom",
+            account_label="ops@acme.test",
+            external_id="zoom-account-abc",
+            secret_ref="oauth/zoom/x",
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        json={
+            "event": "meeting.rtms_started",
+            "payload": {
+                "account_id": "zoom-account-abc",
+                "meeting_uuid": "muid-acme",
+                "rtms_stream_id": "stream-acme",
+                "server_urls": "ws://fake-signaling",
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    meeting = db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-acme").one()
+    assert meeting.org_id == connected_org.id
+
+
+async def test_rtms_started_with_unrecognized_account_id_falls_back_to_default(client, db_session):
+    resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        json={
+            "event": "meeting.rtms_started",
+            "payload": {
+                "account_id": "never-connected",
+                "meeting_uuid": "muid-fallback",
+                "rtms_stream_id": "stream-fallback",
+                "server_urls": "ws://fake-signaling",
+            },
+        },
+    )
+    assert resp.status_code == 200
+
+    meeting = db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-fallback").one()
+    default_org = db_session.query(Org).filter(Org.name == "default").one()
+    assert meeting.org_id == default_org.id

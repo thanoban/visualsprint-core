@@ -7,10 +7,20 @@ google lives in CalendarConnection (Calendar/Meet/Gmail share this one
 OAuth client, and that table already had exactly the columns a Google
 grant needs -- no new table for it). github/linear/slack/jira/zoom live in
 OrgConnection (app/db/models.py's comment on why they're separate from
-CalendarConnection). google/github/linear/slack/jira are wired to a real
-connection upsert; zoom lands in its own follow-up (needs a different
-Zoom app type than the Server-to-Server one already registered -- see
-app/capture/rtms_client.py).
+CalendarConnection). All six vendors are wired to a real connection
+upsert.
+
+Zoom is a General OAuth App (VS_ZOOM_OAUTH_CLIENT_ID/_SECRET) -- a
+separate registration from the Server-to-Server app
+(VS_ZOOM_CLIENT_ID/_SECRET, app/capture/rtms_client.py) that authenticates
+the RTMS media-stream handshake itself. Only a General App can be
+authorized by a customer's own Zoom account; S2S apps grant access to a
+single account only and can't be installed by anyone else (confirmed
+against Zoom's developer docs before building this). This OAuth grant's
+job is identifying *which org* an incoming RTMS webhook belongs to
+(app/api/rtms_webhook.py resolves it via OrgConnection.external_id =
+Zoom account_id) -- it never touches the stream handshake, which stays
+authenticated as VisualSprint's own S2S app regardless of customer.
 """
 
 import httpx
@@ -40,6 +50,7 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GITHUB_USER_URL = "https://api.github.com/user"
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
+ZOOM_USER_URL = "https://api.zoom.us/v2/users/me"
 
 
 class ConnectionOut(BaseModel):
@@ -146,6 +157,8 @@ async def oauth_callback(
         await _finish_slack_connection(db, org_id, token_set)
     elif provider == "jira":
         await _finish_jira_connection(db, org_id, token_set, http_client)
+    elif provider == "zoom":
+        await _finish_zoom_connection(db, org_id, token_set, http_client)
     else:
         raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
 
@@ -289,3 +302,24 @@ async def _finish_jira_connection(
         raise HTTPException(502, "Atlassian accessible-resources response missing url/id")
 
     await _upsert_org_connection(db, org_id, "jira", site_url, token_set, external_id=cloud_id)
+
+
+async def _finish_zoom_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    """external_id=account_id is the whole point of this connection --
+    app/api/rtms_webhook.py maps an incoming RTMS webhook's account_id
+    back to this org through it, since Zoom sends one webhook endpoint
+    shared across every account that's authorized this app, with no other
+    way to tell them apart."""
+    resp = await http_client.get(
+        ZOOM_USER_URL, headers={"Authorization": f"Bearer {token_set.access_token}"}
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    account_id = data.get("account_id")
+    email = data.get("email")
+    if not account_id or not email:
+        raise HTTPException(502, "Zoom users/me response did not include account_id/email")
+
+    await _upsert_org_connection(db, org_id, "zoom", email, token_set, external_id=account_id)
