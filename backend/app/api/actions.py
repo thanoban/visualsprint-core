@@ -15,70 +15,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.connectors.errors import ConnectorError
 from app.db.base import get_db
-from app.db.models import (
-    ActionStatus,
-    CalendarConnection,
-    Org,
-    OrgConnection,
-    Person,
-    ProposedAction,
-)
+from app.db.models import ActionStatus, Org, Person, ProposedAction
 from app.interfaces.actions import ActionKind, ActionPayload
+from app.oauth.connection import build_org_token_provider as _build_org_token_provider
+from app.oauth.connection import get_org_connection as _get_org_connection
 from app.orchestrator.audit import log_audit_event
 
 router = APIRouter(prefix="/api/v1", tags=["actions"])
-
-
-def _build_org_token_provider(db: Session, org_id: str, provider: str):
-    """Returns a real OAuthTokenProvider for this org's connection to
-    `provider`, or None if the org hasn't connected it yet (caller falls
-    back to UnconfiguredTokenProvider) -- "google" lives in
-    CalendarConnection (shared with calendar sync), everything else in
-    OrgConnection (app/db/models.py's comment on why they're separate)."""
-    from app.adapters.secretstore_gcp import get_secretstore
-    from app.capture.oauth_token_provider import OAuthTokenProvider
-    from app.oauth.providers import OAuthNotConfiguredError, get_provider_config
-
-    if provider == "google":
-        connection = (
-            db.query(CalendarConnection)
-            .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == "google")
-            .one_or_none()
-        )
-    else:
-        connection = (
-            db.query(OrgConnection)
-            .filter(OrgConnection.org_id == org_id, OrgConnection.provider == provider)
-            .one_or_none()
-        )
-    if connection is None:
-        return None
-
-    try:
-        provider_config = get_provider_config(provider, get_settings())
-    except OAuthNotConfiguredError:
-        # The org connected before the app's own OAuth client_id/secret got
-        # unset or was never configured in this environment -- same as "not
-        # connected" from this connector's point of view.
-        return None
-
-    return OAuthTokenProvider(
-        secret_ref=connection.secret_ref, provider_config=provider_config, secret_store=get_secretstore()
-    )
-
-
-def _get_org_connection(db: Session, org_id: str, provider: str) -> OrgConnection | None:
-    """For connector-specific metadata beyond the token itself -- so far
-    only Jira needs this (cloud_id/site_url, both required to build its
-    api.atlassian.com URLs; see app/connectors/task_create.py)."""
-    return (
-        db.query(OrgConnection)
-        .filter(OrgConnection.org_id == org_id, OrgConnection.provider == provider)
-        .one_or_none()
-    )
 
 
 def _get_connector(db: Session, org_id: str, kind: ActionKind):

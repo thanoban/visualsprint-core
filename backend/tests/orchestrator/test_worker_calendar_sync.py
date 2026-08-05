@@ -132,7 +132,7 @@ async def test_google_connection_gets_a_real_per_connection_oauth_token_provider
 
     get_settings.cache_clear()
     try:
-        adapter = worker._get_calendar_adapter_for_connection(connection)
+        adapter = worker._get_calendar_adapter_for_connection(db, connection)
     finally:
         get_settings.cache_clear()
 
@@ -157,7 +157,7 @@ async def test_microsoft_connection_gets_a_real_per_connection_oauth_token_provi
 
     get_settings.cache_clear()
     try:
-        adapter = worker._get_calendar_adapter_for_connection(connection)
+        adapter = worker._get_calendar_adapter_for_connection(db, connection)
     finally:
         get_settings.cache_clear()
 

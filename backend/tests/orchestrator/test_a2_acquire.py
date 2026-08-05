@@ -7,10 +7,12 @@ import app.orchestrator.worker as worker
 from app.db.base import Base
 from app.db.models import (
     AudioTrack,
+    CalendarConnection,
     CaptureSession,
     ConsentRecord,
     Meeting,
     Org,
+    OrgConnection,
     Participant,
     Person,
     PipelineJob,
@@ -201,3 +203,119 @@ async def test_a2_acquire_requires_platform_meeting_id(db, monkeypatch):
 
     with pytest.raises(RuntimeError, match="platform_meeting_id"):
         await worker._handle_acquire(db, job)
+
+
+async def test_platform_adapter_unknown_platform_returns_none(db):
+    assert worker._get_platform_adapter_for_session(db, "org-1", "not-a-real-platform") is None
+
+
+async def test_platform_adapter_falls_back_to_unconfigured_when_org_never_connected(db, monkeypatch):
+    """No OrgConnection/CalendarConnection row for this org+platform --
+    still returns a real adapter (not None), just one whose token
+    provider fails loudly and specifically when actually used, matching
+    every other connector in this codebase rather than a generic
+    "no adapter" error."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.commit()
+    monkeypatch.delenv("VS_ZOOM_OAUTH_CLIENT_ID", raising=False)
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        adapter = worker._get_platform_adapter_for_session(db, org.id, "zoom")
+    finally:
+        get_settings.cache_clear()
+
+    from app.capture.token_provider import UnconfiguredTokenProvider
+    from app.capture.zoom_adapter import ZoomAdapter
+
+    assert isinstance(adapter, ZoomAdapter)
+    assert isinstance(adapter._tokens, UnconfiguredTokenProvider)
+
+
+async def test_platform_adapter_uses_a_real_per_org_token_provider_when_connected(db, monkeypatch):
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    db.add(
+        OrgConnection(
+            org_id=org.id, provider="zoom", account_label="ops@acme.test", external_id="zoom-acc",
+            secret_ref="oauth/zoom/x",
+        )
+    )
+    db.commit()
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        adapter = worker._get_platform_adapter_for_session(db, org.id, "zoom")
+    finally:
+        get_settings.cache_clear()
+
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+
+    assert isinstance(adapter._tokens, OAuthTokenProvider)
+    assert adapter._tokens._secret_ref == "oauth/zoom/x"
+
+
+async def test_two_orgs_capturing_on_meet_get_their_own_google_connections(db, monkeypatch):
+    """The regression this fix closes: a single shared MeetAdapter across
+    every org would mean org B's Mode A2 acquire could silently use org
+    A's Google Meet token."""
+    org_a = Org(name="org-a")
+    org_b = Org(name="org-b")
+    db.add_all([org_a, org_b])
+    db.flush()
+    db.add(
+        CalendarConnection(
+            org_id=org_a.id, provider="google", account_email="a@acme.test", secret_ref="oauth/google/a"
+        )
+    )
+    db.add(
+        CalendarConnection(
+            org_id=org_b.id, provider="google", account_email="b@acme.test", secret_ref="oauth/google/b"
+        )
+    )
+    db.commit()
+    monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        adapter_a = worker._get_platform_adapter_for_session(db, org_a.id, "meet")
+        adapter_b = worker._get_platform_adapter_for_session(db, org_b.id, "meet")
+    finally:
+        get_settings.cache_clear()
+
+    assert adapter_a._tokens._secret_ref == "oauth/google/a"
+    assert adapter_b._tokens._secret_ref == "oauth/google/b"
+
+
+async def test_teams_platform_adapter_uses_microsoft_oauth(db, monkeypatch):
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    db.add(
+        CalendarConnection(
+            org_id=org.id, provider="microsoft", account_email="ops@acme.test", secret_ref="oauth/microsoft/x"
+        )
+    )
+    db.commit()
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        adapter = worker._get_platform_adapter_for_session(db, org.id, "teams")
+    finally:
+        get_settings.cache_clear()
+
+    from app.capture.teams_adapter import TeamsAdapter
+
+    assert isinstance(adapter, TeamsAdapter)
+    assert adapter._tokens._secret_ref == "oauth/microsoft/x"

@@ -93,49 +93,68 @@ def _get_embedder():
     return _embedder
 
 
-def _get_platform_adapters():
-    """Production adapter registry for official artifact capture.
-
-    Real OAuth providers are intentionally not configured yet. The adapters
-    still sit behind the PlatformAdapter protocol, and tests override this
-    registry with fakes so the worker contract stays credential-free.
-    """
-    global _platform_adapters
-    if _platform_adapters is None:
-        from app.adapters.blobstore_s3 import get_blobstore
-        from app.capture.meet_adapter import MeetAdapter
-        from app.capture.teams_adapter import TeamsAdapter
-        from app.capture.token_provider import UnconfiguredTokenProvider
-        from app.capture.zoom_adapter import ZoomAdapter
-
-        blob_store = get_blobstore()
-        _platform_adapters = {
-            "meet": MeetAdapter(
-                token_provider=UnconfiguredTokenProvider("Google Meet OAuth not configured"),
-                blob_store=blob_store,
-            ),
-            "zoom": ZoomAdapter(
-                token_provider=UnconfiguredTokenProvider("Zoom OAuth not configured"),
-                blob_store=blob_store,
-            ),
-            "teams": TeamsAdapter(
-                token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured"),
-                blob_store=blob_store,
-            ),
-        }
-    return _platform_adapters
+# platform (Meeting.platform / CaptureArtifacts source) -> the OAuth
+# provider name that grants access to it. "zoom" capture and "zoom" OAuth
+# happen to share a name; meet/teams don't.
+_PLATFORM_TO_OAUTH_PROVIDER = {"meet": "google", "zoom": "zoom", "teams": "microsoft"}
 
 
-def _get_calendar_adapter_for_connection(connection):
+def _get_platform_adapter_for_session(db: object, org_id: str, platform: str | None):
+    """Returns a PlatformAdapter for this org's Mode A2 capture on
+    `platform`, or None if unavailable.
+
+    If `_platform_adapters` (the module-level test-injection seam) is
+    set, it's used directly by platform name -- the same override every
+    existing Mode A2 test already relies on, unchanged.
+
+    Otherwise builds a real per-org adapter via app/oauth/connection.py's
+    shared lookup -- each org's own OAuth grant, not a single shared
+    UnconfiguredTokenProvider instance for every org capturing on a given
+    platform, which is what this used to do and would have been wrong
+    the moment a second org connected the same platform (same bug class
+    already fixed for calendar sync and the action-connector registry)."""
+    if _platform_adapters is not None:
+        return _platform_adapters.get(platform)
+
+    provider = _PLATFORM_TO_OAUTH_PROVIDER.get(platform)
+    if provider is None:
+        return None
+
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.capture.meet_adapter import MeetAdapter
+    from app.capture.teams_adapter import TeamsAdapter
+    from app.capture.token_provider import UnconfiguredTokenProvider
+    from app.capture.zoom_adapter import ZoomAdapter
+    from app.oauth.connection import build_org_token_provider
+
+    reasons = {
+        "meet": "Google Meet OAuth not configured",
+        "zoom": "Zoom OAuth not configured",
+        "teams": "Microsoft Graph OAuth not configured",
+    }
+    token_provider = build_org_token_provider(db, org_id, provider) or UnconfiguredTokenProvider(
+        reasons[platform]
+    )
+    blob_store = get_blobstore()
+    if platform == "meet":
+        return MeetAdapter(token_provider=token_provider, blob_store=blob_store)
+    if platform == "zoom":
+        return ZoomAdapter(token_provider=token_provider, blob_store=blob_store)
+    if platform == "teams":
+        return TeamsAdapter(token_provider=token_provider, blob_store=blob_store)
+    return None
+
+
+def _get_calendar_adapter_for_connection(db: object, connection):
     """Returns an adapter for this specific CalendarConnection.
 
     If `_calendar_adapters` (the module-level test-injection seam) is set,
     it's used directly by provider name -- the same override every
     existing calendar-sync test already relies on, unchanged.
 
-    Otherwise builds a real per-connection adapter for whichever provider
-    the connection is: google and microsoft both now have real OAuth
-    grants behind them (app/api/oauth.py's callback wrote
+    Otherwise builds a real per-connection adapter via
+    app/oauth/connection.py's shared lookup: google and microsoft both
+    have real OAuth grants behind them (app/api/oauth.py's callback wrote
     connection.secret_ref), so each connection's own token provider reads
     and refreshes that specific connection's tokens -- not a single
     shared instance for every org's connection to a given provider, which
@@ -146,24 +165,14 @@ def _get_calendar_adapter_for_connection(connection):
 
     from app.adapters.calendar_google import GoogleCalendarAdapter
     from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
-    from app.adapters.secretstore_gcp import get_secretstore
-    from app.capture.oauth_token_provider import OAuthTokenProvider
-    from app.oauth.providers import get_provider_config
+    from app.oauth.connection import build_org_token_provider
 
-    settings = get_settings()
+    token_provider = build_org_token_provider(db, connection.org_id, connection.provider)
+    if token_provider is None:
+        return None
     if connection.provider == "google":
-        token_provider = OAuthTokenProvider(
-            secret_ref=connection.secret_ref,
-            provider_config=get_provider_config("google", settings),
-            secret_store=get_secretstore(),
-        )
         return GoogleCalendarAdapter(token_provider=token_provider)
     if connection.provider == "microsoft":
-        token_provider = OAuthTokenProvider(
-            secret_ref=connection.secret_ref,
-            provider_config=get_provider_config("microsoft", settings),
-            secret_store=get_secretstore(),
-        )
         return MicrosoftCalendarAdapter(token_provider=token_provider)
     return None
 
@@ -183,7 +192,7 @@ async def _sync_all_calendars(db: object) -> None:
     connections = db.execute(select(CalendarConnection)).scalars().all()
     for connection in connections:
         try:
-            adapter = _get_calendar_adapter_for_connection(connection)
+            adapter = _get_calendar_adapter_for_connection(db, connection)
         except Exception as exc:
             log.warning("calendar_sync.adapter_unavailable", connection=connection.id, error=str(exc))
             continue
@@ -417,7 +426,9 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
             "only Mode D upload and Mode A2 official artifacts are wired"
         )
 
-    adapter = _get_platform_adapters().get(meeting.platform if meeting else None)
+    adapter = _get_platform_adapter_for_session(
+        db, session.org_id, meeting.platform if meeting else None
+    )
     if adapter is None:
         raise RuntimeError(
             f"no PlatformAdapter configured for platform {(meeting.platform if meeting else None)!r}"
