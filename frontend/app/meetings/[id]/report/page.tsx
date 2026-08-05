@@ -178,8 +178,7 @@ function Section({ title, items }: { title: string; items: KnowledgeItem[] }) {
 }
 
 export default function MeetingReportPage({ params }: { params: Promise<{ id: string }> }) {
-  // Next.js 15+ made route params async (this repo runs Next 16, despite
-  // package.json's stale "14.2.15" pin) -- `use()` unwraps the promise in a
+  // Next.js 15+ made route params async -- `use()` unwraps the promise in a
   // client component. Accessing `params.id` directly here silently resolves
   // to undefined and produces a request to `/meetings/undefined/report`.
   const { id } = use(params);
@@ -189,6 +188,9 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
 
   useEffect(() => {
     let cancelled = false;
+    // Resets loading/error for a re-fetch when `id` changes (navigating
+    // between meetings), not a redundant call on initial mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
 

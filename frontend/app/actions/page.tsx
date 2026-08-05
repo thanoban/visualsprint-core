@@ -158,8 +158,6 @@ export default function ActionsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
     resolveDefaultOrgId()
       .then((id) => {
         setOrgId(id);

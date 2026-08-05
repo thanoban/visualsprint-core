@@ -163,6 +163,9 @@ export default function CorrectTranscriptPage({ params }: { params: Promise<{ id
 
   useEffect(() => {
     let cancelled = false;
+    // Resets loading/error for a re-fetch when `id` changes (navigating
+    // between meetings), not a redundant call on initial mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
 

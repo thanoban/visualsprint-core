@@ -31,8 +31,6 @@ export default function GlossaryPage() {
   const [adding, setAdding] = useState(false);
 
   function load() {
-    setLoading(true);
-    setError(null);
     resolveDefaultOrgId()
       .then((id) => {
         setOrgId(id);
