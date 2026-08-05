@@ -3,9 +3,10 @@
 Store all audio as FLAC forever (docs/03-capture.md) — every meeting stays
 re-transcribable as ASR improves. Transcode happens by shelling out to ffmpeg; if
 ffmpeg isn't on PATH in this environment, the source bytes are stored as-is under
-their original extension so the pipeline doesn't stall, with a TODO marker for a
-backfill transcode job. Downstream code must not assume every blob is already FLAC —
-that's tracked by the returned URI's extension.
+their original extension so the pipeline doesn't stall — app/orchestrator/
+transcode_backfill.py's periodic sweep retries these once ffmpeg is provisioned.
+Downstream code must not assume every blob is already FLAC — that's tracked by
+the returned URI's extension.
 """
 
 import shutil
@@ -67,15 +68,13 @@ async def pcm_to_flac_blob(
     equivalent of `download_and_store` for that path. `blob_key` must NOT
     include an extension. Same ffmpeg-unavailable fallback convention as
     `download_and_store`: store the WAV untranscoded rather than stall the
-    pipeline, with the same backfill-job TODO."""
+    pipeline; app/orchestrator/transcode_backfill.py retries it later."""
     wav_bytes = _pcm_to_wav(pcm_bytes, sample_rate=sample_rate, channels=channels)
 
     flac_bytes = transcode_to_flac(wav_bytes, ".wav")
     if flac_bytes is not None:
         return await blob_store.put(f"{blob_key}.flac", flac_bytes, content_type=FLAC_CONTENT_TYPE)
 
-    # TODO(ffmpeg-unavailable): store source bytes untranscoded; a backfill job must
-    # convert these to FLAC once ffmpeg is provisioned in the runtime environment.
     return await blob_store.put(f"{blob_key}.wav", wav_bytes, content_type="audio/wav")
 
 
@@ -100,8 +99,8 @@ async def download_and_store(
     if flac_bytes is not None:
         return await blob_store.put(f"{blob_key}.flac", flac_bytes, content_type=FLAC_CONTENT_TYPE)
 
-    # TODO(ffmpeg-unavailable): store source bytes untranscoded; a backfill job must
-    # convert these to FLAC once ffmpeg is provisioned in the runtime environment.
+    # ffmpeg unavailable -- store untranscoded rather than stall the pipeline;
+    # app/orchestrator/transcode_backfill.py retries this once ffmpeg is provisioned.
     return await blob_store.put(
         f"{blob_key}{source_suffix}", raw, content_type=FALLBACK_CONTENT_TYPE
     )
