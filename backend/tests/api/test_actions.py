@@ -7,15 +7,19 @@ state-machine guards (can't approve/reject twice, can't approve straight
 into EXECUTED without a connector attempt).
 """
 
+from app.api.actions import _build_org_token_provider, _get_connector
 from app.db.models import (
     ActionStatus,
     AuditLog,
+    CalendarConnection,
     CaptureSession,
     Meeting,
     Org,
+    OrgConnection,
     Person,
     ProposedAction,
 )
+from app.interfaces.actions import ActionKind
 
 
 def _seed(db, *, kind: str = "email_draft", target: dict | None = None):
@@ -245,3 +249,93 @@ def test_reject_with_no_body_still_works_and_attributes_to_system(client, db_ses
     assert resp.status_code == 200, resp.text
     entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
     assert entry.actor == "system"
+
+
+def test_build_org_token_provider_returns_none_when_org_has_no_connection(db_session):
+    org = Org(name="acme")
+    db_session.add(org)
+    db_session.commit()
+
+    assert _build_org_token_provider(db_session, org.id, "slack") is None
+
+
+def test_build_org_token_provider_returns_a_real_provider_bound_to_this_orgs_connection(
+    db_session, monkeypatch
+):
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    org = Org(name="acme")
+    db_session.add(org)
+    db_session.flush()
+    db_session.add(
+        OrgConnection(
+            org_id=org.id, provider="slack", account_label="Acme Workspace", secret_ref="oauth/slack/x"
+        )
+    )
+    db_session.commit()
+
+    try:
+        provider = _build_org_token_provider(db_session, org.id, "slack")
+    finally:
+        get_settings.cache_clear()
+
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+
+    assert isinstance(provider, OAuthTokenProvider)
+    assert provider._secret_ref == "oauth/slack/x"
+
+
+def test_two_orgs_connectors_use_their_own_connections_not_each_others(db_session, monkeypatch):
+    """The bug this refactor fixes: a single shared connector instance
+    across every org would mean org B's escalation could silently execute
+    using org A's Slack token. Each org must resolve its own connection."""
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    org_a = Org(name="org-a")
+    org_b = Org(name="org-b")
+    db_session.add_all([org_a, org_b])
+    db_session.flush()
+    db_session.add(
+        OrgConnection(org_id=org_a.id, provider="slack", account_label="A", secret_ref="oauth/slack/a")
+    )
+    db_session.add(
+        OrgConnection(org_id=org_b.id, provider="slack", account_label="B", secret_ref="oauth/slack/b")
+    )
+    db_session.commit()
+
+    try:
+        connector_a = _get_connector(db_session, org_a.id, ActionKind.ESCALATION)
+        connector_b = _get_connector(db_session, org_b.id, ActionKind.ESCALATION)
+    finally:
+        get_settings.cache_clear()
+
+    assert connector_a._delegate._slack_tokens._secret_ref == "oauth/slack/a"
+    assert connector_b._delegate._slack_tokens._secret_ref == "oauth/slack/b"
+
+
+def test_get_connector_falls_back_to_unconfigured_when_google_client_isnt_set_up(db_session):
+    """A CalendarConnection row existing doesn't help if the app's own
+    Google OAuth client (VS_GOOGLE_OAUTH_CLIENT_ID/_SECRET) was never
+    configured in this environment -- must degrade to the same clear
+    "not configured" error as no connection at all, not crash."""
+    org = Org(name="acme")
+    db_session.add(org)
+    db_session.flush()
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id, provider="google", account_email="team@acme.test", secret_ref="oauth/google/x"
+        )
+    )
+    db_session.commit()
+
+    from app.capture.token_provider import UnconfiguredTokenProvider
+
+    connector = _get_connector(db_session, org.id, ActionKind.EMAIL_DRAFT)
+
+    assert isinstance(connector._tokens, UnconfiguredTokenProvider)

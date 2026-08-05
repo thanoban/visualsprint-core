@@ -15,68 +15,113 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.connectors.errors import ConnectorError
 from app.db.base import get_db
-from app.db.models import ActionStatus, Org, Person, ProposedAction
+from app.db.models import (
+    ActionStatus,
+    CalendarConnection,
+    Org,
+    OrgConnection,
+    Person,
+    ProposedAction,
+)
 from app.interfaces.actions import ActionKind, ActionPayload
 from app.orchestrator.audit import log_audit_event
 
 router = APIRouter(prefix="/api/v1", tags=["actions"])
 
-_connectors: dict[str, object] = {}
+
+def _build_org_token_provider(db: Session, org_id: str, provider: str):
+    """Returns a real OAuthTokenProvider for this org's connection to
+    `provider`, or None if the org hasn't connected it yet (caller falls
+    back to UnconfiguredTokenProvider) -- "google" lives in
+    CalendarConnection (shared with calendar sync), everything else in
+    OrgConnection (app/db/models.py's comment on why they're separate)."""
+    from app.adapters.secretstore_gcp import get_secretstore
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+    from app.oauth.providers import OAuthNotConfiguredError, get_provider_config
+
+    if provider == "google":
+        connection = (
+            db.query(CalendarConnection)
+            .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == "google")
+            .one_or_none()
+        )
+    else:
+        connection = (
+            db.query(OrgConnection)
+            .filter(OrgConnection.org_id == org_id, OrgConnection.provider == provider)
+            .one_or_none()
+        )
+    if connection is None:
+        return None
+
+    try:
+        provider_config = get_provider_config(provider, get_settings())
+    except OAuthNotConfiguredError:
+        # The org connected before the app's own OAuth client_id/secret got
+        # unset or was never configured in this environment -- same as "not
+        # connected" from this connector's point of view.
+        return None
+
+    return OAuthTokenProvider(
+        secret_ref=connection.secret_ref, provider_config=provider_config, secret_store=get_secretstore()
+    )
 
 
-def _get_connector(kind: ActionKind):
-    """Lazy per-kind singleton, same pattern as worker.py's
-    `_get_platform_adapters` — real credentials aren't configured yet, so
-    every connector is wired with `UnconfiguredTokenProvider` and fails
-    loudly and clearly inside `execute()` rather than here."""
-    if kind.value not in _connectors:
-        from app.capture.token_provider import UnconfiguredTokenProvider
+def _get_connector(db: Session, org_id: str, kind: ActionKind):
+    """Built fresh per call, not cached -- unlike before real OAuth
+    existed, which org's connection backs a connector can change at any
+    time (connect/reconnect a vendor), and this only runs when a human
+    clicks Approve, not a hot path where rebuilding a few small objects
+    plus one or two indexed queries would matter."""
+    from app.capture.token_provider import UnconfiguredTokenProvider
 
-        if kind == ActionKind.EMAIL_DRAFT:
-            from app.connectors.email_draft import EmailDraftConnector
+    def _token_provider_for(provider: str, reason: str):
+        return _build_org_token_provider(db, org_id, provider) or UnconfiguredTokenProvider(reason)
 
-            _connectors[kind.value] = EmailDraftConnector(
-                token_provider=UnconfiguredTokenProvider("Gmail OAuth not configured"),
-            )
-        elif kind == ActionKind.CHANNEL_RECAP:
-            from app.connectors.channel_recap import ChannelRecapConnector
+    if kind == ActionKind.EMAIL_DRAFT:
+        from app.connectors.email_draft import EmailDraftConnector
 
-            _connectors[kind.value] = ChannelRecapConnector(
-                slack_token_provider=UnconfiguredTokenProvider("Slack bot token not configured"),
-            )
-        elif kind == ActionKind.TASK_CREATE:
-            from app.connectors.task_create import TaskCreateConnector
+        return EmailDraftConnector(
+            token_provider=_token_provider_for("google", "Gmail OAuth not configured")
+        )
+    if kind == ActionKind.CHANNEL_RECAP:
+        from app.connectors.channel_recap import ChannelRecapConnector
 
-            _connectors[kind.value] = TaskCreateConnector(
-                jira_token_provider=UnconfiguredTokenProvider("Jira API token not configured"),
-                github_token_provider=UnconfiguredTokenProvider("GitHub PAT not configured"),
-                linear_token_provider=UnconfiguredTokenProvider("Linear API key not configured"),
-            )
-        elif kind == ActionKind.CALENDAR_FOLLOWUP:
-            from app.connectors.calendar_followup import CalendarFollowupConnector
+        return ChannelRecapConnector(
+            slack_token_provider=_token_provider_for("slack", "Slack bot token not configured")
+        )
+    if kind == ActionKind.TASK_CREATE:
+        from app.connectors.task_create import TaskCreateConnector
 
-            _connectors[kind.value] = CalendarFollowupConnector(
-                token_provider=UnconfiguredTokenProvider("Google Calendar OAuth not configured"),
-            )
-        elif kind == ActionKind.ESCALATION:
-            from app.connectors.escalation import EscalationConnector
+        return TaskCreateConnector(
+            jira_token_provider=_token_provider_for("jira", "Jira API token not configured"),
+            github_token_provider=_token_provider_for("github", "GitHub PAT not configured"),
+            linear_token_provider=_token_provider_for("linear", "Linear API key not configured"),
+        )
+    if kind == ActionKind.CALENDAR_FOLLOWUP:
+        from app.connectors.calendar_followup import CalendarFollowupConnector
 
-            _connectors[kind.value] = EscalationConnector(
-                slack_token_provider=UnconfiguredTokenProvider("Slack bot token not configured"),
-            )
-        elif kind == ActionKind.REMINDER:
-            from app.connectors.reminder import ReminderConnector
+        return CalendarFollowupConnector(
+            token_provider=_token_provider_for("google", "Google Calendar OAuth not configured")
+        )
+    if kind == ActionKind.ESCALATION:
+        from app.connectors.escalation import EscalationConnector
 
-            _connectors[kind.value] = ReminderConnector(
-                token_provider=UnconfiguredTokenProvider("Gmail OAuth not configured"),
-            )
-        else:
-            # Defensive fallback for a future ActionKind added to the enum
-            # without a matching branch here -- every current kind has one.
-            raise ConnectorError(f"no connector implemented yet for action kind {kind.value!r}")
-    return _connectors[kind.value]
+        return EscalationConnector(
+            slack_token_provider=_token_provider_for("slack", "Slack bot token not configured")
+        )
+    if kind == ActionKind.REMINDER:
+        from app.connectors.reminder import ReminderConnector
+
+        return ReminderConnector(
+            token_provider=_token_provider_for("google", "Gmail OAuth not configured")
+        )
+    # Defensive fallback for a future ActionKind added to the enum without a
+    # matching branch here -- every current kind has one.
+    raise ConnectorError(f"no connector implemented yet for action kind {kind.value!r}")
 
 
 class ProposedActionOut(BaseModel):
@@ -170,7 +215,7 @@ async def approve_action(
 
     try:
         kind = ActionKind(action.kind)
-        connector = _get_connector(kind)
+        connector = _get_connector(db, action.org_id, kind)
         payload = ActionPayload(
             kind=kind,
             title=action.payload.get("title", ""),
