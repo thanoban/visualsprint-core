@@ -88,6 +88,34 @@ class CalendarConnection(TimestampMixin, Base):
     watch_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class OrgConnection(TimestampMixin, Base):
+    """Non-calendar OAuth vendor grants -- Slack/Jira/GitHub/Linear/Zoom.
+
+    CalendarConnection above predates this and stays as-is for
+    google/microsoft (it already had exactly the columns a calendar
+    grant needs, no reason to migrate working rows). This table exists
+    because those five vendors aren't calendars: no watch_expires_at,
+    and account identity varies enough per vendor (a Slack workspace, a
+    GitHub username, an Atlassian site) that a single `account_label`
+    plus an optional `external_id` (e.g. Jira's cloudId, needed to build
+    that vendor's API URLs -- see app/connectors/task_create.py) covers
+    all of them without vendor-specific columns."""
+
+    __tablename__ = "org_connection"
+    __table_args__ = (
+        Index("ix_orgconn_org", "org_id"),
+        Index("ix_orgconn_org_provider", "org_id", "provider", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    provider: Mapped[str] = mapped_column(String(32))  # slack | jira | github | linear | zoom
+    account_label: Mapped[str] = mapped_column(String(320))  # workspace/site/username, human-readable
+    external_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    # OAuth tokens live in a secret store, not here; this row holds the reference.
+    secret_ref: Mapped[str] = mapped_column(String(255))
+
+
 # --------------------------------------------------------------------------- #
 # Meetings & capture
 # --------------------------------------------------------------------------- #
