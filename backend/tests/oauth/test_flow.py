@@ -9,6 +9,7 @@ import pytest
 
 from app.oauth.flow import (
     OAuthStateError,
+    OAuthTokenExchangeError,
     build_authorize_url,
     exchange_code_for_token,
     refresh_access_token,
@@ -169,3 +170,39 @@ async def test_refresh_uses_a_new_refresh_token_when_the_vendor_rotates_it():
     )
 
     assert token_set.refresh_token == "rt-rotated"
+
+
+async def test_exchange_code_raises_on_slacks_body_level_ok_false():
+    """Slack's oauth.v2.access returns HTTP 200 even on failure --
+    raise_for_status() alone would miss this entirely."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False, "error": "invalid_code"})
+
+    with pytest.raises(OAuthTokenExchangeError, match="invalid_code"):
+        await exchange_code_for_token(
+            CONFIG, code="bad", redirect_uri="https://api.test/callback",
+            http_client=_client_with(handler),
+        )
+
+
+async def test_exchange_code_preserves_the_full_response_body_in_extra():
+    """Slack's token response carries team.name/team.id directly -- no
+    separate userinfo call exists the way Google/GitHub have one, so a
+    callback needs the raw body, not just access_token/refresh_token."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "access_token": "xoxb-1",
+                "team": {"id": "T123", "name": "Acme Workspace"},
+            },
+        )
+
+    token_set = await exchange_code_for_token(
+        CONFIG, code="c", redirect_uri="https://api.test/callback", http_client=_client_with(handler)
+    )
+
+    assert token_set.extra["team"]["name"] == "Acme Workspace"

@@ -7,9 +7,9 @@ google lives in CalendarConnection (Calendar/Meet/Gmail share this one
 OAuth client, and that table already had exactly the columns a Google
 grant needs -- no new table for it). github/linear/slack/jira/zoom live in
 OrgConnection (app/db/models.py's comment on why they're separate from
-CalendarConnection). Only google/github/linear are wired to a real
-connection upsert so far; slack/jira/zoom land in their own follow-ups
-(jira additionally needs its connector rewritten off Basic auth -- see
+CalendarConnection). google/github/linear/slack are wired to a real
+connection upsert; jira/zoom land in their own follow-ups (jira
+additionally needs its connector rewritten off Basic auth -- see
 app/connectors/task_create.py).
 """
 
@@ -25,6 +25,7 @@ from app.db.base import get_db
 from app.db.models import CalendarConnection, Org, OrgConnection
 from app.oauth.flow import (
     OAuthStateError,
+    OAuthTokenExchangeError,
     OAuthTokenSet,
     build_authorize_url,
     exchange_code_for_token,
@@ -131,7 +132,7 @@ async def oauth_callback(
         token_set = await exchange_code_for_token(
             config, code=code, redirect_uri=_callback_redirect_uri(provider), http_client=http_client
         )
-    except httpx.HTTPStatusError as exc:
+    except (httpx.HTTPStatusError, OAuthTokenExchangeError) as exc:
         raise HTTPException(502, f"{provider} rejected the authorization code: {exc}") from exc
 
     if provider == "google":
@@ -140,6 +141,8 @@ async def oauth_callback(
         await _finish_github_connection(db, org_id, token_set, http_client)
     elif provider == "linear":
         await _finish_linear_connection(db, org_id, token_set, http_client)
+    elif provider == "slack":
+        await _finish_slack_connection(db, org_id, token_set)
     else:
         raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
 
@@ -242,3 +245,16 @@ async def _finish_linear_connection(
     if not org_name:
         raise HTTPException(502, "Linear organization query did not return a name")
     await _upsert_org_connection(db, org_id, "linear", org_name, token_set)
+
+
+async def _finish_slack_connection(db: Session, org_id: str, token_set: OAuthTokenSet) -> None:
+    """No separate userinfo call needed -- Slack's oauth.v2.access response
+    already carries team.name/team.id (see app/oauth/flow.py's
+    OAuthTokenSet.extra, which preserves the full body for exactly this)."""
+    team = token_set.extra.get("team") or {}
+    team_name = team.get("name")
+    if not team_name:
+        raise HTTPException(502, "Slack token response did not include a team name")
+    await _upsert_org_connection(
+        db, org_id, "slack", team_name, token_set, external_id=team.get("id")
+    )

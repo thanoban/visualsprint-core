@@ -23,6 +23,8 @@ def _oauth_env(monkeypatch):
     monkeypatch.setenv("VS_GITHUB_OAUTH_CLIENT_SECRET", "github-csecret")
     monkeypatch.setenv("VS_LINEAR_OAUTH_CLIENT_ID", "linear-cid")
     monkeypatch.setenv("VS_LINEAR_OAUTH_CLIENT_SECRET", "linear-csecret")
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "slack-cid")
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "slack-csecret")
     monkeypatch.setenv("VS_OAUTH_REDIRECT_BASE_URL", "https://api.test")
     monkeypatch.setenv("VS_FRONTEND_BASE_URL", "https://app.test")
     yield
@@ -178,10 +180,10 @@ def test_callback_reconnecting_updates_the_existing_connection_not_a_duplicate(
 
 def test_callback_400s_for_a_provider_with_no_connection_upsert_wired_yet(client, db_session, monkeypatch):
     org = _seed_org(db_session)
-    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "slack-cid")
-    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "slack-csecret")
+    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_ID", "jira-cid")
+    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_SECRET", "jira-csecret")
     get_settings.cache_clear()
-    state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
+    state = sign_state(org_id=org.id, provider="jira", secret="test-signing-secret")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": "at-1"})
@@ -189,7 +191,7 @@ def test_callback_400s_for_a_provider_with_no_connection_upsert_wired_yet(client
     app.dependency_overrides[get_http_client] = _override_http_client(handler)
     try:
         resp = client.get(
-            "/api/v1/oauth/slack/callback", params={"code": "c", "state": state},
+            "/api/v1/oauth/jira/callback", params={"code": "c", "state": state},
             follow_redirects=False,
         )
     finally:
@@ -367,3 +369,70 @@ def test_callback_reconnecting_github_updates_the_existing_connection_not_a_dupl
     assert len(connections) == 1
     assert connections[0].account_label == "new-bot"
     assert connections[0].secret_ref == "oauth/github/existing"  # unchanged, not regenerated
+
+
+def test_callback_creates_a_slack_org_connection_with_no_extra_api_call(client, db_session):
+    """Slack's team info comes from the token response itself -- unlike
+    google/github/linear, this callback should make exactly one outbound
+    request (the token exchange), no separate userinfo/GraphQL call."""
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "access_token": "xoxb-1",
+                "team": {"id": "T123", "name": "Acme Workspace"},
+            },
+        )
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/slack/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    assert len(calls) == 1  # token exchange only
+
+    connection = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "slack")
+        .one()
+    )
+    assert connection.account_label == "Acme Workspace"
+    assert connection.external_id == "T123"
+
+
+def test_callback_502s_when_slack_rejects_the_code(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Slack returns HTTP 200 even on failure -- this must still surface
+        # as a clean error, not silently create a connection.
+        return httpx.Response(200, json={"ok": False, "error": "invalid_code"})
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/slack/callback", params={"code": "bad", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code == 502
+    assert (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "slack")
+        .one_or_none()
+        is None
+    )

@@ -14,6 +14,12 @@ this codebase):
   entirely (tokens don't expire) -- treated as "never expires", not an error.
 - `refresh_token` grant reuses the same token endpoint with
   `grant_type=refresh_token`, standard across all five OAuth2 vendors here.
+- Slack's oauth.v2.access always returns HTTP 200, success or failure --
+  errors are `{"ok": false, "error": "..."}` in an otherwise-200 body.
+  Every other vendor here uses HTTP status codes for errors as RFC 6749
+  expects; only Slack needs the body-level `ok` check in
+  _parse_token_response, but it's cheap and harmless to check for every
+  vendor (none of the others use an `ok` key at all).
 """
 
 import base64
@@ -42,6 +48,11 @@ class OAuthTokenSet(BaseModel):
     access_token: str
     refresh_token: str | None = None
     expires_at: datetime | None = None  # None means "does not expire" (e.g. GitHub classic apps)
+    # The full token-response body, verbatim. Slack's oauth.v2.access
+    # response includes team.name/team.id directly here -- there's no
+    # separate "userinfo" endpoint the way Google/GitHub have one, so a
+    # callback needs the raw body, not just the three fields above.
+    extra: dict = {}
 
 
 def build_authorize_url(config: OAuthProviderConfig, *, state: str, redirect_uri: str) -> str:
@@ -147,11 +158,21 @@ async def refresh_access_token(
     return token_set
 
 
+class OAuthTokenExchangeError(Exception):
+    """Raised when a vendor's token endpoint reports failure in the
+    response BODY rather than the HTTP status -- Slack's oauth.v2.access
+    always returns 200, success or not, with `{"ok": false, "error": ...}`
+    on failure. httpx's raise_for_status() can't catch that; this can."""
+
+
 def _parse_token_response(body: dict) -> OAuthTokenSet:
+    if body.get("ok") is False:
+        raise OAuthTokenExchangeError(body.get("error", "token exchange failed"))
     expires_in = body.get("expires_in")
     expires_at = datetime.now(UTC) + timedelta(seconds=expires_in) if expires_in else None
     return OAuthTokenSet(
         access_token=body["access_token"],
         refresh_token=body.get("refresh_token"),
         expires_at=expires_at,
+        extra=body,
     )
