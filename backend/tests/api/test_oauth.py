@@ -25,6 +25,8 @@ def _oauth_env(monkeypatch):
     monkeypatch.setenv("VS_LINEAR_OAUTH_CLIENT_SECRET", "linear-csecret")
     monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "slack-cid")
     monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_SECRET", "slack-csecret")
+    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_ID", "jira-cid")
+    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_SECRET", "jira-csecret")
     monkeypatch.setenv("VS_OAUTH_REDIRECT_BASE_URL", "https://api.test")
     monkeypatch.setenv("VS_FRONTEND_BASE_URL", "https://app.test")
     yield
@@ -180,10 +182,10 @@ def test_callback_reconnecting_updates_the_existing_connection_not_a_duplicate(
 
 def test_callback_400s_for_a_provider_with_no_connection_upsert_wired_yet(client, db_session, monkeypatch):
     org = _seed_org(db_session)
-    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_ID", "jira-cid")
-    monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_SECRET", "jira-csecret")
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_ID", "zoom-cid")
+    monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_SECRET", "zoom-csecret")
     get_settings.cache_clear()
-    state = sign_state(org_id=org.id, provider="jira", secret="test-signing-secret")
+    state = sign_state(org_id=org.id, provider="zoom", secret="test-signing-secret")
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"access_token": "at-1"})
@@ -191,7 +193,7 @@ def test_callback_400s_for_a_provider_with_no_connection_upsert_wired_yet(client
     app.dependency_overrides[get_http_client] = _override_http_client(handler)
     try:
         resp = client.get(
-            "/api/v1/oauth/jira/callback", params={"code": "c", "state": state},
+            "/api/v1/oauth/zoom/callback", params={"code": "c", "state": state},
             follow_redirects=False,
         )
     finally:
@@ -436,3 +438,63 @@ def test_callback_502s_when_slack_rejects_the_code(client, db_session):
         .one_or_none()
         is None
     )
+
+
+def test_callback_creates_a_jira_org_connection_with_the_first_accessible_site(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="jira", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(
+                200, json={"access_token": "jira-token", "refresh_token": "rt-1", "expires_in": 3600}
+            )
+        if request.url.path == "/oauth/token/accessible-resources":
+            assert request.headers["authorization"] == "Bearer jira-token"
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "cloud-abc", "url": "https://acme.atlassian.net", "name": "Acme"},
+                    {"id": "cloud-def", "url": "https://other.atlassian.net", "name": "Other"},
+                ],
+            )
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/jira/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    connection = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "jira")
+        .one()
+    )
+    assert connection.account_label == "https://acme.atlassian.net"  # first resource, not "Other"
+    assert connection.external_id == "cloud-abc"
+
+
+def test_callback_502s_when_jira_account_has_no_accessible_sites(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="jira", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(200, json={"access_token": "jira-token"})
+        return httpx.Response(200, json=[])
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/jira/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code == 502

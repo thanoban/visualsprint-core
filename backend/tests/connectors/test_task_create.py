@@ -20,21 +20,19 @@ def _client_with(handler) -> httpx.AsyncClient:
 # --- Jira ---------------------------------------------------------------
 
 
-async def test_jira_creates_issue_with_basic_auth():
+async def test_jira_creates_issue_with_oauth_bearer_auth_against_the_atlassian_api():
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/rest/api/3/issue"
-        import base64
-
-        auth = request.headers["authorization"]
-        assert auth.startswith("Basic ")
-        decoded = base64.b64decode(auth.removeprefix("Basic ")).decode()
-        assert decoded == "pm@acme.test:jira-token"
+        assert request.url == httpx.URL(
+            "https://api.atlassian.com/ex/jira/cloud-abc/rest/api/3/issue"
+        )
+        assert request.headers["authorization"] == "Bearer jira-token"
         body = request.read()
         assert b'"key": "PAY"' in body or b'"key":"PAY"' in body
         return httpx.Response(201, json={"key": "PAY-501"})
 
     connector = TaskCreateConnector(
-        jira_email="pm@acme.test",
+        jira_cloud_id="cloud-abc",
+        jira_site_url="https://acme.atlassian.net",
         jira_token_provider=StaticTokenProvider("jira-token"),
         http_client=_client_with(handler),
     )
@@ -42,7 +40,7 @@ async def test_jira_creates_issue_with_basic_auth():
         kind=ActionKind.TASK_CREATE,
         title="Fix deploy script",
         body="The nightly deploy script fails on Sinhala filenames.",
-        target={"provider": "jira", "base_url": "https://acme.atlassian.net", "project_key": "PAY"},
+        target={"provider": "jira", "project_key": "PAY"},
     )
     result = await connector.execute(payload)
 
@@ -50,26 +48,38 @@ async def test_jira_creates_issue_with_basic_auth():
     assert result.external_url == "https://acme.atlassian.net/browse/PAY-501"
 
 
-async def test_jira_requires_base_url_and_project_key():
+async def test_jira_requires_project_key():
     connector = TaskCreateConnector(
-        jira_email="pm@acme.test",
+        jira_cloud_id="cloud-abc",
+        jira_site_url="https://acme.atlassian.net",
         jira_token_provider=StaticTokenProvider("t"),
         http_client=_client_with(lambda r: httpx.Response(200)),
     )
     payload = ActionPayload(
         kind=ActionKind.TASK_CREATE, title="x", body="y", target={"provider": "jira"}
     )
-    with pytest.raises(ConnectorError, match="requires 'base_url' and 'project_key'"):
+    with pytest.raises(ConnectorError, match="requires 'project_key'"):
         await connector.execute(payload)
 
 
-async def test_jira_raises_not_configured_without_credentials():
+async def test_jira_raises_not_configured_without_a_connection():
     connector = TaskCreateConnector(http_client=_client_with(lambda r: httpx.Response(200)))
     payload = ActionPayload(
-        kind=ActionKind.TASK_CREATE,
-        title="x",
-        body="y",
-        target={"provider": "jira", "base_url": "https://acme.atlassian.net", "project_key": "PAY"},
+        kind=ActionKind.TASK_CREATE, title="x", body="y", target={"provider": "jira", "project_key": "PAY"}
+    )
+    with pytest.raises(ConnectorNotConfiguredError):
+        await connector.execute(payload)
+
+
+async def test_jira_raises_not_configured_with_a_token_but_no_cloud_id():
+    """A token alone isn't enough -- api.atlassian.com's URL structure
+    requires the cloudId resolved at connect time (accessible-resources)."""
+    connector = TaskCreateConnector(
+        jira_token_provider=StaticTokenProvider("t"),
+        http_client=_client_with(lambda r: httpx.Response(200)),
+    )
+    payload = ActionPayload(
+        kind=ActionKind.TASK_CREATE, title="x", body="y", target={"provider": "jira", "project_key": "PAY"}
     )
     with pytest.raises(ConnectorNotConfiguredError):
         await connector.execute(payload)
@@ -77,18 +87,37 @@ async def test_jira_raises_not_configured_without_credentials():
 
 async def test_jira_surfaces_http_failure():
     connector = TaskCreateConnector(
-        jira_email="pm@acme.test",
+        jira_cloud_id="cloud-abc",
+        jira_site_url="https://acme.atlassian.net",
         jira_token_provider=StaticTokenProvider("t"),
         http_client=_client_with(lambda r: httpx.Response(403, text="forbidden")),
     )
     payload = ActionPayload(
-        kind=ActionKind.TASK_CREATE,
-        title="x",
-        body="y",
-        target={"provider": "jira", "base_url": "https://acme.atlassian.net", "project_key": "PAY"},
+        kind=ActionKind.TASK_CREATE, title="x", body="y", target={"provider": "jira", "project_key": "PAY"}
     )
     with pytest.raises(ConnectorError, match="403"):
         await connector.execute(payload)
+
+
+async def test_jira_external_url_is_none_without_a_site_url():
+    """Reachable if a connection somehow has a cloud_id but no site_url --
+    degrades to no browse link rather than crashing."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"key": "PAY-501"})
+
+    connector = TaskCreateConnector(
+        jira_cloud_id="cloud-abc",
+        jira_token_provider=StaticTokenProvider("t"),
+        http_client=_client_with(handler),
+    )
+    payload = ActionPayload(
+        kind=ActionKind.TASK_CREATE, title="x", body="y", target={"provider": "jira", "project_key": "PAY"}
+    )
+    result = await connector.execute(payload)
+
+    assert result.external_id == "PAY-501"
+    assert result.external_url is None
 
 
 # --- GitHub ---------------------------------------------------------------

@@ -4,8 +4,16 @@ Dispatches on `ActionPayload.target["provider"]` (`"jira"`, `"github"`,
 `"linear"`). Each provider has its own auth shape, all injected — never
 hardcoded:
 
-- Jira Cloud: Basic auth (`email:api_token`), via `jira_email` +
-  `jira_token_provider`. `target`: base_url, project_key, issue_type (optional).
+- Jira Cloud: OAuth 2.0 (3LO) access token via `jira_token_provider`, sent
+  as `Authorization: Bearer` against `api.atlassian.com/ex/jira/{cloudId}/
+  rest/api/3/...` -- NOT the site's own domain, and NOT Basic auth with a
+  personal API token (this connector used to work that way; converted
+  because it required a user to manually generate and paste a token,
+  which the OAuth build this connector now depends on exists specifically
+  to avoid). `jira_cloud_id`/`jira_site_url` come from the org's Jira
+  OrgConnection (app/api/oauth.py's callback resolves both via Atlassian's
+  accessible-resources endpoint at connect time) -- a customer never sees
+  or provides either. `target`: project_key, issue_type (optional).
 - GitHub: OAuth access token via `github_token_provider`, sent as
   `Authorization: Bearer`. `target`: owner, repo.
 - Linear: OAuth access token via `linear_token_provider`, sent as
@@ -15,14 +23,13 @@ hardcoded:
   manually-pasted personal key. `target`: team_id.
 """
 
-import base64
-
 import httpx
 
 from app.capture.token_provider import TokenProvider
 from app.connectors.errors import ConnectorError, ConnectorNotConfiguredError
 from app.interfaces.actions import ActionKind, ActionPayload, ActionResult
 
+ATLASSIAN_API_BASE = "https://api.atlassian.com"
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
 _ISSUE_CREATE_MUTATION = """
@@ -41,13 +48,15 @@ class TaskCreateConnector:
     def __init__(
         self,
         *,
-        jira_email: str | None = None,
+        jira_cloud_id: str | None = None,
+        jira_site_url: str | None = None,
         jira_token_provider: TokenProvider | None = None,
         github_token_provider: TokenProvider | None = None,
         linear_token_provider: TokenProvider | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._jira_email = jira_email
+        self._jira_cloud_id = jira_cloud_id
+        self._jira_site_url = jira_site_url
         self._jira_tokens = jira_token_provider
         self._github_tokens = github_token_provider
         self._linear_tokens = linear_token_provider
@@ -64,20 +73,20 @@ class TaskCreateConnector:
         raise ConnectorError(f"unsupported task_create provider: {provider!r}")
 
     async def _create_jira(self, payload: ActionPayload) -> ActionResult:
-        base_url = payload.target.get("base_url")
         project_key = payload.target.get("project_key")
-        if not base_url or not project_key:
-            raise ConnectorError("jira task_create requires 'base_url' and 'project_key'")
-        if self._jira_email is None or self._jira_tokens is None:
-            raise ConnectorNotConfiguredError("jira_email/jira_token_provider not configured")
+        if not project_key:
+            raise ConnectorError("jira task_create requires 'project_key'")
+        if self._jira_tokens is None or not self._jira_cloud_id:
+            raise ConnectorNotConfiguredError(
+                "jira_token_provider/jira_cloud_id not configured -- connect Jira first"
+            )
 
-        api_token = await self._jira_tokens.get_token()
-        basic = base64.b64encode(f"{self._jira_email}:{api_token}".encode()).decode("ascii")
+        token = await self._jira_tokens.get_token()
         issue_type = payload.target.get("issue_type", "Task")
 
         resp = await self._client.post(
-            f"{base_url.rstrip('/')}/rest/api/3/issue",
-            headers={"Authorization": f"Basic {basic}"},
+            f"{ATLASSIAN_API_BASE}/ex/jira/{self._jira_cloud_id}/rest/api/3/issue",
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "fields": {
                     "project": {"key": project_key},
@@ -102,7 +111,11 @@ class TaskCreateConnector:
         key = data.get("key")
         return ActionResult(
             external_id=key,
-            external_url=f"{base_url.rstrip('/')}/browse/{key}" if key else None,
+            external_url=(
+                f"{self._jira_site_url.rstrip('/')}/browse/{key}"
+                if key and self._jira_site_url
+                else None
+            ),
             detail="Jira issue created",
         )
 

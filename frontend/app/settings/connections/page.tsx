@@ -25,7 +25,7 @@ async function fetchConnections(orgId: string): Promise<ConnectionOut[]> {
 const VENDORS = [
   { provider: "google", label: "Google", description: "Calendar watch, Meet recordings, Gmail drafts", ready: true },
   { provider: "slack", label: "Slack", description: "Post decision recaps to a channel", ready: true },
-  { provider: "jira", label: "Jira", description: "Create tasks from verified commitments", ready: false },
+  { provider: "jira", label: "Jira", description: "Create tasks from verified commitments", ready: true },
   { provider: "github", label: "GitHub", description: "Open issues from verified commitments", ready: true },
   { provider: "linear", label: "Linear", description: "Create issues from verified commitments", ready: true },
   { provider: "zoom", label: "Zoom", description: "Real-time capture for your own account's meetings", ready: false },

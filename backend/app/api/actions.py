@@ -70,6 +70,17 @@ def _build_org_token_provider(db: Session, org_id: str, provider: str):
     )
 
 
+def _get_org_connection(db: Session, org_id: str, provider: str) -> OrgConnection | None:
+    """For connector-specific metadata beyond the token itself -- so far
+    only Jira needs this (cloud_id/site_url, both required to build its
+    api.atlassian.com URLs; see app/connectors/task_create.py)."""
+    return (
+        db.query(OrgConnection)
+        .filter(OrgConnection.org_id == org_id, OrgConnection.provider == provider)
+        .one_or_none()
+    )
+
+
 def _get_connector(db: Session, org_id: str, kind: ActionKind):
     """Built fresh per call, not cached -- unlike before real OAuth
     existed, which org's connection backs a connector can change at any
@@ -96,7 +107,10 @@ def _get_connector(db: Session, org_id: str, kind: ActionKind):
     if kind == ActionKind.TASK_CREATE:
         from app.connectors.task_create import TaskCreateConnector
 
+        jira_connection = _get_org_connection(db, org_id, "jira")
         return TaskCreateConnector(
+            jira_cloud_id=jira_connection.external_id if jira_connection else None,
+            jira_site_url=jira_connection.account_label if jira_connection else None,
             jira_token_provider=_token_provider_for("jira", "Jira API token not configured"),
             github_token_provider=_token_provider_for("github", "GitHub PAT not configured"),
             linear_token_provider=_token_provider_for("linear", "Linear API key not configured"),

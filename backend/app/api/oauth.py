@@ -7,10 +7,10 @@ google lives in CalendarConnection (Calendar/Meet/Gmail share this one
 OAuth client, and that table already had exactly the columns a Google
 grant needs -- no new table for it). github/linear/slack/jira/zoom live in
 OrgConnection (app/db/models.py's comment on why they're separate from
-CalendarConnection). google/github/linear/slack are wired to a real
-connection upsert; jira/zoom land in their own follow-ups (jira
-additionally needs its connector rewritten off Basic auth -- see
-app/connectors/task_create.py).
+CalendarConnection). google/github/linear/slack/jira are wired to a real
+connection upsert; zoom lands in its own follow-up (needs a different
+Zoom app type than the Server-to-Server one already registered -- see
+app/capture/rtms_client.py).
 """
 
 import httpx
@@ -39,6 +39,7 @@ router = APIRouter(tags=["oauth"])
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GITHUB_USER_URL = "https://api.github.com/user"
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
+ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
 
 class ConnectionOut(BaseModel):
@@ -143,6 +144,8 @@ async def oauth_callback(
         await _finish_linear_connection(db, org_id, token_set, http_client)
     elif provider == "slack":
         await _finish_slack_connection(db, org_id, token_set)
+    elif provider == "jira":
+        await _finish_jira_connection(db, org_id, token_set, http_client)
     else:
         raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
 
@@ -258,3 +261,31 @@ async def _finish_slack_connection(db: Session, org_id: str, token_set: OAuthTok
     await _upsert_org_connection(
         db, org_id, "slack", team_name, token_set, external_id=team.get("id")
     )
+
+
+async def _finish_jira_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    """Atlassian OAuth 2.0 (3LO) has no single "the site" the way a Google
+    account has one email -- a grant can cover multiple Jira sites. This
+    MVP takes the first accessible one (typical case: a customer connects
+    exactly one site) rather than building a site-picker UI. account_label
+    stores the site's URL (not just its name) because
+    app/connectors/task_create.py needs it verbatim to build issue browse
+    links -- OrgConnection has nowhere else to put it."""
+    resp = await http_client.get(
+        ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+        headers={"Authorization": f"Bearer {token_set.access_token}"},
+    )
+    resp.raise_for_status()
+    resources = resp.json()
+    if not resources:
+        raise HTTPException(502, "Atlassian account has no accessible Jira sites")
+
+    site = resources[0]
+    site_url = site.get("url")
+    cloud_id = site.get("id")
+    if not site_url or not cloud_id:
+        raise HTTPException(502, "Atlassian accessible-resources response missing url/id")
+
+    await _upsert_org_connection(db, org_id, "jira", site_url, token_set, external_id=cloud_id)
