@@ -34,6 +34,7 @@ from app.adapters.secretstore_gcp import get_secretstore
 from app.config import get_settings
 from app.db.base import get_db
 from app.db.models import CalendarConnection, Org, OrgConnection
+from app.oauth.connection import get_org_connection
 from app.oauth.flow import (
     OAuthStateError,
     OAuthTokenExchangeError,
@@ -79,6 +80,32 @@ async def list_connections(org_id: str, db: Session = Depends(get_db)) -> list[C
         )
         for c in org_connections
     ]
+
+
+@router.delete("/api/v1/orgs/{org_id}/connections/{provider}", status_code=204)
+async def disconnect(org_id: str, provider: str, db: Session = Depends(get_db)) -> None:
+    """Revokes an org's connection to `provider` -- deletes both the row
+    and the stored token set, not just one or the other (a dangling
+    secret with no connection row would never get cleaned up; a deleted
+    row with the secret still in SecretStore would leak a live,
+    unrevoked-on-our-side token). Does NOT revoke the grant on the
+    vendor's side -- Google/Slack/etc. don't offer a token-revocation API
+    call in every case, so this documents the one true way to fully
+    revoke: the vendor's own connected-apps settings page, same as the
+    frontend copy already tells the user ("can be revoked there at any
+    time")."""
+    if db.get(Org, org_id) is None:
+        raise HTTPException(404, "org not found")
+
+    connection = get_org_connection(db, org_id, provider)
+    if connection is None:
+        raise HTTPException(404, f"org has no connection to {provider!r}")
+
+    # SecretStore.delete() is idempotent by contract (see its Protocol
+    # docstring) -- no try/except needed for an already-missing secret.
+    await get_secretstore().delete(connection.secret_ref)
+    db.delete(connection)
+    db.commit()
 
 
 async def get_http_client() -> httpx.AsyncClient:

@@ -648,3 +648,115 @@ def test_google_and_microsoft_connections_coexist_for_the_same_org(client, db_se
     resp = client.get(f"/api/v1/orgs/{org.id}/connections")
     providers = {c["provider"] for c in resp.json()}
     assert providers == {"google", "microsoft"}
+
+
+def test_disconnect_404s_for_unknown_org(client):
+    resp = client.delete("/api/v1/orgs/does-not-exist/connections/google")
+    assert resp.status_code == 404
+
+
+def test_disconnect_404s_when_org_never_connected_that_provider(client, db_session):
+    org = _seed_org(db_session)
+    resp = client.delete(f"/api/v1/orgs/{org.id}/connections/google")
+    assert resp.status_code == 404
+
+
+def test_disconnect_removes_a_calendar_connection(client, db_session):
+    org = _seed_org(db_session)
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id, provider="google", account_email="a@acme.test", secret_ref="oauth/google/x"
+        )
+    )
+    db_session.commit()
+
+    resp = client.delete(f"/api/v1/orgs/{org.id}/connections/google")
+
+    assert resp.status_code == 204
+    assert (
+        db_session.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org.id, CalendarConnection.provider == "google")
+        .one_or_none()
+        is None
+    )
+
+
+def test_disconnect_removes_an_org_connection(client, db_session):
+    org = _seed_org(db_session)
+    db_session.add(
+        OrgConnection(
+            org_id=org.id, provider="slack", account_label="Acme", secret_ref="oauth/slack/x"
+        )
+    )
+    db_session.commit()
+
+    resp = client.delete(f"/api/v1/orgs/{org.id}/connections/slack")
+
+    assert resp.status_code == 204
+    assert (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "slack")
+        .one_or_none()
+        is None
+    )
+
+
+def test_disconnect_only_removes_the_named_providers_connection(client, db_session):
+    """Disconnecting slack must not touch google -- these are two
+    independent connections for the same org."""
+    org = _seed_org(db_session)
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id, provider="google", account_email="a@acme.test", secret_ref="oauth/google/x"
+        )
+    )
+    db_session.add(
+        OrgConnection(
+            org_id=org.id, provider="slack", account_label="Acme", secret_ref="oauth/slack/x"
+        )
+    )
+    db_session.commit()
+
+    client.delete(f"/api/v1/orgs/{org.id}/connections/slack")
+
+    remaining = client.get(f"/api/v1/orgs/{org.id}/connections").json()
+    assert {c["provider"] for c in remaining} == {"google"}
+
+
+def test_disconnect_then_reconnect_creates_a_fresh_connection(client, db_session):
+    """After disconnecting, the org must be able to connect again --
+    proves the delete is a real delete, not a soft-disable that would
+    block a fresh OAuth callback's upsert."""
+    org = _seed_org(db_session)
+    db_session.add(
+        OrgConnection(
+            org_id=org.id, provider="slack", account_label="Old Workspace", secret_ref="oauth/slack/old"
+        )
+    )
+    db_session.commit()
+
+    client.delete(f"/api/v1/orgs/{org.id}/connections/slack")
+
+    state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "access_token": "xoxb-new", "team": {"id": "T2", "name": "New Workspace"}}
+        )
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        client.get(
+            "/api/v1/oauth/slack/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    connections = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "slack")
+        .all()
+    )
+    assert len(connections) == 1
+    assert connections[0].account_label == "New Workspace"

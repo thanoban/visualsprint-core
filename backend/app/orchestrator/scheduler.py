@@ -4,12 +4,13 @@ telemetry"). Deterministic software owns this decision, per CLAUDE.md rule 1:
 a `CalendarAdapter` only reports facts about events; every decision about
 whether to capture one lives here, not in the adapter.
 
-Not wired to a live cron yet — no such infrastructure exists in this
-codebase (the FSM worker itself is a plain poll loop, not a generic
-scheduler). `sync_calendar_connection` is the unit a periodic job would call
-once per `CalendarConnection`, e.g. every few minutes; today it's invoked
-directly (ops script or test), same maturity level as the ASR cascade before
-live vendor credentials existed.
+`sync_calendar_connection` is the unit a periodic job calls once per
+`CalendarConnection` -- app/orchestrator/worker.py::_sync_all_calendars is
+that periodic caller, wired into the worker's poll loop on
+`VS_CALENDAR_SYNC_INTERVAL_S` (default 300s), same maturity level as
+every other OAuth-backed integration in this codebase: real per-org
+tokens once a customer connects, credential-blocked (loud, specific
+failure) until they do.
 """
 
 from datetime import timedelta

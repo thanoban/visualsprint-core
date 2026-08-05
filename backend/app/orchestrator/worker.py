@@ -178,12 +178,12 @@ def _get_calendar_adapter_for_connection(db: object, connection):
 
 
 async def _sync_all_calendars(db: object) -> None:
-    """One pass over every CalendarConnection (app/orchestrator/scheduler.py
-    docstring: "not wired to a live cron yet... today it's invoked directly
-    (ops script or test)" -- this is that periodic caller). A failure on one
-    connection (bad/expired token, API outage, missing OAuth app config) is
-    logged and skipped, never stops the rest -- one org's broken calendar
-    link must not silently starve every other org's meeting discovery."""
+    """One pass over every CalendarConnection -- the periodic caller
+    app/orchestrator/scheduler.py's sync_calendar_connection describes
+    itself as needing. A failure on one connection (bad/expired token, API
+    outage, missing OAuth app config) is logged and skipped, never stops
+    the rest -- one org's broken calendar link must not silently starve
+    every other org's meeting discovery."""
     from sqlalchemy import select
 
     from app.db.models import CalendarConnection

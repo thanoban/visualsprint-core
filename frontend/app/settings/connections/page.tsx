@@ -19,6 +19,13 @@ async function fetchConnections(orgId: string): Promise<ConnectionOut[]> {
   return (await res.json()) as ConnectionOut[];
 }
 
+async function disconnectVendor(orgId: string, provider: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/connections/${provider}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
 // Every vendor connect flow, even ones not wired to a real upsert yet
 // (app/api/oauth.py) -- disabled entries still communicate what's coming
 // rather than just not existing.
@@ -37,6 +44,22 @@ export default function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [justConnected, setJustConnected] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
+
+  async function handleDisconnect(provider: string) {
+    if (!orgId) return;
+    setDisconnecting(provider);
+    setDisconnectError(null);
+    try {
+      await disconnectVendor(orgId, provider);
+      setConnections((prev) => (prev ? prev.filter((c) => c.provider !== provider) : prev));
+    } catch (err) {
+      setDisconnectError(err instanceof Error ? err.message : "Failed to disconnect.");
+    } finally {
+      setDisconnecting(null);
+    }
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -92,6 +115,11 @@ export default function ConnectionsPage() {
           Connected {justConnected}.
         </div>
       )}
+      {disconnectError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+          {disconnectError}
+        </div>
+      )}
 
       <div className="space-y-3">
         {VENDORS.map((vendor) => {
@@ -109,12 +137,24 @@ export default function ConnectionsPage() {
                 )}
               </div>
               {vendor.ready ? (
-                <a
-                  href={`${API_BASE_URL}/api/v1/orgs/${orgId}/oauth/${vendor.provider}/authorize`}
-                  className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 whitespace-nowrap"
-                >
-                  {connection ? "Reconnect" : "Connect"}
-                </a>
+                <div className="flex items-center gap-2">
+                  {connection && (
+                    <button
+                      type="button"
+                      onClick={() => handleDisconnect(vendor.provider)}
+                      disabled={disconnecting === vendor.provider}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {disconnecting === vendor.provider ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  )}
+                  <a
+                    href={`${API_BASE_URL}/api/v1/orgs/${orgId}/oauth/${vendor.provider}/authorize`}
+                    className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 whitespace-nowrap"
+                  >
+                    {connection ? "Reconnect" : "Connect"}
+                  </a>
+                </div>
               ) : (
                 <span className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-400 whitespace-nowrap">
                   Coming soon
