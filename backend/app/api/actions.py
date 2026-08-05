@@ -155,12 +155,16 @@ async def approve_action(
     action.approved_by_person_id = req.approved_by_person_id
     action.approved_at = datetime.now(UTC)
     action.error = None
+    # No title/body here: those are meeting-content-derived free text with
+    # no purge path once written to an AuditLog row (no FK to the source
+    # meeting/knowledge item for a later erasure to find and scrub) -- the
+    # action_id is enough for the audit trail to prove what happened.
     log_audit_event(
         db,
         org_id=action.org_id,
         actor=req.approved_by_person_id or "system",
         event="action_approved",
-        detail={"action_id": action.id, "kind": action.kind, "title": action.payload.get("title", "")},
+        detail={"action_id": action.id, "kind": action.kind},
     )
     db.commit()
 
@@ -201,12 +205,14 @@ async def reject_action(
         raise HTTPException(409, f"action is not pending approval (status={action.status.value})")
 
     action.status = ActionStatus.REJECTED
+    # See approve_action's comment above -- same reasoning against storing
+    # free-text content in an AuditLog row that has no purge path.
     log_audit_event(
         db,
         org_id=action.org_id,
         actor=req.rejected_by_person_id or "system",
         event="action_rejected",
-        detail={"action_id": action.id, "kind": action.kind, "title": action.payload.get("title", "")},
+        detail={"action_id": action.id, "kind": action.kind},
     )
     db.commit()
     return _to_out(db, action)

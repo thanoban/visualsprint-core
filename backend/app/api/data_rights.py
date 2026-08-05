@@ -213,12 +213,18 @@ async def delete_meeting(
     endpoint before this one."""
     meeting = _get_org_meeting(db, org_id, meeting_id)
 
+    # meeting_id only, deliberately -- erase_meeting() below deletes the
+    # Meeting row (title included), and the audit trail itself has no purge
+    # path (AuditLog carries no FK to scrub via), so writing meeting.title
+    # here would defeat the erasure it's supposed to be recording: the
+    # "irreversible... no undo" delete would leave exactly the content it
+    # deleted sitting in this row forever.
     log_audit_event(
         db,
         org_id=org_id,
         actor=requested_by or "system",
         event="meeting_erasure_requested",
-        detail={"meeting_id": meeting_id, "title": meeting.title},
+        detail={"meeting_id": meeting_id},
     )
     await erase_meeting(db, meeting, get_blobstore())
     db.commit()

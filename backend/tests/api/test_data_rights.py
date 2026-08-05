@@ -65,7 +65,30 @@ def test_delete_meeting_erases_everything(client, db_session):
     from app.db.models import AuditLog
 
     audit = db_session.execute(select(AuditLog).where(AuditLog.org_id == org.id)).scalars().all()
-    assert any(a.event == "meeting_erasure_requested" for a in audit)
+    erasure_entries = [a for a in audit if a.event == "meeting_erasure_requested"]
+    assert len(erasure_entries) == 1
+    assert erasure_entries[0].detail == {"meeting_id": meeting.id}
+
+
+def test_delete_meeting_does_not_leak_the_title_into_the_audit_trail(client, db_session):
+    """Regression: this endpoint used to log meeting.title into AuditLog.detail
+    before erasing the meeting -- since AuditLog has no FK back to the meeting
+    for a later scrub to find, that copy would outlive the "irreversible, no
+    undo" delete it was recording. The meeting's title (a real, potentially
+    identifying string) must never appear anywhere in the audit trail."""
+    org, meeting, _session = _seed_meeting(db_session)
+    assert meeting.title == "Standup"
+
+    client.delete(f"/api/v1/orgs/{org.id}/meetings/{meeting.id}")
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog
+
+    audit = db_session.execute(select(AuditLog).where(AuditLog.org_id == org.id)).scalars().all()
+    for entry in audit:
+        assert "title" not in entry.detail
+        assert "Standup" not in str(entry.detail)
 
 
 def test_delete_meeting_404_for_unknown_meeting(client, db_session):

@@ -192,7 +192,7 @@ def test_approve_writes_an_audit_log_entry(client, db_session):
     assert len(entries) == 1
     assert entries[0].event == "action_approved"
     assert entries[0].actor == person_id
-    assert entries[0].detail["action_id"] == action_id
+    assert entries[0].detail == {"action_id": action_id, "kind": "email_draft"}
 
 
 def test_approve_without_a_person_id_attributes_to_system(client, db_session):
@@ -204,6 +204,28 @@ def test_approve_without_a_person_id_attributes_to_system(client, db_session):
     assert entry.actor == "system"
 
 
+def test_approve_and_reject_never_leak_the_action_title_into_the_audit_trail(client, db_session):
+    """Regression: approve/reject used to log payload['title'] into
+    AuditLog.detail -- since AuditLog has no FK back to the ProposedAction
+    (or the meeting/knowledge item the title was drawn from) for a later
+    erasure to find and scrub, that copy would silently outlive any purge
+    or deletion of the source content."""
+    org_id, action_id, _person_id = _seed(db_session)
+
+    client.post(f"/api/v1/actions/{action_id}/approve", json={})
+
+    org_id2, action_id2, _ = _seed(db_session)
+    client.post(f"/api/v1/actions/{action_id2}/reject")
+
+    entries = (
+        db_session.query(AuditLog).filter(AuditLog.org_id.in_([org_id, org_id2])).all()
+    )
+    assert len(entries) == 2
+    for entry in entries:
+        assert "title" not in entry.detail
+        assert "Follow up on migration" not in str(entry.detail)
+
+
 def test_reject_writes_an_audit_log_entry_attributed_to_the_rejector(client, db_session):
     org_id, action_id, person_id = _seed(db_session)
 
@@ -212,7 +234,7 @@ def test_reject_writes_an_audit_log_entry_attributed_to_the_rejector(client, db_
     entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
     assert entry.event == "action_rejected"
     assert entry.actor == person_id
-    assert entry.detail["action_id"] == action_id
+    assert entry.detail == {"action_id": action_id, "kind": "email_draft"}
 
 
 def test_reject_with_no_body_still_works_and_attributes_to_system(client, db_session):
