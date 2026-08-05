@@ -133,13 +133,14 @@ def _get_calendar_adapter_for_connection(connection):
     it's used directly by provider name -- the same override every
     existing calendar-sync test already relies on, unchanged.
 
-    Otherwise builds a real per-connection adapter: google now has a real
-    OAuth grant behind it (app/api/oauth.py's callback wrote
-    connection.secret_ref), so its token provider reads and refreshes that
-    specific connection's tokens -- not a single shared instance for every
-    org's Google connection, which is what this used to do and would have
-    been wrong the moment more than one org connected. microsoft has no
-    OAuth app registered yet, so it keeps the loud-failure stub."""
+    Otherwise builds a real per-connection adapter for whichever provider
+    the connection is: google and microsoft both now have real OAuth
+    grants behind them (app/api/oauth.py's callback wrote
+    connection.secret_ref), so each connection's own token provider reads
+    and refreshes that specific connection's tokens -- not a single
+    shared instance for every org's connection to a given provider, which
+    is what this used to do and would have been wrong the moment more
+    than one org connected."""
     if _calendar_adapters is not None:
         return _calendar_adapters.get(connection.provider)
 
@@ -147,7 +148,6 @@ def _get_calendar_adapter_for_connection(connection):
     from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
     from app.adapters.secretstore_gcp import get_secretstore
     from app.capture.oauth_token_provider import OAuthTokenProvider
-    from app.capture.token_provider import UnconfiguredTokenProvider
     from app.oauth.providers import get_provider_config
 
     settings = get_settings()
@@ -159,9 +159,12 @@ def _get_calendar_adapter_for_connection(connection):
         )
         return GoogleCalendarAdapter(token_provider=token_provider)
     if connection.provider == "microsoft":
-        return MicrosoftCalendarAdapter(
-            token_provider=UnconfiguredTokenProvider("Microsoft Graph OAuth not configured")
+        token_provider = OAuthTokenProvider(
+            secret_ref=connection.secret_ref,
+            provider_config=get_provider_config("microsoft", settings),
+            secret_store=get_secretstore(),
         )
+        return MicrosoftCalendarAdapter(token_provider=token_provider)
     return None
 
 

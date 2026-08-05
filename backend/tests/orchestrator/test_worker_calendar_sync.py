@@ -144,19 +144,46 @@ async def test_google_connection_gets_a_real_per_connection_oauth_token_provider
     assert adapter._tokens._secret_ref == connection.secret_ref
 
 
-async def test_microsoft_connection_still_falls_back_to_the_unconfigured_stub(db):
-    """No Microsoft Graph OAuth app registered yet -- same loud-failure
-    stub as before, just built per-connection now for consistency."""
+async def test_microsoft_connection_gets_a_real_per_connection_oauth_token_provider(db, monkeypatch):
+    """Same fix as google's -- microsoft is no longer a permanent stub."""
     org = Org(name="Acme")
     db.add(org)
     db.flush()
     connection = _connection(db, org, "microsoft")
 
-    adapter = worker._get_calendar_adapter_for_connection(connection)
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_SECRET", "csecret")
+    from app.config import get_settings
 
-    from app.capture.token_provider import UnconfiguredTokenProvider
+    get_settings.cache_clear()
+    try:
+        adapter = worker._get_calendar_adapter_for_connection(connection)
+    finally:
+        get_settings.cache_clear()
 
-    assert isinstance(adapter._tokens, UnconfiguredTokenProvider)
+    from app.adapters.calendar_microsoft import MicrosoftCalendarAdapter
+    from app.capture.oauth_token_provider import OAuthTokenProvider
+
+    assert isinstance(adapter, MicrosoftCalendarAdapter)
+    assert isinstance(adapter._tokens, OAuthTokenProvider)
+    assert adapter._tokens._secret_ref == connection.secret_ref
+
+
+async def test_a_microsoft_connection_with_no_oauth_app_configured_is_skipped_not_fatal(db, monkeypatch):
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    _connection(db, org, "microsoft")
+
+    monkeypatch.delenv("VS_MICROSOFT_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("VS_MICROSOFT_OAUTH_CLIENT_SECRET", raising=False)
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        await worker._sync_all_calendars(db)  # must not raise
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_a_google_connection_with_no_oauth_app_configured_is_skipped_not_fatal(db, monkeypatch):

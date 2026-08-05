@@ -29,6 +29,8 @@ def _oauth_env(monkeypatch):
     monkeypatch.setenv("VS_JIRA_OAUTH_CLIENT_SECRET", "jira-csecret")
     monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_ID", "zoom-cid")
     monkeypatch.setenv("VS_ZOOM_OAUTH_CLIENT_SECRET", "zoom-csecret")
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_ID", "microsoft-cid")
+    monkeypatch.setenv("VS_MICROSOFT_OAUTH_CLIENT_SECRET", "microsoft-csecret")
     monkeypatch.setenv("VS_OAUTH_REDIRECT_BASE_URL", "https://api.test")
     monkeypatch.setenv("VS_FRONTEND_BASE_URL", "https://app.test")
     yield
@@ -183,7 +185,7 @@ def test_callback_reconnecting_updates_the_existing_connection_not_a_duplicate(
 
 
 def test_callback_400s_for_an_unknown_provider_name(client, db_session):
-    """All six real vendors are wired now -- the "not wired up yet" branch
+    """All seven real vendors are wired now -- the "not wired up yet" branch
     is purely defensive for a hypothetical future ActionKind/provider,
     unreachable through the normal flow since get_provider_config already
     rejects anything not in its PROVIDERS map before this branch is
@@ -549,3 +551,100 @@ def test_callback_502s_when_zoom_users_me_omits_account_id(client, db_session):
         app.dependency_overrides.pop(get_http_client, None)
 
     assert resp.status_code == 502
+
+
+def test_callback_creates_a_microsoft_calendar_connection(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/organizations/oauth2/v2.0/token":
+            return httpx.Response(
+                200, json={"access_token": "ms-token", "refresh_token": "rt-1", "expires_in": 3600}
+            )
+        if request.url.path == "/v1.0/me":
+            assert request.headers["authorization"] == "Bearer ms-token"
+            return httpx.Response(
+                200, json={"mail": "ops@acme.test", "userPrincipalName": "ops@acme.onmicrosoft.com"}
+            )
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/microsoft/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    connection = (
+        db_session.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org.id, CalendarConnection.provider == "microsoft")
+        .one()
+    )
+    assert connection.account_email == "ops@acme.test"  # mail preferred over userPrincipalName
+    assert connection.secret_ref == f"oauth/microsoft/{connection.id}"
+
+
+def test_callback_falls_back_to_user_principal_name_when_mail_is_null(client, db_session):
+    """Accounts without an Exchange mailbox license have mail=null --
+    userPrincipalName (the sign-in identifier) is always present."""
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/organizations/oauth2/v2.0/token":
+            return httpx.Response(200, json={"access_token": "ms-token", "expires_in": 3600})
+        return httpx.Response(
+            200, json={"mail": None, "userPrincipalName": "ops@acme.onmicrosoft.com"}
+        )
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        client.get(
+            "/api/v1/oauth/microsoft/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    connection = (
+        db_session.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org.id, CalendarConnection.provider == "microsoft")
+        .one()
+    )
+    assert connection.account_email == "ops@acme.onmicrosoft.com"
+
+
+def test_google_and_microsoft_connections_coexist_for_the_same_org(client, db_session):
+    """CalendarConnection's provider column distinguishes them -- an org
+    connecting both must get two rows, not one overwriting the other."""
+    org = _seed_org(db_session)
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id, provider="google", account_email="g@acme.test", secret_ref="oauth/google/x"
+        )
+    )
+    db_session.commit()
+
+    state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "token" in request.url.path:
+            return httpx.Response(200, json={"access_token": "ms-token"})
+        return httpx.Response(200, json={"mail": "ms@acme.test"})
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        client.get(
+            "/api/v1/oauth/microsoft/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/connections")
+    providers = {c["provider"] for c in resp.json()}
+    assert providers == {"google", "microsoft"}

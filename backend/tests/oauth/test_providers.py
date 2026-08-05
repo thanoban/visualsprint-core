@@ -20,6 +20,7 @@ def _settings(**overrides) -> Settings:
         ("github", "github_oauth_client_id", "github_oauth_client_secret"),
         ("linear", "linear_oauth_client_id", "linear_oauth_client_secret"),
         ("zoom", "zoom_oauth_client_id", "zoom_oauth_client_secret"),
+        ("microsoft", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
     ],
 )
 def test_provider_raises_when_unconfigured(provider, id_field, secret_field):
@@ -38,6 +39,7 @@ def test_provider_raises_when_unconfigured(provider, id_field, secret_field):
         ("github", "github_oauth_client_id", "github_oauth_client_secret"),
         ("linear", "linear_oauth_client_id", "linear_oauth_client_secret"),
         ("zoom", "zoom_oauth_client_id", "zoom_oauth_client_secret"),
+        ("microsoft", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
     ],
 )
 def test_provider_builds_when_configured(provider, id_field, secret_field):

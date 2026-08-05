@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     linear_oauth_client_secret: str | None = None
     zoom_oauth_client_id: str | None = None
     zoom_oauth_client_secret: str | None = None
+    microsoft_oauth_client_id: str | None = None
+    microsoft_oauth_client_secret: str | None = None
 
     # --- ASR vendors (buy-everything strategy; see docs/PROJECT_PLAN.md) ---
     google_credentials_json: str | None = None  # path to service-account JSON

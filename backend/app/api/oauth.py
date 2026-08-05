@@ -3,11 +3,12 @@ every frontend button (frontend/app/settings/connections/page.tsx).
 app/oauth/flow.py has the RFC 6749 mechanics; this is where a completed
 grant becomes a real row plus a stored token set.
 
-google lives in CalendarConnection (Calendar/Meet/Gmail share this one
-OAuth client, and that table already had exactly the columns a Google
-grant needs -- no new table for it). github/linear/slack/jira/zoom live in
+google and microsoft both live in CalendarConnection (google:
+Calendar/Meet/Gmail share this one OAuth client; microsoft: Calendar/Teams
+share theirs) -- that table already had exactly the columns either grant
+needs, no new table for either. github/linear/slack/jira/zoom live in
 OrgConnection (app/db/models.py's comment on why they're separate from
-CalendarConnection). All six vendors are wired to a real connection
+CalendarConnection). All seven vendors are wired to a real connection
 upsert.
 
 Zoom is a General OAuth App (VS_ZOOM_OAUTH_CLIENT_ID/_SECRET) -- a
@@ -51,6 +52,7 @@ GITHUB_USER_URL = "https://api.github.com/user"
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 ZOOM_USER_URL = "https://api.zoom.us/v2/users/me"
+GRAPH_ME_URL = "https://graph.microsoft.com/v1.0/me"
 
 
 class ConnectionOut(BaseModel):
@@ -159,6 +161,8 @@ async def oauth_callback(
         await _finish_jira_connection(db, org_id, token_set, http_client)
     elif provider == "zoom":
         await _finish_zoom_connection(db, org_id, token_set, http_client)
+    elif provider == "microsoft":
+        await _finish_microsoft_connection(db, org_id, token_set, http_client)
     else:
         raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
 
@@ -198,6 +202,31 @@ async def _upsert_org_connection(
     db.commit()
 
 
+async def _upsert_calendar_connection(
+    db: Session, org_id: str, provider: str, account_email: str, token_set: OAuthTokenSet
+) -> None:
+    """Shared by google and microsoft -- both are calendar connections, and
+    CalendarConnection already had exactly the columns either grant needs
+    (provider was always "google | microsoft", per its own comment)."""
+    connection = (
+        db.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == provider)
+        .one_or_none()
+    )
+    if connection is None:
+        connection = CalendarConnection(
+            org_id=org_id, provider=provider, account_email=account_email, secret_ref=""
+        )
+        db.add(connection)
+        db.flush()
+        connection.secret_ref = f"oauth/{provider}/{connection.id}"
+    else:
+        connection.account_email = account_email
+
+    await get_secretstore().put(connection.secret_ref, token_set.model_dump_json())
+    db.commit()
+
+
 async def _finish_google_connection(
     db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
 ) -> None:
@@ -208,24 +237,24 @@ async def _finish_google_connection(
     account_email = resp.json().get("email")
     if not account_email:
         raise HTTPException(502, "Google userinfo response did not include an email")
+    await _upsert_calendar_connection(db, org_id, "google", account_email, token_set)
 
-    connection = (
-        db.query(CalendarConnection)
-        .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == "google")
-        .one_or_none()
+
+async def _finish_microsoft_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    resp = await http_client.get(
+        GRAPH_ME_URL, headers={"Authorization": f"Bearer {token_set.access_token}"}
     )
-    if connection is None:
-        connection = CalendarConnection(
-            org_id=org_id, provider="google", account_email=account_email, secret_ref=""
-        )
-        db.add(connection)
-        db.flush()
-        connection.secret_ref = f"oauth/google/{connection.id}"
-    else:
-        connection.account_email = account_email
-
-    await get_secretstore().put(connection.secret_ref, token_set.model_dump_json())
-    db.commit()
+    resp.raise_for_status()
+    data = resp.json()
+    # mail is null for accounts without an Exchange mailbox license --
+    # userPrincipalName (the sign-in identifier, always present) is the
+    # documented Graph fallback.
+    account_email = data.get("mail") or data.get("userPrincipalName")
+    if not account_email:
+        raise HTTPException(502, "Microsoft Graph /me response did not include mail/userPrincipalName")
+    await _upsert_calendar_connection(db, org_id, "microsoft", account_email, token_set)
 
 
 async def _finish_github_connection(

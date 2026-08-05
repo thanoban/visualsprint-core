@@ -142,6 +142,29 @@ def zoom_config(settings: Settings) -> OAuthProviderConfig:
     )
 
 
+def microsoft_config(settings: Settings) -> OAuthProviderConfig:
+    """Azure AD v2.0 endpoint, "organizations" tenant (not "common") --
+    this product has no use for personal Microsoft accounts, only work/
+    school accounts with Teams/Exchange calendars behind them."""
+    return OAuthProviderConfig(
+        provider="microsoft",
+        client_id=_require(
+            settings.microsoft_oauth_client_id, setting_name="VS_MICROSOFT_OAUTH_CLIENT_ID"
+        ),
+        client_secret=_require(
+            settings.microsoft_oauth_client_secret, setting_name="VS_MICROSOFT_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+        # offline_access -> refresh_token issued (Graph tokens are short-lived
+        # by design, unlike Google's). User.Read resolves the connected
+        # account's email at connect time; Calendars.Read backs
+        # calendar_microsoft.py; OnlineMeetings.Read.All backs
+        # teams_adapter.py's Mode A2 capture.
+        scope="offline_access User.Read Calendars.Read OnlineMeetings.Read.All",
+    )
+
+
 PROVIDERS = {
     "google": google_config,
     "slack": slack_config,
@@ -149,6 +172,7 @@ PROVIDERS = {
     "github": github_config,
     "linear": linear_config,
     "zoom": zoom_config,
+    "microsoft": microsoft_config,
 }
 
 

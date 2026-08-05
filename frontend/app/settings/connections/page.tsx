@@ -29,6 +29,7 @@ const VENDORS = [
   { provider: "github", label: "GitHub", description: "Open issues from verified commitments", ready: true },
   { provider: "linear", label: "Linear", description: "Create issues from verified commitments", ready: true },
   { provider: "zoom", label: "Zoom", description: "Real-time capture for your Zoom account's meetings", ready: true },
+  { provider: "microsoft", label: "Microsoft", description: "Calendar watch, Teams recordings", ready: true },
 ];
 
 export default function ConnectionsPage() {
