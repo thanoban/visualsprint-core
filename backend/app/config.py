@@ -27,6 +27,29 @@ class Settings(BaseSettings):
     zoom_client_secret: str | None = None
     zoom_webhook_secret_token: str | None = None
 
+    # --- SecretStore (OAuth token storage; "local" dev writes plaintext to
+    # disk, "gcp" prod uses Secret Manager -- app/interfaces/secretstore.py) ---
+    secretstore_backend: str = "local"  # "local" | "gcp"
+    secretstore_local_dir: str = ".secretstore"
+
+    # --- OAuth (per-org vendor connections -- app/oauth/. One app
+    # registration per vendor covers every customer org; each org
+    # authorizes it individually via the standard redirect-consent flow,
+    # never by pasting an API key. See CalendarConnection/secret_ref.) ---
+    oauth_redirect_base_url: str = "http://localhost:8000"
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    slack_oauth_client_id: str | None = None
+    slack_oauth_client_secret: str | None = None
+    jira_oauth_client_id: str | None = None
+    jira_oauth_client_secret: str | None = None
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
+    linear_oauth_client_id: str | None = None
+    linear_oauth_client_secret: str | None = None
+    zoom_oauth_client_id: str | None = None
+    zoom_oauth_client_secret: str | None = None
+
     # --- ASR vendors (buy-everything strategy; see docs/PROJECT_PLAN.md) ---
     google_credentials_json: str | None = None  # path to service-account JSON
     azure_speech_key: str | None = None
