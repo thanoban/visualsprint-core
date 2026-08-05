@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # authorizes it individually via the standard redirect-consent flow,
     # never by pasting an API key. See CalendarConnection/secret_ref.) ---
     oauth_redirect_base_url: str = "http://localhost:8000"
+    # Signs the OAuth `state` param (app/oauth/flow.py) so a callback can
+    # trust which org a grant belongs to without a separate state-storage
+    # table. Required in any environment serving real traffic -- unset is
+    # fine for local dev/tests where nothing signs or verifies state.
+    oauth_state_secret: str | None = None
     google_oauth_client_id: str | None = None
     google_oauth_client_secret: str | None = None
     slack_oauth_client_id: str | None = None

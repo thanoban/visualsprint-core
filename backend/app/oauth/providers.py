@@ -1,0 +1,159 @@
+"""Per-vendor OAuth 2.0 configuration -- authorize/token URLs, scopes, and
+whatever a vendor needs beyond the RFC 6749 baseline app/oauth/flow.py
+implements. Client id/secret come from app.config.Settings (one app
+registration per vendor, covers every customer org -- see .env.example's
+OAuth section for what to register where).
+
+Scope strings and extra params are ASSUMPTIONS from each vendor's public
+documentation, NOT live-verified -- no OAuth app is registered for any of
+these yet. Re-check the exact required scopes against each vendor's
+current app-registration UI when actually registering; Zoom in particular
+has changed its granular-scope naming more than once.
+"""
+
+from dataclasses import dataclass, field
+
+from app.config import Settings
+
+
+@dataclass
+class OAuthProviderConfig:
+    provider: str
+    client_id: str
+    client_secret: str
+    authorize_url: str
+    token_url: str
+    scope: str
+    extra_authorize_params: dict[str, str] = field(default_factory=dict)
+    extra_token_params: dict[str, str] = field(default_factory=dict)
+
+
+class OAuthNotConfiguredError(Exception):
+    """Raised when a provider's client_id/client_secret aren't set yet --
+    fails loudly rather than building an authorize URL that can't work."""
+
+
+def _require(value: str | None, *, setting_name: str) -> str:
+    if not value:
+        raise OAuthNotConfiguredError(f"{setting_name} is not configured")
+    return value
+
+
+def google_config(settings: Settings) -> OAuthProviderConfig:
+    return OAuthProviderConfig(
+        provider="google",
+        client_id=_require(settings.google_oauth_client_id, setting_name="VS_GOOGLE_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.google_oauth_client_secret, setting_name="VS_GOOGLE_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        # Calendar (event discovery), Meet REST (recording/transcript
+        # fetch), Drive (Meet stores the recording file there), Gmail
+        # drafts (email_draft connector) -- one grant covers every
+        # capture/action surface that shares this one OAuth client.
+        scope=(
+            "https://www.googleapis.com/auth/calendar.readonly "
+            "https://www.googleapis.com/auth/meetings.space.readonly "
+            "https://www.googleapis.com/auth/drive.readonly "
+            "https://www.googleapis.com/auth/gmail.compose"
+        ),
+        extra_authorize_params={
+            # offline access -> refresh_token issued; prompt=consent forces
+            # Google to re-issue one even on a repeat authorization (a
+            # refresh_token is otherwise only returned on the FIRST
+            # consent for a given client_id/user pair).
+            "access_type": "offline",
+            "prompt": "consent",
+        },
+    )
+
+
+def slack_config(settings: Settings) -> OAuthProviderConfig:
+    return OAuthProviderConfig(
+        provider="slack",
+        client_id=_require(settings.slack_oauth_client_id, setting_name="VS_SLACK_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.slack_oauth_client_secret, setting_name="VS_SLACK_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://slack.com/oauth/v2/authorize",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scope="chat:write",  # channel_recap connector posts as this bot
+    )
+
+
+def jira_config(settings: Settings) -> OAuthProviderConfig:
+    return OAuthProviderConfig(
+        provider="jira",
+        client_id=_require(settings.jira_oauth_client_id, setting_name="VS_JIRA_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.jira_oauth_client_secret, setting_name="VS_JIRA_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scope="write:jira-work offline_access",  # offline_access -> refresh_token issued
+        extra_authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
+    )
+
+
+def github_config(settings: Settings) -> OAuthProviderConfig:
+    return OAuthProviderConfig(
+        provider="github",
+        client_id=_require(settings.github_oauth_client_id, setting_name="VS_GITHUB_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.github_oauth_client_secret, setting_name="VS_GITHUB_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://github.com/login/oauth/authorize",
+        token_url="https://github.com/login/oauth/access_token",
+        scope="repo",  # task_create connector opens issues
+    )
+
+
+def linear_config(settings: Settings) -> OAuthProviderConfig:
+    return OAuthProviderConfig(
+        provider="linear",
+        client_id=_require(settings.linear_oauth_client_id, setting_name="VS_LINEAR_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.linear_oauth_client_secret, setting_name="VS_LINEAR_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://linear.app/oauth/authorize",
+        token_url="https://api.linear.app/oauth/token",
+        scope="write",
+        extra_authorize_params={"actor": "application"},
+    )
+
+
+def zoom_config(settings: Settings) -> OAuthProviderConfig:
+    """This is the General OAuth App -- distinct from VS_ZOOM_CLIENT_ID's
+    Server-to-Server app (rtms_webhook.py). Only a General App can be
+    authorized by a customer's own Zoom account."""
+    return OAuthProviderConfig(
+        provider="zoom",
+        client_id=_require(settings.zoom_oauth_client_id, setting_name="VS_ZOOM_OAUTH_CLIENT_ID"),
+        client_secret=_require(
+            settings.zoom_oauth_client_secret, setting_name="VS_ZOOM_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://zoom.us/oauth/authorize",
+        token_url="https://zoom.us/oauth/token",
+        # cloud_recording:read for Mode A2, rtms:read for Mode A1 -- exact
+        # granular-scope strings to confirm against the app's own
+        # scope-picker UI when registering, Zoom's naming has shifted before.
+        scope="cloud_recording:read:list_recording_files:admin rtms:read:list_meeting_rtms_app:admin",
+    )
+
+
+PROVIDERS = {
+    "google": google_config,
+    "slack": slack_config,
+    "jira": jira_config,
+    "github": github_config,
+    "linear": linear_config,
+    "zoom": zoom_config,
+}
+
+
+def get_provider_config(provider: str, settings: Settings) -> OAuthProviderConfig:
+    builder = PROVIDERS.get(provider)
+    if builder is None:
+        raise ValueError(f"unknown OAuth provider: {provider!r}")
+    return builder(settings)
