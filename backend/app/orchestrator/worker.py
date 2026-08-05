@@ -236,6 +236,36 @@ async def _run_transcode_backfill(db: object) -> None:
         log.warning("transcode_backfill.failed", error=str(exc))
 
 
+async def _run_action_triggers(db: object) -> None:
+    """One pass over every Org for the two time-driven action triggers
+    (see app/orchestrator/action_triggers.py). Per-org isolated like every
+    other sweep -- one org's bad data must not block another's."""
+    from sqlalchemy import select
+
+    from app.db.models import Org
+    from app.orchestrator.action_triggers import (
+        propose_commitment_reminders,
+        propose_recurring_blocker_escalations,
+    )
+
+    settings = get_settings()
+    orgs = db.execute(select(Org)).scalars().all()
+    for org in orgs:
+        try:
+            escalated = propose_recurring_blocker_escalations(db, org.id)
+            reminded = propose_commitment_reminders(
+                db, org.id, within_hours=settings.action_trigger_reminder_window_hours
+            )
+            db.commit()
+            if escalated or reminded:
+                log.info(
+                    "action_triggers.swept", org=org.id, escalated=len(escalated), reminded=len(reminded)
+                )
+        except Exception as exc:
+            db.rollback()
+            log.warning("action_triggers.failed", org=org.id, error=str(exc))
+
+
 def _person_for_roster_entry(db: object, org_id: str, entry):
     from sqlalchemy import select
 
@@ -774,6 +804,7 @@ async def main() -> None:
     last_calendar_sync = datetime.min.replace(tzinfo=UTC)
     last_retention_sweep = datetime.min.replace(tzinfo=UTC)
     last_transcode_backfill = datetime.min.replace(tzinfo=UTC)
+    last_action_triggers = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -809,6 +840,12 @@ async def main() -> None:
                 Session = get_sessionmaker()
                 with Session() as db:
                     await _run_transcode_backfill(db)
+
+            if (now - last_action_triggers).total_seconds() >= settings.action_trigger_interval_s:
+                last_action_triggers = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_action_triggers(db)
     finally:
         health_task.cancel()
 

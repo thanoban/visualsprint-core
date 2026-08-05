@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     # retention -- this only matters once ffmpeg gets provisioned in an
     # environment where it wasn't before, not a steady-state concern.
     transcode_backfill_interval_s: float = 3600.0
+    # How often the worker checks for the two time-driven action triggers --
+    # recurring-blocker escalation and approaching-due-date commitment
+    # reminders (app/orchestrator/action_triggers.py). Same cadence as
+    # calendar sync: these are the automations most likely to be
+    # user-visibly late if checked too coarsely, unlike retention/backfill.
+    action_trigger_interval_s: float = 300.0
+    # How far ahead of a commitment's due date to start proposing a
+    # reminder (also covers already-overdue commitments).
+    action_trigger_reminder_window_hours: float = 24.0
 
     # --- API ---
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
