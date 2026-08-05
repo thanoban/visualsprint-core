@@ -26,8 +26,8 @@ const VENDORS = [
   { provider: "google", label: "Google", description: "Calendar watch, Meet recordings, Gmail drafts", ready: true },
   { provider: "slack", label: "Slack", description: "Post decision recaps to a channel", ready: false },
   { provider: "jira", label: "Jira", description: "Create tasks from verified commitments", ready: false },
-  { provider: "github", label: "GitHub", description: "Open issues from verified commitments", ready: false },
-  { provider: "linear", label: "Linear", description: "Create issues from verified commitments", ready: false },
+  { provider: "github", label: "GitHub", description: "Open issues from verified commitments", ready: true },
+  { provider: "linear", label: "Linear", description: "Create issues from verified commitments", ready: true },
   { provider: "zoom", label: "Zoom", description: "Real-time capture for your own account's meetings", ready: false },
 ];
 
@@ -104,7 +104,7 @@ export default function ConnectionsPage() {
                 <h2 className="text-sm font-semibold text-slate-900">{vendor.label}</h2>
                 <p className="mt-1 text-sm text-slate-600">{vendor.description}</p>
                 {connection && (
-                  <p className="mt-1 text-xs text-green-700">Connected as {connection.account_email}</p>
+                  <p className="mt-1 text-xs text-green-700">Connected as {connection.account_label}</p>
                 )}
               </div>
               {vendor.ready ? (

@@ -162,8 +162,10 @@ async def test_github_surfaces_http_failure():
 async def test_linear_creates_issue_via_graphql():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == httpx.URL("https://api.linear.app/graphql")
-        # Linear expects the raw API key, no "Bearer " prefix.
-        assert request.headers["authorization"] == "linear-key"
+        # OAuth access tokens are Bearer-prefixed -- distinct from Linear's
+        # personal-API-key convention (sent raw), which this connector no
+        # longer supports (see task_create.py's module docstring).
+        assert request.headers["authorization"] == "Bearer linear-key"
         return httpx.Response(
             200,
             json={

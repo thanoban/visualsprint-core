@@ -3,13 +3,14 @@ every frontend button (frontend/app/settings/connections/page.tsx).
 app/oauth/flow.py has the RFC 6749 mechanics; this is where a completed
 grant becomes a real row plus a stored token set.
 
-Only `google` is wired to a real connection upsert so far (via the
-existing CalendarConnection table -- Calendar/Meet/Gmail share this one
-OAuth client, and that table already has exactly the columns a Google
-grant needs: provider, account_email, secret_ref). Slack/Jira/GitHub/
-Linear/Zoom need a new, more general connection table since none of them
-are calendars -- that lands with each vendor in a follow-up, not invented
-here ahead of being consumed.
+google lives in CalendarConnection (Calendar/Meet/Gmail share this one
+OAuth client, and that table already had exactly the columns a Google
+grant needs -- no new table for it). github/linear/slack/jira/zoom live in
+OrgConnection (app/db/models.py's comment on why they're separate from
+CalendarConnection). Only google/github/linear are wired to a real
+connection upsert so far; slack/jira/zoom land in their own follow-ups
+(jira additionally needs its connector rewritten off Basic auth -- see
+app/connectors/task_create.py).
 """
 
 import httpx
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.adapters.secretstore_gcp import get_secretstore
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import CalendarConnection, Org
+from app.db.models import CalendarConnection, Org, OrgConnection
 from app.oauth.flow import (
     OAuthStateError,
     OAuthTokenSet,
@@ -34,28 +35,35 @@ from app.oauth.providers import OAuthNotConfiguredError, get_provider_config
 
 router = APIRouter(tags=["oauth"])
 
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+GITHUB_USER_URL = "https://api.github.com/user"
+LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
+
 
 class ConnectionOut(BaseModel):
     provider: str
-    account_email: str
+    account_label: str
     connected_at: str
 
 
 @router.get("/api/v1/orgs/{org_id}/connections", response_model=list[ConnectionOut])
 async def list_connections(org_id: str, db: Session = Depends(get_db)) -> list[ConnectionOut]:
-    """Only CalendarConnection rows (google/microsoft) exist so far --
-    Slack/Jira/GitHub/Linear/Zoom connections land with each vendor."""
     if db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")
-    connections = db.query(CalendarConnection).filter(CalendarConnection.org_id == org_id).all()
+
+    calendar_connections = db.query(CalendarConnection).filter(CalendarConnection.org_id == org_id).all()
+    org_connections = db.query(OrgConnection).filter(OrgConnection.org_id == org_id).all()
     return [
         ConnectionOut(
-            provider=c.provider, account_email=c.account_email, connected_at=c.created_at.isoformat()
+            provider=c.provider, account_label=c.account_email, connected_at=c.created_at.isoformat()
         )
-        for c in connections
+        for c in calendar_connections
+    ] + [
+        ConnectionOut(
+            provider=c.provider, account_label=c.account_label, connected_at=c.created_at.isoformat()
+        )
+        for c in org_connections
     ]
-
-GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 
 async def get_http_client() -> httpx.AsyncClient:
@@ -128,10 +136,47 @@ async def oauth_callback(
 
     if provider == "google":
         await _finish_google_connection(db, org_id, token_set, http_client)
+    elif provider == "github":
+        await _finish_github_connection(db, org_id, token_set, http_client)
+    elif provider == "linear":
+        await _finish_linear_connection(db, org_id, token_set, http_client)
     else:
         raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
 
     return RedirectResponse(f"{settings.frontend_base_url}/settings/connections?connected={provider}")
+
+
+async def _upsert_org_connection(
+    db: Session,
+    org_id: str,
+    provider: str,
+    account_label: str,
+    token_set: OAuthTokenSet,
+    *,
+    external_id: str | None = None,
+) -> None:
+    connection = (
+        db.query(OrgConnection)
+        .filter(OrgConnection.org_id == org_id, OrgConnection.provider == provider)
+        .one_or_none()
+    )
+    if connection is None:
+        connection = OrgConnection(
+            org_id=org_id,
+            provider=provider,
+            account_label=account_label,
+            external_id=external_id,
+            secret_ref="",
+        )
+        db.add(connection)
+        db.flush()  # need connection.id before the secret_ref name can include it
+        connection.secret_ref = f"oauth/{provider}/{connection.id}"
+    else:
+        connection.account_label = account_label
+        connection.external_id = external_id
+
+    await get_secretstore().put(connection.secret_ref, token_set.model_dump_json())
+    db.commit()
 
 
 async def _finish_google_connection(
@@ -155,10 +200,45 @@ async def _finish_google_connection(
             org_id=org_id, provider="google", account_email=account_email, secret_ref=""
         )
         db.add(connection)
-        db.flush()  # need connection.id before the secret_ref name can include it
+        db.flush()
         connection.secret_ref = f"oauth/google/{connection.id}"
     else:
         connection.account_email = account_email
 
     await get_secretstore().put(connection.secret_ref, token_set.model_dump_json())
     db.commit()
+
+
+async def _finish_github_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    resp = await http_client.get(
+        GITHUB_USER_URL,
+        headers={
+            "Authorization": f"Bearer {token_set.access_token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    resp.raise_for_status()
+    username = resp.json().get("login")
+    if not username:
+        raise HTTPException(502, "GitHub user response did not include a login")
+    await _upsert_org_connection(db, org_id, "github", username, token_set)
+
+
+async def _finish_linear_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    resp = await http_client.post(
+        LINEAR_GRAPHQL_URL,
+        headers={"Authorization": f"Bearer {token_set.access_token}"},
+        json={"query": "{ organization { name } }"},
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errors"):
+        raise HTTPException(502, f"Linear organization query returned errors: {data['errors']}")
+    org_name = data.get("data", {}).get("organization", {}).get("name")
+    if not org_name:
+        raise HTTPException(502, "Linear organization query did not return a name")
+    await _upsert_org_connection(db, org_id, "linear", org_name, token_set)

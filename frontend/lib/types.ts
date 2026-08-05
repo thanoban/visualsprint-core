@@ -327,6 +327,6 @@ export interface OrgSettingsOut {
 /** Element of GET /api/v1/orgs/{org_id}/connections */
 export interface ConnectionOut {
   provider: string;
-  account_email: string;
+  account_label: string;
   connected_at: string;
 }

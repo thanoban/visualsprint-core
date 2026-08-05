@@ -8,7 +8,7 @@ import pytest
 
 from app.api.oauth import get_http_client
 from app.config import get_settings
-from app.db.models import CalendarConnection, Org
+from app.db.models import CalendarConnection, Org, OrgConnection
 from app.main import app
 from app.oauth.flow import sign_state
 
@@ -19,6 +19,10 @@ def _oauth_env(monkeypatch):
     monkeypatch.setenv("VS_OAUTH_STATE_SECRET", "test-signing-secret")
     monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_ID", "google-cid")
     monkeypatch.setenv("VS_GOOGLE_OAUTH_CLIENT_SECRET", "google-csecret")
+    monkeypatch.setenv("VS_GITHUB_OAUTH_CLIENT_ID", "github-cid")
+    monkeypatch.setenv("VS_GITHUB_OAUTH_CLIENT_SECRET", "github-csecret")
+    monkeypatch.setenv("VS_LINEAR_OAUTH_CLIENT_ID", "linear-cid")
+    monkeypatch.setenv("VS_LINEAR_OAUTH_CLIENT_SECRET", "linear-csecret")
     monkeypatch.setenv("VS_OAUTH_REDIRECT_BASE_URL", "https://api.test")
     monkeypatch.setenv("VS_FRONTEND_BASE_URL", "https://app.test")
     yield
@@ -222,4 +226,144 @@ def test_list_connections_returns_a_connected_google_account(client, db_session)
     body = resp.json()
     assert len(body) == 1
     assert body[0]["provider"] == "google"
-    assert body[0]["account_email"] == "team@acme.test"
+    assert body[0]["account_label"] == "team@acme.test"
+
+
+def test_list_connections_includes_org_connections_alongside_calendar_connections(client, db_session):
+    org = _seed_org(db_session)
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id, provider="google", account_email="team@acme.test", secret_ref="oauth/google/x"
+        )
+    )
+    db_session.add(
+        OrgConnection(
+            org_id=org.id, provider="github", account_label="acme-bot", secret_ref="oauth/github/x"
+        )
+    )
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/connections")
+
+    assert resp.status_code == 200
+    providers = {c["provider"] for c in resp.json()}
+    assert providers == {"google", "github"}
+
+
+def test_callback_creates_a_github_org_connection(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="github", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gh-token"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"login": "acme-bot"})
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/github/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == "https://app.test/settings/connections?connected=github"
+
+    connection = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "github")
+        .one()
+    )
+    assert connection.account_label == "acme-bot"
+    assert connection.secret_ref == f"oauth/github/{connection.id}"
+
+
+def test_callback_400s_when_github_user_response_has_no_login(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="github", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gh-token"})
+        return httpx.Response(200, json={})  # no "login" field
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/github/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code == 502
+
+
+def test_callback_creates_a_linear_org_connection(client, db_session):
+    org = _seed_org(db_session)
+    state = sign_state(org_id=org.id, provider="linear", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(200, json={"access_token": "linear-token", "expires_in": 3600})
+        if request.url.path == "/graphql":
+            assert request.headers["authorization"] == "Bearer linear-token"
+            return httpx.Response(200, json={"data": {"organization": {"name": "Acme Inc"}}})
+        raise AssertionError(f"unexpected request to {request.url}")
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        resp = client.get(
+            "/api/v1/oauth/linear/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    connection = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "linear")
+        .one()
+    )
+    assert connection.account_label == "Acme Inc"
+
+
+def test_callback_reconnecting_github_updates_the_existing_connection_not_a_duplicate(
+    client, db_session
+):
+    org = _seed_org(db_session)
+    existing = OrgConnection(
+        org_id=org.id, provider="github", account_label="old-bot", secret_ref="oauth/github/existing"
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    state = sign_state(org_id=org.id, provider="github", secret="test-signing-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gh-token-2"})
+        return httpx.Response(200, json={"login": "new-bot"})
+
+    app.dependency_overrides[get_http_client] = _override_http_client(handler)
+    try:
+        client.get(
+            "/api/v1/oauth/github/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    connections = (
+        db_session.query(OrgConnection)
+        .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "github")
+        .all()
+    )
+    assert len(connections) == 1
+    assert connections[0].account_label == "new-bot"
+    assert connections[0].secret_ref == "oauth/github/existing"  # unchanged, not regenerated

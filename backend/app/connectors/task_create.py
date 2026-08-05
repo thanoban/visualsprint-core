@@ -6,9 +6,13 @@ hardcoded:
 
 - Jira Cloud: Basic auth (`email:api_token`), via `jira_email` +
   `jira_token_provider`. `target`: base_url, project_key, issue_type (optional).
-- GitHub: PAT via `github_token_provider`. `target`: owner, repo.
-- Linear: API key via `linear_token_provider` (sent raw, no "Bearer" prefix —
-  Linear's GraphQL API expects the key as-is). `target`: team_id.
+- GitHub: OAuth access token via `github_token_provider`, sent as
+  `Authorization: Bearer`. `target`: owner, repo.
+- Linear: OAuth access token via `linear_token_provider`, sent as
+  `Authorization: Bearer` -- Linear's GraphQL API distinguishes OAuth
+  tokens (Bearer-prefixed) from personal API keys (sent raw); this
+  connector only ever receives real OAuth grants (app/oauth/), never a
+  manually-pasted personal key. `target`: team_id.
 """
 
 import base64
@@ -135,10 +139,10 @@ class TaskCreateConnector:
         if self._linear_tokens is None:
             raise ConnectorNotConfiguredError("linear_token_provider not configured")
 
-        api_key = await self._linear_tokens.get_token()
+        access_token = await self._linear_tokens.get_token()
         resp = await self._client.post(
             LINEAR_GRAPHQL_URL,
-            headers={"Authorization": api_key},
+            headers={"Authorization": f"Bearer {access_token}"},
             json={
                 "query": _ISSUE_CREATE_MUTATION,
                 "variables": {
