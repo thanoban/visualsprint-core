@@ -100,8 +100,13 @@ def test_missing_credentials_raise_before_touching_the_sdk(monkeypatch):
     from app.config import get_settings
 
     get_settings.cache_clear()
-    monkeypatch.delenv("VS_AZURE_SPEECH_KEY", raising=False)
-    monkeypatch.delenv("VS_AZURE_SPEECH_REGION", raising=False)
+    # delenv isn't enough: pydantic-settings falls through to backend/.env
+    # when a var is absent from the process environment, and a real
+    # developer's .env may genuinely have these set -- setenv("") overrides
+    # the dotenv value outright, keeping this test hermetic regardless of
+    # what's on disk.
+    monkeypatch.setenv("VS_AZURE_SPEECH_KEY", "")
+    monkeypatch.setenv("VS_AZURE_SPEECH_REGION", "")
     try:
         adapter = AzureSpeechAdapter()
         with pytest.raises(VendorTranscriptionError, match="not configured"):

@@ -69,7 +69,12 @@ def test_start_oauth_404s_for_unknown_provider(client, db_session):
 
 def test_start_oauth_503s_when_provider_not_configured(client, db_session, monkeypatch):
     org = _seed_org(db_session)
-    monkeypatch.delenv("VS_SLACK_OAUTH_CLIENT_ID", raising=False)
+    # delenv isn't enough here: pydantic-settings falls through to reading
+    # backend/.env when a var is absent from the process environment, and a
+    # real developer's .env may genuinely have VS_SLACK_OAUTH_CLIENT_ID set
+    # -- setenv("") overrides the dotenv value outright regardless of what's
+    # on disk, keeping this test hermetic.
+    monkeypatch.setenv("VS_SLACK_OAUTH_CLIENT_ID", "")
     get_settings.cache_clear()
 
     resp = client.get(f"/api/v1/orgs/{org.id}/oauth/slack/authorize", follow_redirects=False)

@@ -1,12 +1,20 @@
 """Application settings. All secrets come from environment / .env — never hardcoded."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolved relative to this file, not the process's cwd -- pydantic-settings'
+# default "relative to cwd" behavior silently finds nothing when uvicorn is
+# launched from the repo root with --app-dir backend (cwd stays the repo
+# root; --app-dir only affects the Python import path), which is exactly how
+# .claude/launch.json's "backend" config runs it.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="VS_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="VS_", extra="ignore")
 
     # --- Core ---
     env: str = "dev"
@@ -69,10 +77,19 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     huggingface_token: str | None = None  # pyannote diarization pipelines are HF-gated
 
-    # --- Agents (Claude via Vertex AI; auth is GCP Application Default Credentials) ---
+    # --- Agents (Claude via Vertex AI by default; Microsoft Foundry is a
+    # swappable alternate transport behind the same LlmClient interface --
+    # both construct the identical forced-tool-use Messages API call, so
+    # agent code never knows which one is live. See app/adapters/llm_vertex.py
+    # / llm_foundry.py and CLAUDE.md's note on this.) ---
+    llm_provider: str = "vertex"  # "vertex" | "foundry"
     anthropic_api_key: str | None = None
     vertex_project_id: str | None = None
     vertex_region: str = "us-east5"
+    # Microsoft Foundry (Azure) -- api_key auth against
+    # https://{foundry_resource}.services.ai.azure.com/anthropic/.
+    foundry_api_key: str | None = None
+    foundry_resource: str | None = None
     model_extract: str = "claude-sonnet-5"
     model_classify: str = "claude-haiku-4-5-20251001"
     model_memory: str = "claude-opus-4-8"
