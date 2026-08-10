@@ -31,6 +31,7 @@ from app.db.models import (
     Org,
     Participant,
     PipelineJob,
+    User,
     Utterance,
     UtteranceKeyframe,
 )
@@ -88,11 +89,44 @@ def fake_transcriber(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_screen_captioner(monkeypatch):
     monkeypatch.setattr(worker, "_vlm_captioner", worker._VLM_CAPTIONER_UNAVAILABLE)
+    # _llm_client is a lazy module-global singleton (worker._get_llm) -- once
+    # any test reaches it without an explicit monkeypatch override, it
+    # permanently caches a real VertexLlmClient for the rest of the suite
+    # run whenever real Vertex credentials are present in the environment
+    # (backend/.env), silently leaking into later tests that never intended
+    # to make a live call. Reset it alongside the captioner so test order
+    # never matters here.
+    monkeypatch.setattr(worker, "_llm_client", None)
 
 
 @pytest.fixture
-def client():
-    return TestClient(fastapi_app)
+def default_org_id():
+    Session = get_sessionmaker()
+    with Session() as db:
+        org = db.query(Org).filter(Org.name == "default").one_or_none()
+        if org is None:
+            org = Org(name="default")
+            db.add(org)
+            db.commit()
+        return org.id
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """Overrides auth the same way tests/api/conftest.py does -- a fixed
+    fake user plus is_org_member always True -- since org_id is now a
+    required Form field (app/api/upload.py), not an auto-created "default"
+    convenience. See that conftest's docstring for why is_org_member is
+    monkeypatched on the module rather than via dependency_overrides."""
+    import app.auth.dependency as auth_dep
+
+    fake_user = User(id="test-user-0000-0000-0000-000000000000", email="test@example.com")
+    monkeypatch.setattr(auth_dep, "is_org_member", lambda db, org_id, user: True)
+    fastapi_app.dependency_overrides[auth_dep.get_current_user] = lambda: fake_user
+    try:
+        yield TestClient(fastapi_app)
+    finally:
+        fastapi_app.dependency_overrides.clear()
 
 
 def _delete_default_org_children(db) -> None:
@@ -162,11 +196,11 @@ def _cleanup_default_org():
     _cleanup_with_retry()
 
 
-def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
+def test_upload_then_transcribe_produces_utterances(client, default_org_id, fake_transcriber):
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("standup.wav", FAKE_AUDIO_BYTES, "audio/wav")},
-        data={"title": "Sprint Planning"},
+        data={"title": "Sprint Planning", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -210,7 +244,7 @@ def test_upload_then_transcribe_produces_utterances(client, fake_transcriber):
     assert status.json()["state"] == CaptureState.TRANSCRIBING.value
 
 
-def test_transcribe_writes_coverage_gap_for_failed_segment(client, monkeypatch):
+def test_transcribe_writes_coverage_gap_for_failed_segment(client, default_org_id, monkeypatch):
     """CLAUDE.md rule 6, proven through the real transcribe stage handler
     (not just app.asr.coverage's unit tests): a span the cascade couldn't
     transcribe becomes a first-class CoverageInterval row, not just a
@@ -251,7 +285,7 @@ def test_transcribe_writes_coverage_gap_for_failed_segment(client, monkeypatch):
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("standup.wav", FAKE_AUDIO_BYTES, "audio/wav")},
-        data={"title": "Partial capture failure"},
+        data={"title": "Partial capture failure", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     session_id = resp.json()["capture_session_id"]
@@ -280,7 +314,7 @@ def test_transcribe_writes_coverage_gap_for_failed_segment(client, monkeypatch):
     assert "unrouted" in gaps[0].reason
 
 
-def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcriber, monkeypatch):
+def test_transcribe_applies_llm_repair_when_context_exists(client, default_org_id, fake_transcriber, monkeypatch):
     """With a participant roster present, the transcribe stage must actually
     call through app.asr.repair and persist the repaired text with
     repaired=True — proving worker.py's wiring, not just repair_segments in
@@ -308,7 +342,7 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("standup2.wav", FAKE_AUDIO_BYTES, "audio/wav")},
-        data={"title": "Sprint Planning 2"},
+        data={"title": "Sprint Planning 2", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     session_id = resp.json()["capture_session_id"]
@@ -343,7 +377,7 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, fake_transcri
     assert utterances[1].repaired is False  # unchanged text -> not flagged as repaired
 
 
-def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber, monkeypatch):
+def test_video_upload_produces_keyframes_and_grounding(client, default_org_id, fake_transcriber, monkeypatch):
     """A video-format Mode D upload doubles as the screen source (see
     api/upload.py) -- proves acquire -> transcribe -> screen wires keyframe
     detection, OCR, and speech<->screen grounding together end-to-end, using
@@ -377,7 +411,7 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("standup3.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
-        data={"title": "Sprint Planning 3"},
+        data={"title": "Sprint Planning 3", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     session_id = resp.json()["capture_session_id"]
@@ -425,7 +459,7 @@ def test_video_upload_produces_keyframes_and_grounding(client, fake_transcriber,
 
 
 def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
-    client, fake_transcriber, monkeypatch
+    client, default_org_id, fake_transcriber, monkeypatch
 ):
     from app.screen.keyframe_detect import KeyframeCandidate
 
@@ -464,7 +498,7 @@ def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("captioned.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
-        data={"title": "Captioned screen"},
+        data={"title": "Captioned screen", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     session_id = resp.json()["capture_session_id"]
@@ -486,7 +520,7 @@ def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
 
 
 def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
-    client, fake_transcriber, monkeypatch
+    client, default_org_id, fake_transcriber, monkeypatch
 ):
     from app.screen.keyframe_detect import KeyframeCandidate
 
@@ -520,7 +554,7 @@ def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("caption-fail.mp4", FAKE_AUDIO_BYTES, "video/mp4")},
-        data={"title": "Caption failure"},
+        data={"title": "Caption failure", "org_id": default_org_id},
     )
     assert resp.status_code == 200, resp.text
     session_id = resp.json()["capture_session_id"]
@@ -541,13 +575,13 @@ def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
     assert keyframe.vlm_caption == ""
 
 
-def test_audio_only_upload_skips_screen_stage_without_failing(client, fake_transcriber):
+def test_audio_only_upload_skips_screen_stage_without_failing(client, default_org_id, fake_transcriber):
     """No video_uri (plain .wav upload) is a normal outcome, not a failure --
     the screen stage must complete cleanly with zero keyframes."""
     resp = client.post(
         "/api/v1/meetings/upload",
         files={"file": ("audio-only.wav", FAKE_AUDIO_BYTES, "audio/wav")},
-        data={"title": "Audio-only meeting"},
+        data={"title": "Audio-only meeting", "org_id": default_org_id},
     )
     session_id = resp.json()["capture_session_id"]
 
