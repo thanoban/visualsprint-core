@@ -100,6 +100,8 @@ jobs:
         run: |
           docker build frontend \
             --build-arg NEXT_PUBLIC_API_BASE_URL="${{ steps.api_url.outputs.url }}" \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ vars.NEXT_PUBLIC_SUPABASE_URL }}" \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
             -t "${REGISTRY}/web:${{ github.sha }}" \
             -t "${REGISTRY}/web:latest"
           docker push "${REGISTRY}/web:${{ github.sha }}"
@@ -120,6 +122,13 @@ jobs:
 #   GCP_REGION                    = us-west1
 #   GCP_WORKLOAD_IDENTITY_PROVIDER = projects/530780341550/locations/global/workloadIdentityPools/github-pool/providers/github-provider
 #   GCP_SERVICE_ACCOUNT           = github-actions-deploy@visualsprint-agent.iam.gserviceaccount.com
+#   NEXT_PUBLIC_SUPABASE_URL      = https://<project-ref>.supabase.co
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY = <anon key, from Supabase project settings -> API>
+#     (the anon key is safe as a plain repo Variable, not a Secret -- it is
+#     designed to be public and ends up baked into the browser bundle either
+#     way; Row Level Security, not secrecy, is what protects the database.
+#     NEVER put the service_role key here or anywhere in frontend/ -- it
+#     bypasses RLS entirely and must stay backend-only, if used at all.)
 #
 # Trust boundary: the WIF provider's attribute condition currently allows
 # BOTH this repo and VisualSprint-Labs/visualsprint-agent (an earlier,
