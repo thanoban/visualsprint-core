@@ -13,7 +13,6 @@ from typing import TypeVar
 
 import structlog
 from anthropic import AnthropicVertex
-from google.auth import default as google_auth_default
 from pydantic import BaseModel, ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -46,6 +45,8 @@ def _sniff_media_type(data: bytes) -> str:
 def _resolve_project_id(explicit: str | None) -> str:
     if explicit:
         return explicit
+    from google.auth import default as google_auth_default
+
     _, project_id = google_auth_default()
     if not project_id:
         raise RuntimeError(

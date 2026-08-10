@@ -17,8 +17,6 @@ import asyncio
 import re
 from typing import Any, Protocol
 
-from google.auth import default as google_auth_default
-
 from app.config import get_settings
 
 SCHEME = "gcpsm://"
@@ -47,6 +45,8 @@ class SecretManagerClientBackend(Protocol):
 def _resolve_project_id(explicit: str | None) -> str:
     if explicit:
         return explicit
+    from google.auth import default as google_auth_default
+
     _, project_id = google_auth_default()
     if not project_id:
         raise RuntimeError(

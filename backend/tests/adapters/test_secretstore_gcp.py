@@ -117,9 +117,7 @@ async def test_names_with_slashes_are_sanitized_into_a_valid_secret_id(
 
 
 async def test_requires_a_project_id_when_none_configured(monkeypatch):
-    import app.adapters.secretstore_gcp as secretstore_gcp
-
-    monkeypatch.setattr(secretstore_gcp, "google_auth_default", lambda: (None, None))
+    monkeypatch.setattr("google.auth.default", lambda: (None, None))
 
     from app.config import get_settings
 

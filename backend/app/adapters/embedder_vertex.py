@@ -12,8 +12,6 @@ runs the sync call in a thread rather than blocking the event loop.
 
 import asyncio
 
-from google.auth import default as google_auth_default
-
 from app.config import get_settings
 
 EMBEDDING_MODEL = "gemini-embedding-001"
@@ -23,6 +21,8 @@ EMBEDDING_DIMENSIONALITY = 1024  # must match KnowledgeItem.embedding's Vector(1
 def _resolve_project_id(explicit: str | None) -> str:
     if explicit:
         return explicit
+    from google.auth import default as google_auth_default
+
     _, project_id = google_auth_default()
     if not project_id:
         raise RuntimeError(
