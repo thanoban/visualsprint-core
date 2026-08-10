@@ -53,6 +53,7 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
+            --allow-unauthenticated \
             --quiet
 
       # --- Agents/worker: full image, runs pipeline stages, needs every
@@ -109,6 +110,7 @@ jobs:
           gcloud run deploy visualsprint-web \
             --image "${REGISTRY}/web:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
+            --allow-unauthenticated \
             --quiet
 
 # --- Setup required once, not per-run ---
