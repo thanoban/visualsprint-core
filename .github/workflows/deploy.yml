@@ -51,6 +51,7 @@ jobs:
           gcloud run deploy visualsprint-api \
             --image "${REGISTRY}/api:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
+            --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
             --quiet
 
@@ -73,6 +74,7 @@ jobs:
           gcloud run deploy visualsprint-agents \
             --image "${REGISTRY}/agents:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
+            --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest" \
