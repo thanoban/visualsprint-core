@@ -8,7 +8,14 @@ from app.db.base import Base
 from app.db import models  # noqa: F401 — register all tables on Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# set_main_option stores the value through configparser's interpolation,
+# where a bare "%" is special syntax (e.g. "%(foo)s") -- a real password
+# containing a URL-encoded character like "%40" (for "@") raises
+# "invalid interpolation syntax" before the connection is ever attempted.
+# Doubling "%" here escapes it for configparser's storage; get_main_option/
+# get_section decode it symmetrically on read, so the URL comes back out
+# exactly as it went in.
+config.set_main_option("sqlalchemy.url", get_settings().database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
