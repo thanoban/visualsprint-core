@@ -124,7 +124,11 @@ async def test_requires_a_project_id_when_none_configured(monkeypatch):
     from app.config import get_settings
 
     get_settings.cache_clear()
-    monkeypatch.delenv("VS_VERTEX_PROJECT_ID", raising=False)
+    # delenv alone doesn't shadow a value backend/.env supplies directly --
+    # pydantic-settings falls back to reading the file when the var isn't
+    # in os.environ. "" is a real env var that wins over the file, and is
+    # falsy so the adapter still treats it as "not configured".
+    monkeypatch.setenv("VS_VERTEX_PROJECT_ID", "")
     try:
         with pytest.raises(RuntimeError, match="vertex_project_id"):
             GcpSecretStore(client=object())
