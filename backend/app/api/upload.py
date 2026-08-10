@@ -10,9 +10,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
+from app.auth import dependency as auth_dep
+from app.auth.dependency import get_current_user
 from app.capture.consent import record_disclosure
 from app.db.base import get_db
-from app.db.models import AudioTrack, CaptureSession, Meeting, Org
+from app.db.models import AudioTrack, CaptureSession, Meeting, User
 from app.orchestrator.queue import enqueue_pipeline
 
 router = APIRouter(prefix="/api/v1/meetings", tags=["meetings"])
@@ -33,9 +35,18 @@ class UploadResponse(BaseModel):
 async def upload_meeting(
     file: UploadFile = File(...),
     title: str = Form(default=""),
-    org_id: str = Form(default=""),
+    org_id: str = Form(...),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> UploadResponse:
+    # org_id is a Form field, not a path param, so this can't use
+    # Depends(require_org_member) -- same reasoning as chat.py/actions.py.
+    # Every caller now has an org from GET /api/v1/me (their personal org
+    # at minimum), so the old "auto-create a default org when none
+    # supplied" convenience no longer applies -- org_id is required.
+    if not auth_dep.is_org_member(db, org_id, user):
+        raise HTTPException(403, "not a member of this org")
+
     suffix = (
         ("." + file.filename.rsplit(".", 1)[-1].lower())
         if file.filename and "." in file.filename
@@ -51,17 +62,6 @@ async def upload_meeting(
         raise HTTPException(413, "file too large")
     if not data:
         raise HTTPException(400, "empty file")
-
-    # Dev convenience: auto-create a default org when none supplied.
-    if not org_id:
-        org = db.query(Org).filter(Org.name == "default").one_or_none()
-        if org is None:
-            org = Org(name="default")
-            db.add(org)
-            db.flush()
-        org_id = org.id
-    elif db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
 
     meeting = Meeting(
         org_id=org_id, title=title or (file.filename or "Uploaded meeting"), platform="upload"

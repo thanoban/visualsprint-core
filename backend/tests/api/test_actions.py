@@ -7,7 +7,9 @@ state-machine guards (can't approve/reject twice, can't approve straight
 into EXECUTED without a connector attempt).
 """
 
+import app.auth.dependency as auth_dep
 from app.api.actions import _build_org_token_provider, _get_connector
+from app.auth.dependency import is_org_member as _real_is_org_member
 from app.db.models import (
     ActionStatus,
     AuditLog,
@@ -78,9 +80,14 @@ def test_list_actions_filters_by_status(db_session, client):
     assert resp2.status_code == 400
 
 
-def test_list_actions_404_for_unknown_org(client):
+def test_list_actions_403_for_a_non_member_org(client, monkeypatch):
+    # conftest.py's `client` fixture bypasses is_org_member by default (see
+    # its docstring) so the 400+ pre-auth tests don't each need OrgMember
+    # rows -- this test exists specifically to prove the real membership
+    # check works, so it restores the real function.
+    monkeypatch.setattr(auth_dep, "is_org_member", _real_is_org_member)
     resp = client.get("/api/v1/orgs/does-not-exist/actions")
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 def test_approve_records_approval_even_when_execution_fails(client, db_session):

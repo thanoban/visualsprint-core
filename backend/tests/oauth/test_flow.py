@@ -2,6 +2,7 @@
 signing/verification and token exchange/refresh against a mocked httpx
 transport. No real vendor credentials needed."""
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -26,6 +27,16 @@ CONFIG = OAuthProviderConfig(
     token_url="https://vendor.test/oauth/token",
     scope="read write",
     extra_authorize_params={"access_type": "offline"},
+)
+
+JIRA_CONFIG = OAuthProviderConfig(
+    provider="jira",
+    client_id="jira-client",
+    client_secret="jira-secret",
+    authorize_url="https://auth.atlassian.com/authorize",
+    token_url="https://auth.atlassian.com/oauth/token",
+    scope="write:jira-work offline_access",
+    token_request_format="json",
 )
 
 
@@ -115,6 +126,26 @@ async def test_exchange_code_parses_access_and_refresh_tokens():
     assert token_set.expires_at > datetime.now(UTC)
 
 
+async def test_jira_exchange_code_sends_the_token_request_as_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["content-type"] == "application/json"
+        body = json.loads(request.read().decode())
+        assert body["grant_type"] == "authorization_code"
+        assert body["code"] == "jira-code"
+        assert body["client_id"] == "jira-client"
+        assert body["client_secret"] == "jira-secret"
+        return httpx.Response(200, json={"access_token": "jira-at", "expires_in": 3600})
+
+    token_set = await exchange_code_for_token(
+        JIRA_CONFIG,
+        code="jira-code",
+        redirect_uri="https://api.test/api/v1/oauth/jira/callback",
+        http_client=_client_with(handler),
+    )
+
+    assert token_set.access_token == "jira-at"
+
+
 async def test_exchange_code_handles_a_token_that_never_expires():
     """GitHub's classic OAuth apps omit expires_in entirely."""
 
@@ -153,6 +184,22 @@ async def test_refresh_preserves_the_original_refresh_token_when_the_response_om
 
     token_set = await refresh_access_token(
         CONFIG, refresh_token="rt-original", http_client=_client_with(handler)
+    )
+
+    assert token_set.access_token == "at-2"
+    assert token_set.refresh_token == "rt-original"
+
+
+async def test_jira_refresh_sends_the_token_request_as_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["content-type"] == "application/json"
+        body = json.loads(request.read().decode())
+        assert body["grant_type"] == "refresh_token"
+        assert body["refresh_token"] == "rt-original"
+        return httpx.Response(200, json={"access_token": "at-2", "expires_in": 3600})
+
+    token_set = await refresh_access_token(
+        JIRA_CONFIG, refresh_token="rt-original", http_client=_client_with(handler)
     )
 
     assert token_set.access_token == "at-2"

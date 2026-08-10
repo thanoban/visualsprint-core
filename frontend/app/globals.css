@@ -1,11 +1,70 @@
+@import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Design tokens -- from the Claude Design project "Visualsprint core
+   development" (Settings.dc.html / AppSidebar.dc.html), ported verbatim
+   rather than re-derived, so every page built against that project stays
+   pixel-consistent with this one. */
 :root {
+  --bg: #f6f4ee;
+  --surface: #ffffff;
+  --surface2: #efece2;
+  --border: #e1ddd0;
+  --border-strong: #cfc9b8;
+  --text: #14171d;
+  --text-muted: #6b6558;
+  --text-faint: #948d7c;
+  --accent: #1f7a5c;
+  --accent-bg: #e3f1ea;
+  --accent-strong: #145c44;
+  --evidence: #b3790f;
+  --evidence-bg: #f8edd6;
+  --gap: #ab4a2f;
+  --gap-bg: #f6e6df;
+  --shadow: rgba(20, 23, 29, 0.07);
   color-scheme: light;
 }
 
+:root[data-theme="dark"] {
+  --bg: #0c0f14;
+  --surface: #151a22;
+  --surface2: #1b212b;
+  --border: #272e3a;
+  --border-strong: #333c4a;
+  --text: #eae6dc;
+  --text-muted: #a39c8a;
+  --text-faint: #726c5c;
+  --accent: #3ab892;
+  --accent-bg: rgba(58, 184, 146, 0.14);
+  --accent-strong: #5cd1ab;
+  --evidence: #e0a83e;
+  --evidence-bg: rgba(224, 168, 62, 0.16);
+  --gap: #dd8563;
+  --gap-bg: rgba(221, 133, 99, 0.16);
+  --shadow: rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
 body {
-  @apply bg-slate-50 text-slate-900;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+.font-display {
+  font-family: "Source Serif 4", serif;
+}
+.font-mono-brand {
+  font-family: "IBM Plex Mono", monospace;
 }

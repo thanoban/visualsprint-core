@@ -1,26 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API_BASE_URL } from "@/lib/config";
+import { useAuth } from "@/lib/AuthProvider";
 import type { EraseMeetingResponse, ExportedMeetingData, OrgSettingsOut } from "@/lib/types";
 
-/** No auth/org-selection yet -- resolve the dev-convenience "default" org
- * name to its real id, same pattern as app/glossary/page.tsx and
- * app/actions/page.tsx. */
-async function resolveDefaultOrgId(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/default`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const org = (await res.json()) as { id: string; name: string };
-  return org.id;
-}
-
-async function fetchOrgSettings(orgId: string): Promise<OrgSettingsOut> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/settings`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as OrgSettingsOut;
-}
-
 function RetentionSettings({ orgId }: { orgId: string }) {
+  const { authedFetch } = useAuth();
   const [settings, setSettings] = useState<OrgSettingsOut | null>(null);
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -28,13 +13,17 @@ function RetentionSettings({ orgId }: { orgId: string }) {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    fetchOrgSettings(orgId)
+    authedFetch(`/api/v1/orgs/${orgId}/settings`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json() as Promise<OrgSettingsOut>;
+      })
       .then((s) => {
         setSettings(s);
         setInput(s.retention_days?.toString() ?? "");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load settings."));
-  }, [orgId]);
+  }, [orgId, authedFetch]);
 
   async function handleSave() {
     setSaving(true);
@@ -48,7 +37,7 @@ function RetentionSettings({ orgId }: { orgId: string }) {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/settings`, {
+      const res = await authedFetch(`/api/v1/orgs/${orgId}/settings`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ retention_days: retentionDays, retention_days_set: true }),
@@ -108,6 +97,7 @@ function RetentionSettings({ orgId }: { orgId: string }) {
 }
 
 function MeetingDataRights({ orgId }: { orgId: string }) {
+  const { authedFetch } = useAuth();
   const [meetingId, setMeetingId] = useState("");
   const [exportData, setExportData] = useState<ExportedMeetingData | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -124,9 +114,7 @@ function MeetingDataRights({ orgId }: { orgId: string }) {
     setExportError(null);
     setExportData(null);
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/v1/orgs/${orgId}/meetings/${meetingId.trim()}/export`
-      );
+      const res = await authedFetch(`/api/v1/orgs/${orgId}/meetings/${meetingId.trim()}/export`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `${res.status} ${res.statusText}`);
@@ -155,10 +143,9 @@ function MeetingDataRights({ orgId }: { orgId: string }) {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/v1/orgs/${orgId}/meetings/${meetingId.trim()}`,
-        { method: "DELETE" }
-      );
+      const res = await authedFetch(`/api/v1/orgs/${orgId}/meetings/${meetingId.trim()}`, {
+        method: "DELETE",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `${res.status} ${res.statusText}`);
@@ -269,24 +256,9 @@ function MeetingDataRights({ orgId }: { orgId: string }) {
 }
 
 export default function DataRightsPage() {
-  const [orgId, setOrgId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { me } = useAuth();
 
-  useEffect(() => {
-    resolveDefaultOrgId()
-      .then(setOrgId)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load org."));
-  }, []);
-
-  if (error) {
-    return (
-      <p className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-        {error}
-      </p>
-    );
-  }
-
-  if (!orgId) {
+  if (!me) {
     return <p className="text-sm text-slate-500">Loading…</p>;
   }
 
@@ -299,8 +271,8 @@ export default function DataRightsPage() {
         </p>
       </div>
 
-      <RetentionSettings orgId={orgId} />
-      <MeetingDataRights orgId={orgId} />
+      <RetentionSettings orgId={me.org.id} />
+      <MeetingDataRights orgId={me.org.id} />
     </div>
   );
 }

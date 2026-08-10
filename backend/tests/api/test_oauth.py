@@ -6,7 +6,9 @@ uses for LocalBlobStore rather than mocking it)."""
 import httpx
 import pytest
 
+import app.auth.dependency as auth_dep
 from app.api.oauth import get_http_client
+from app.auth.dependency import is_org_member as _real_is_org_member
 from app.config import get_settings
 from app.db.models import CalendarConnection, Org, OrgConnection
 from app.main import app
@@ -52,11 +54,14 @@ def _seed_org(db_session) -> Org:
     return org
 
 
-def test_start_oauth_404s_for_unknown_org(client):
+def test_start_oauth_403s_for_a_non_member_org(client, monkeypatch):
+    # See test_actions.py's equivalent test for why the real is_org_member
+    # is restored here instead of relying on conftest.py's default bypass.
+    monkeypatch.setattr(auth_dep, "is_org_member", _real_is_org_member)
     resp = client.get(
         "/api/v1/orgs/does-not-exist/oauth/google/authorize", follow_redirects=False
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 def test_start_oauth_404s_for_unknown_provider(client, db_session):
@@ -82,18 +87,19 @@ def test_start_oauth_503s_when_provider_not_configured(client, db_session, monke
     assert resp.status_code == 503
 
 
-def test_start_oauth_redirects_to_the_vendor_authorize_url_with_a_signed_state(
-    client, db_session
-):
+def test_start_oauth_returns_the_vendor_authorize_url_with_a_signed_state(client, db_session):
+    """Returns JSON rather than a redirect -- a plain `<a href>` browser
+    navigation can't carry the Authorization header require_org_member
+    needs, so the frontend calls this via fetch and navigates itself."""
     org = _seed_org(db_session)
 
     resp = client.get(f"/api/v1/orgs/{org.id}/oauth/google/authorize", follow_redirects=False)
 
-    assert resp.status_code in (302, 307)
-    location = resp.headers["location"]
-    assert location.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
-    assert "client_id=google-cid" in location
-    assert "state=" in location
+    assert resp.status_code == 200
+    url = resp.json()["authorize_url"]
+    assert url.startswith("https://accounts.google.com/o/oauth2/v2/auth?")
+    assert "client_id=google-cid" in url
+    assert "state=" in url
 
 
 def test_callback_400s_for_an_invalid_state(client):

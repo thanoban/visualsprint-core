@@ -15,9 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import dependency as auth_dep
+from app.auth.dependency import get_current_user, require_org_member
 from app.connectors.errors import ConnectorError
 from app.db.base import get_db
-from app.db.models import ActionStatus, Org, Person, ProposedAction
+from app.db.models import ActionStatus, Person, ProposedAction, User
 from app.interfaces.actions import ActionKind, ActionPayload
 from app.oauth.connection import build_org_token_provider as _build_org_token_provider
 from app.oauth.connection import get_org_connection as _get_org_connection
@@ -121,11 +123,11 @@ def _to_out(db: Session, action: ProposedAction) -> ProposedActionOut:
 
 @router.get("/orgs/{org_id}/actions", response_model=list[ProposedActionOut])
 async def list_actions(
-    org_id: str, status: str | None = None, db: Session = Depends(get_db)
+    org_id: str,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
 ) -> list[ProposedActionOut]:
-    if db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
-
     q = db.query(ProposedAction).filter(ProposedAction.org_id == org_id)
     if status:
         try:
@@ -144,11 +146,19 @@ class ApproveActionRequest(BaseModel):
 
 @router.post("/actions/{action_id}/approve", response_model=ProposedActionOut)
 async def approve_action(
-    action_id: str, req: ApproveActionRequest, db: Session = Depends(get_db)
+    action_id: str,
+    req: ApproveActionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> ProposedActionOut:
+    # org_id isn't a path/body param here -- it only exists on the action
+    # row itself once looked up, so this can't use Depends(require_org_member)
+    # the way path-param routes do; same reasoning as chat.py/upload.py.
     action = db.get(ProposedAction, action_id)
     if action is None:
         raise HTTPException(404, "action not found")
+    if not auth_dep.is_org_member(db, action.org_id, user):
+        raise HTTPException(403, "not a member of this org")
     if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.FAILED):
         raise HTTPException(409, f"action is not approvable (status={action.status.value})")
 
@@ -200,11 +210,16 @@ class RejectActionRequest(BaseModel):
 
 @router.post("/actions/{action_id}/reject", response_model=ProposedActionOut)
 async def reject_action(
-    action_id: str, req: RejectActionRequest = RejectActionRequest(), db: Session = Depends(get_db)
+    action_id: str,
+    req: RejectActionRequest = RejectActionRequest(),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> ProposedActionOut:
     action = db.get(ProposedAction, action_id)
     if action is None:
         raise HTTPException(404, "action not found")
+    if not auth_dep.is_org_member(db, action.org_id, user):
+        raise HTTPException(403, "not a member of this org")
     if action.status != ActionStatus.PENDING_APPROVAL:
         raise HTTPException(409, f"action is not pending approval (status={action.status.value})")
 

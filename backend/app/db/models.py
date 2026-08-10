@@ -75,6 +75,42 @@ class Person(TimestampMixin, Base):
     aliases: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class User(TimestampMixin, Base):
+    """An authenticated end user (app/auth/) -- distinct from `Person`, which
+    is org-scoped meeting-participant identity ('Nimal' in a transcript) and
+    has no login of its own. `id` is Supabase's own JWT `sub` claim (a UUID
+    string) reused directly as the primary key, not a second identity minted
+    here and kept in sync."""
+
+    # "user" is a reserved word in Postgres -- sidestep it entirely rather
+    # than rely on dialect auto-quoting for a security-critical table.
+    __tablename__ = "app_user"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320))
+    display_name: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
+class OrgMember(TimestampMixin, Base):
+    """Which `User`s belong to which `Org` -- the same row shape serves a
+    solo individual's personal org (one member) and a team org (many), so
+    "individual" vs. "team" is never a separate code path, just a member
+    count. `role` exists as a column now so a future permissions model
+    doesn't need a migration to add it, but nothing enforces it yet beyond
+    membership itself -- see docs/EXTERNAL_SETUP.md-adjacent plan notes."""
+
+    __tablename__ = "org_member"
+    __table_args__ = (
+        Index("ix_orgmember_org_user", "org_id", "user_id", unique=True),
+        Index("ix_orgmember_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    role: Mapped[str] = mapped_column(String(32), default="owner")
+
+
 class CalendarConnection(TimestampMixin, Base):
     __tablename__ = "calendar_connection"
     __table_args__ = (Index("ix_calconn_org", "org_id"),)

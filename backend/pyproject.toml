@@ -16,6 +16,7 @@ dependencies = [
     "httpx>=0.27",
     "tenacity>=9.0",
     "structlog>=24.4",
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]

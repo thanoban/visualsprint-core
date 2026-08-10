@@ -1,56 +1,37 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API_BASE_URL } from "@/lib/config";
+import { useAuth } from "@/lib/AuthProvider";
 import type { GlossaryTermOut } from "@/lib/types";
 
-/** The frontend has no auth/org-selection yet -- every page hardcodes the
- * dev-convenience org NAME "default" (matching upload.py's auto-create
- * convention). That name is not the UUID every org-scoped endpoint actually
- * requires, so it must be resolved once via GET /api/v1/orgs/default before
- * any glossary call, or every request 404s against a literal "default" id. */
-async function resolveDefaultOrgId(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/default`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const org = (await res.json()) as { id: string; name: string };
-  return org.id;
-}
-
-async function fetchGlossary(orgId: string): Promise<GlossaryTermOut[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/glossary`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as GlossaryTermOut[];
-}
-
 export default function GlossaryPage() {
-  const [orgId, setOrgId] = useState<string | null>(null);
+  const { me, authedFetch } = useAuth();
   const [terms, setTerms] = useState<GlossaryTermOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newTerm, setNewTerm] = useState("");
   const [adding, setAdding] = useState(false);
 
-  function load() {
-    resolveDefaultOrgId()
-      .then((id) => {
-        setOrgId(id);
-        return fetchGlossary(id);
+  useEffect(() => {
+    if (!me) return;
+    authedFetch(`/api/v1/orgs/${me.org.id}/glossary`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json() as Promise<GlossaryTermOut[]>;
       })
       .then(setTerms)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load glossary"))
       .finally(() => setLoading(false));
-  }
-
-  useEffect(load, []);
+  }, [me, authedFetch]);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     const term = newTerm.trim();
-    if (!term || adding || !orgId) return;
+    if (!term || adding || !me) return;
     setAdding(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/glossary`, {
+      const res = await authedFetch(`/api/v1/orgs/${me.org.id}/glossary`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ term }),
@@ -70,11 +51,11 @@ export default function GlossaryPage() {
   }
 
   async function handleDelete(termId: string) {
-    if (!orgId) return;
+    if (!me) return;
     const prev = terms;
     setTerms((cur) => (cur ? cur.filter((t) => t.id !== termId) : cur));
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/glossary/${termId}`, {
+      const res = await authedFetch(`/api/v1/orgs/${me.org.id}/glossary/${termId}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -104,7 +85,7 @@ export default function GlossaryPage() {
         />
         <button
           type="submit"
-          disabled={adding || !newTerm.trim() || !orgId}
+          disabled={adding || !newTerm.trim() || !me}
           className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {adding ? "Adding…" : "Add"}

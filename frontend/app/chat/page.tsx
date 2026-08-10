@@ -1,60 +1,108 @@
 "use client";
 
-import { useEffect, useState } from "react";
+// Ported from the Claude Design project "Visualsprint core development" ->
+// Chat.dc.html. AppSidebar isn't re-embedded (see report/page.tsx's note --
+// lib/AppShell.tsx already provides it). The mockup's left "Org memory"
+// column shows hardcoded past-thread rows; this app has no thread-history
+// API to back that with, so it's kept honest here -- just the one real
+// piece of functionality (starting a new question), no invented history.
+
+import { useState } from "react";
 import { API_BASE_URL } from "@/lib/config";
+import { useAuth } from "@/lib/AuthProvider";
 import { mockAssistantReply } from "@/lib/mock-data";
 import type { ChatMessage, ChatRequest, ChatResponse, EvidenceChip } from "@/lib/types";
 
-/** No auth/org-selection exists yet -- every page targets the dev-convenience
- * org NAME "default" (upload.py's auto-create convention). That name is not
- * the UUID `/api/v1/chat` filters KnowledgeItem rows by, so it must be
- * resolved via GET /api/v1/orgs/default first. Previously this page sent the
- * literal string "default" as org_id: chat.py doesn't validate org
- * existence, so it never errored — it would just silently never match any
- * real knowledge item once agents populated the DB (see the same bug, but
- * caught immediately via a 404, in app/glossary/page.tsx). */
-async function resolveDefaultOrgId(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/default`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const org = (await res.json()) as { id: string; name: string };
-  return org.id;
+const sans = "'IBM Plex Sans', sans-serif";
+const serif = "'Source Serif 4', serif";
+const mono = "'IBM Plex Mono', monospace";
+
+const SUGGESTIONS = ["Prep me for tomorrow's next meeting", "What's still unresolved from last week?"];
+
+function timestampLabel(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function EvidenceChipPill({ chip }: { chip: EvidenceChip }) {
+function CiteCard({ chip, n }: { chip: EvidenceChip; n: number }) {
   return (
-    <button
-      type="button"
-      title={`${chip.meeting_title} — ${chip.speaker} @ ${Math.floor(chip.timestamp_s / 60)}:${(chip.timestamp_s % 60)
-        .toString()
-        .padStart(2, "0")}`}
-      className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100 transition"
-    >
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 9, padding: "12px 14px", width: 216 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <p style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: "var(--text-faint)", margin: "0 0 6px" }}>
+          [{n}] {chip.speaker} · {timestampLabel(chip.timestamp_s)}
+        </p>
+      </div>
       {chip.keyframe_thumbnail_url && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={chip.keyframe_thumbnail_url} alt="" className="h-4 w-6 rounded-sm object-cover" />
+        <img
+          src={chip.keyframe_thumbnail_url}
+          alt=""
+          style={{ width: "100%", height: 38, background: "#232830", borderRadius: 5, objectFit: "cover", marginBottom: 8 }}
+        />
       )}
-      {chip.label}
-    </button>
+      <p style={{ fontSize: 11, color: "var(--text-faint)", margin: 0, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+        {chip.meeting_title}
+      </p>
+    </div>
+  );
+}
+
+function MessageRow({ message }: { message: ChatMessage }) {
+  const isUser = message.role === "user";
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div
+        style={{
+          width: 30,
+          height: 30,
+          borderRadius: "50%",
+          background: isUser ? "var(--text-muted)" : "var(--accent)",
+          color: "#fff",
+          fontFamily: mono,
+          fontSize: 11,
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        {isUser ? "Me" : "VS"}
+      </div>
+      {isUser ? (
+        <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "11px 15px", fontSize: 14, color: "var(--text)" }}>
+          {message.content}
+        </div>
+      ) : (
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ fontSize: 14.5, lineHeight: 1.65, color: "var(--text)", margin: "0 0 14px", whiteSpace: "pre-wrap" }}>
+            {message.content}
+          </p>
+          {message.evidence && message.evidence.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {message.evidence.map((chip, i) => (
+                <CiteCard key={chip.id} chip={chip} n={i + 1} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
 export default function ChatPage() {
+  const { me, authedFetch } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
-  const [orgId, setOrgId] = useState<string | null>(null);
-
-  useEffect(() => {
-    resolveDefaultOrgId()
-      .then(setOrgId)
-      .catch(() => setBackendConnected(false));
-  }, []);
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
     const question = input.trim();
-    if (!question || sending) return;
+    if (!question || sending || !me) return;
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -68,93 +116,165 @@ export default function ChatPage() {
     setSending(true);
 
     try {
-      const resolvedOrgId = orgId ?? (await resolveDefaultOrgId());
-      const requestBody: ChatRequest = {
-        org_id: resolvedOrgId,
-        question,
-        history: messages,
-      };
-      const res = await fetch(`${API_BASE_URL}/api/v1/chat`, {
+      const requestBody: ChatRequest = { org_id: me.org.id, question, history: messages };
+      const res = await authedFetch(`/api/v1/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
       });
-
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-
       const data = (await res.json()) as ChatResponse;
       setBackendConnected(true);
       setMessages((prev) => [...prev, data.message]);
     } catch {
       setBackendConnected(false);
-      // Offline fallback only -- the real call above already happened and
-      // failed (backend unreachable). See lib/mock-data.ts's own docstring.
       setMessages((prev) => [...prev, mockAssistantReply(question)]);
     } finally {
       setSending(false);
     }
   }
 
+  const latestUserQuestion = [...messages].reverse().find((m) => m.role === "user")?.content;
+
   return (
-    <div className="flex flex-col h-[calc(100vh-12rem)] max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Org memory chat</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Ask across your organization&apos;s meeting history. Every claim should cite evidence.
+    <div style={{ display: "flex", height: "100vh" }}>
+      <div style={{ width: 260, flexShrink: 0, borderRight: "1px solid var(--border)", padding: "22px 16px" }}>
+        <p style={{ fontFamily: mono, fontSize: 11.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+          Org memory
         </p>
-        {backendConnected === false && (
-          <p className="mt-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
-            Not connected to the chat API yet (POST {API_BASE_URL}/api/v1/chat unavailable). Showing a
-            demo response instead — see lib/mock-data.ts.
-          </p>
-        )}
-      </div>
-
-      <div className="mt-4 flex-1 overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 space-y-4">
-        {messages.length === 0 && (
-          <p className="text-sm text-slate-400 text-center mt-8">
-            Try: &ldquo;why are we using MongoDB?&rdquo; or &ldquo;what did we commit to last week?&rdquo;
-          </p>
-        )}
-        {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                m.role === "user"
-                  ? "bg-brand-600 text-white"
-                  : "bg-slate-100 text-slate-800"
-              }`}
-            >
-              <p className="whitespace-pre-wrap">{m.content}</p>
-              {m.evidence && m.evidence.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {m.evidence.map((chip) => (
-                    <EvidenceChipPill key={chip.id} chip={chip} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {sending && <p className="text-xs text-slate-400">Thinking…</p>}
-      </div>
-
-      <form onSubmit={sendMessage} className="mt-4 flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about your meetings…"
-          className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-        />
         <button
-          type="submit"
-          disabled={sending || !input.trim()}
-          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+          type="button"
+          onClick={() => {
+            setMessages([]);
+            setInput("");
+            setBackendConnected(null);
+          }}
+          style={{
+            fontFamily: sans,
+            width: "100%",
+            fontSize: 13.5,
+            fontWeight: 600,
+            color: "var(--accent-strong)",
+            background: "var(--accent-bg)",
+            border: "1px solid var(--accent)",
+            padding: 9,
+            borderRadius: 7,
+            cursor: "pointer",
+            marginBottom: 16,
+          }}
         >
-          Send
+          + New question
         </button>
-      </form>
+        {messages.length > 0 && (
+          <div style={{ padding: "11px 12px", borderRadius: 8, background: "var(--surface2)" }}>
+            <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", margin: 0, lineHeight: 1.4 }}>
+              {latestUserQuestion}
+            </p>
+            <p style={{ fontSize: 11.5, color: "var(--text-faint)", margin: "4px 0 0" }}>Current conversation</p>
+          </div>
+        )}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", height: "100vh" }}>
+        <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
+          <p style={{ fontFamily: serif, fontSize: 19, color: "var(--text)", margin: 0 }}>
+            {latestUserQuestion ?? "Org memory chat"}
+          </p>
+          <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "6px 0 0" }}>
+            {latestUserQuestion
+              ? "Ask across your organization's meeting history"
+              : "Every claim cites a speaker, a transcript span, and a screen"}
+          </p>
+          {backendConnected === false && (
+            <p
+              style={{
+                marginTop: 8,
+                borderRadius: 6,
+                background: "var(--evidence-bg)",
+                border: "1px solid var(--evidence)",
+                padding: "8px 12px",
+                fontSize: 12,
+                color: "var(--evidence)",
+              }}
+            >
+              Not connected to the chat API yet (POST {API_BASE_URL}/api/v1/chat unavailable). Showing a demo
+              response instead.
+            </p>
+          )}
+        </header>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "26px 32px", display: "flex", flexDirection: "column", gap: 22, maxWidth: 760 }}>
+          {messages.length === 0 && (
+            <p style={{ fontSize: 14, color: "var(--text-faint)", textAlign: "center", marginTop: 32 }}>
+              Try: &quot;why are we using MongoDB?&quot; or &quot;what did we commit to last week?&quot;
+            </p>
+          )}
+          {messages.map((m) => (
+            <MessageRow key={m.id} message={m} />
+          ))}
+          {sending && <p style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Thinking…</p>}
+        </div>
+
+        <div style={{ padding: "0 32px", display: "flex", gap: 8 }}>
+          {SUGGESTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setInput(s)}
+              style={{
+                fontFamily: sans,
+                fontSize: 12.5,
+                fontWeight: 500,
+                color: "var(--text-muted)",
+                background: "var(--surface2)",
+                border: "1px solid var(--border)",
+                padding: "7px 12px",
+                borderRadius: 20,
+                cursor: "pointer",
+              }}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={sendMessage} style={{ padding: "16px 32px 24px", display: "flex", gap: 10 }}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask anything about your meetings..."
+            style={{
+              fontFamily: sans,
+              flex: 1,
+              fontSize: 14,
+              padding: "12px 16px",
+              borderRadius: 9,
+              border: "1px solid var(--border-strong)",
+              background: "var(--surface)",
+              color: "var(--text)",
+            }}
+          />
+          <button
+            type="submit"
+            disabled={sending || !input.trim()}
+            style={{
+              fontFamily: sans,
+              fontSize: 13.5,
+              fontWeight: 600,
+              color: "#fff",
+              background: "var(--accent-strong)",
+              border: "none",
+              padding: "0 22px",
+              borderRadius: 9,
+              cursor: sending || !input.trim() ? "default" : "pointer",
+              opacity: sending || !input.trim() ? 0.6 : 1,
+            }}
+          >
+            Ask
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

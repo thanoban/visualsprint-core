@@ -13,12 +13,14 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
+from app.auth import dependency as auth_dep
+from app.auth.dependency import get_current_user
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
@@ -28,6 +30,7 @@ from app.db.models import (
     KnowledgeItem,
     Meeting,
     Person,
+    User,
     Utterance,
 )
 from app.interfaces.embedder import Embedder
@@ -267,7 +270,14 @@ async def chat(
     db: Session = Depends(get_db),
     llm: LlmClient | None = Depends(get_optional_llm_client),
     embedder: Embedder | None = Depends(get_optional_embedder),
+    user: User = Depends(get_current_user),
 ) -> ChatResponse:
+    # org_id comes from the request body, not the path, so this can't use
+    # Depends(require_org_member) -- same reasoning as actions.py's
+    # approve/reject and upload.py.
+    if not auth_dep.is_org_member(db, req.org_id, user):
+        raise HTTPException(403, "not a member of this org")
+
     query_embedding = await embedder.embed(req.question) if embedder is not None else None
 
     fts_matches = _fts_candidates(db, req.org_id, req.question, req.meeting_id)

@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.secretstore_gcp import get_secretstore
+from app.auth.dependency import require_org_member
 from app.config import get_settings
 from app.db.base import get_db
 from app.db.models import CalendarConnection, Org, OrgConnection
@@ -63,7 +64,9 @@ class ConnectionOut(BaseModel):
 
 
 @router.get("/api/v1/orgs/{org_id}/connections", response_model=list[ConnectionOut])
-async def list_connections(org_id: str, db: Session = Depends(get_db)) -> list[ConnectionOut]:
+async def list_connections(
+    org_id: str, db: Session = Depends(get_db), _: None = Depends(require_org_member)
+) -> list[ConnectionOut]:
     if db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")
 
@@ -83,7 +86,12 @@ async def list_connections(org_id: str, db: Session = Depends(get_db)) -> list[C
 
 
 @router.delete("/api/v1/orgs/{org_id}/connections/{provider}", status_code=204)
-async def disconnect(org_id: str, provider: str, db: Session = Depends(get_db)) -> None:
+async def disconnect(
+    org_id: str,
+    provider: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> None:
     """Revokes an org's connection to `provider` -- deletes both the row
     and the stored token set, not just one or the other (a dangling
     secret with no connection row would never get cleaned up; a deleted
@@ -129,11 +137,23 @@ def _callback_redirect_uri(provider: str) -> str:
     return f"{settings.oauth_redirect_base_url}/api/v1/oauth/{provider}/callback"
 
 
-@router.get("/api/v1/orgs/{org_id}/oauth/{provider}/authorize")
-async def start_oauth(org_id: str, provider: str, db: Session = Depends(get_db)) -> RedirectResponse:
-    if db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
+class AuthorizeUrlOut(BaseModel):
+    authorize_url: str
 
+
+@router.get("/api/v1/orgs/{org_id}/oauth/{provider}/authorize", response_model=AuthorizeUrlOut)
+async def start_oauth(
+    org_id: str,
+    provider: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> AuthorizeUrlOut:
+    """Returns the vendor's authorize URL as JSON rather than redirecting
+    directly. A plain `<a href>` browser navigation can't carry the
+    Authorization header `require_org_member` needs, so the frontend now
+    calls this via `fetch` (attaching the bearer token) and navigates the
+    browser to the returned URL itself -- the only way to keep this
+    endpoint auth-gated like every other org-scoped route."""
     settings = get_settings()
     try:
         config = get_provider_config(provider, settings)
@@ -144,7 +164,7 @@ async def start_oauth(org_id: str, provider: str, db: Session = Depends(get_db))
 
     state = sign_state(org_id=org_id, provider=provider, secret=_require_state_secret())
     url = build_authorize_url(config, state=state, redirect_uri=_callback_redirect_uri(provider))
-    return RedirectResponse(url)
+    return AuthorizeUrlOut(authorize_url=url)
 
 
 @router.get("/api/v1/oauth/{provider}/callback")

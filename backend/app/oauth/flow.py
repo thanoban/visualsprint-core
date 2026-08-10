@@ -5,13 +5,14 @@ token support) live in app/oauth/providers.py's OAuthProviderConfig
 instances, not here; this module only knows the standard RFC 6749
 authorization-code grant.
 
-ASSUMPTIONS (not live-tested against any real vendor -- no OAuth app is
-registered yet, same maturity level as every other vendor integration in
-this codebase):
+ASSUMPTIONS (not live-tested against every real vendor -- same maturity
+level as every other vendor integration in this codebase):
 - Every provider's token endpoint accepts `Accept: application/json` and
   returns a JSON body with `access_token`, optionally `refresh_token` and
-  `expires_in` (seconds). GitHub's classic OAuth apps omit `expires_in`
-  entirely (tokens don't expire) -- treated as "never expires", not an error.
+  `expires_in` (seconds). Jira/Atlassian requires a JSON request body; the
+  rest use the usual OAuth form body. GitHub's classic OAuth apps omit
+  `expires_in` entirely (tokens don't expire) -- treated as "never expires",
+  not an error.
 - `refresh_token` grant reuses the same token endpoint with
   `grant_type=refresh_token`, standard across all five OAuth2 vendors here.
 - Slack's oauth.v2.access always returns HTTP 200, success or failure --
@@ -126,9 +127,7 @@ async def exchange_code_for_token(
         "client_secret": config.client_secret,
         **config.extra_token_params,
     }
-    resp = await http_client.post(
-        config.token_url, data=data, headers={"Accept": "application/json"}
-    )
+    resp = await _post_token_request(http_client=http_client, config=config, data=data)
     resp.raise_for_status()
     return _parse_token_response(resp.json())
 
@@ -145,9 +144,7 @@ async def refresh_access_token(
         "client_id": config.client_id,
         "client_secret": config.client_secret,
     }
-    resp = await http_client.post(
-        config.token_url, data=data, headers={"Accept": "application/json"}
-    )
+    resp = await _post_token_request(http_client=http_client, config=config, data=data)
     resp.raise_for_status()
     token_set = _parse_token_response(resp.json())
     if token_set.refresh_token is None:
@@ -163,6 +160,22 @@ class OAuthTokenExchangeError(Exception):
     response BODY rather than the HTTP status -- Slack's oauth.v2.access
     always returns 200, success or not, with `{"ok": false, "error": ...}`
     on failure. httpx's raise_for_status() can't catch that; this can."""
+
+
+async def _post_token_request(
+    *,
+    http_client: httpx.AsyncClient,
+    config: OAuthProviderConfig,
+    data: dict[str, str],
+) -> httpx.Response:
+    headers = {"Accept": "application/json"}
+    if config.token_request_format == "json":
+        return await http_client.post(
+            config.token_url,
+            json=data,
+            headers={**headers, "Content-Type": "application/json"},
+        )
+    return await http_client.post(config.token_url, data=data, headers=headers)
 
 
 def _parse_token_response(body: dict) -> OAuthTokenSet:

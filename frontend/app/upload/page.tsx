@@ -1,34 +1,51 @@
 "use client";
 
+// Ported from the Claude Design project "Visualsprint core development" ->
+// Upload.dc.html. The mockup's "Advance pipeline" button and "Recent
+// uploads" table are demo-only fabricated state -- this app has no list-
+// all-uploads API to back the latter, so it's omitted (same principle as
+// chat/page.tsx dropping the fake thread history) rather than shown with
+// invented rows. The mockup's 6-stage stepper (Capture/Transcribe/
+// Understand/Verify/Remember/Report) is real here: it's a coarser grouping
+// of the actual CAPTURE_SESSION_STATE_ORDER driven by live poll data.
+
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE_URL } from "@/lib/config";
-import {
-  CAPTURE_SESSION_STATE_ORDER,
-  type CaptureSessionState,
-  type CaptureSessionStatus,
-  type UploadResponse,
-} from "@/lib/types";
+import { useAuth } from "@/lib/AuthProvider";
+import type { CaptureSessionState, CaptureSessionStatus, UploadResponse } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 2000;
+const sans = "'IBM Plex Sans', sans-serif";
+const serif = "'Source Serif 4', serif";
+const mono = "'IBM Plex Mono', monospace";
 
-function stateProgress(state: CaptureSessionState): number {
-  if (state === "failed") return 0;
-  const idx = CAPTURE_SESSION_STATE_ORDER.indexOf(state);
-  if (idx === -1) return 0;
-  return Math.round(((idx + 1) / CAPTURE_SESSION_STATE_ORDER.length) * 100);
+const STAGE_DEFS: { label: string; states: CaptureSessionState[] }[] = [
+  { label: "Capture", states: ["scheduled", "acquiring", "acquired"] },
+  { label: "Transcribe", states: ["transcribing"] },
+  { label: "Understand", states: ["processing_screen", "understanding"] },
+  { label: "Verify", states: ["verifying"] },
+  { label: "Remember", states: ["remembering", "proposing"] },
+  { label: "Report", states: ["reporting", "done"] },
+];
+
+function stageIndexFor(state: CaptureSessionState | undefined): number {
+  if (!state || state === "failed") return -1;
+  const idx = STAGE_DEFS.findIndex((s) => s.states.includes(state));
+  return idx === -1 ? 0 : idx;
 }
 
 export default function UploadPage() {
+  const { me, authedFetch } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
-
   const [status, setStatus] = useState<CaptureSessionStatus | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     return () => {
@@ -38,10 +55,8 @@ export default function UploadPage() {
 
   async function pollSession(sessionId: string) {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/meetings/sessions/${sessionId}`);
-      if (!res.ok) {
-        throw new Error(`Status check failed: ${res.status} ${res.statusText}`);
-      }
+      const res = await authedFetch(`/api/v1/meetings/sessions/${sessionId}`);
+      if (!res.ok) throw new Error(`Status check failed: ${res.status} ${res.statusText}`);
       const data = (await res.json()) as CaptureSessionStatus;
       setStatus(data);
       setPollError(null);
@@ -72,192 +87,214 @@ export default function UploadPage() {
       pollHandle.current = null;
     }
 
+    if (!me) {
+      setSubmitError("Still loading your account — try again in a moment.");
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const form = new FormData();
       form.append("file", file);
       if (title.trim()) form.append("title", title.trim());
+      form.append("org_id", me.org.id);
 
-      const res = await fetch(`${API_BASE_URL}/api/v1/meetings/upload`, {
-        method: "POST",
-        body: form,
-      });
-
+      const res = await authedFetch(`/api/v1/meetings/upload`, { method: "POST", body: form });
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try {
           const body = await res.json();
           if (body?.detail) detail = body.detail;
         } catch {
-          // ignore — non-JSON error body
+          // non-JSON error body
         }
         throw new Error(detail);
       }
 
       const data = (await res.json()) as UploadResponse;
       setUploadResult(data);
-      setStatus({
-        id: data.capture_session_id,
-        meeting_id: data.meeting_id,
-        mode: "D",
-        state: data.state,
-        error: null,
-      });
-
+      setStatus({ id: data.capture_session_id, meeting_id: data.meeting_id, mode: "D", state: data.state, error: null });
       pollHandle.current = setInterval(() => {
         void pollSession(data.capture_session_id);
       }, POLL_INTERVAL_MS);
     } catch (err) {
       setSubmitError(
-        err instanceof Error
-          ? `Could not reach the upload API at ${API_BASE_URL}. ${err.message}`
-          : "Unknown upload error."
+        err instanceof Error ? `Could not reach the upload API at ${API_BASE_URL}. ${err.message}` : "Unknown upload error."
       );
     } finally {
       setSubmitting(false);
     }
   }
 
-  const progress = status ? stateProgress(status.state) : 0;
+  const currentStageIndex = stageIndexFor(status?.state);
+  const failed = status?.state === "failed";
 
   return (
-    <div className="max-w-2xl space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Upload a meeting</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Submits to <code className="rounded bg-slate-100 px-1 py-0.5">POST {API_BASE_URL}/api/v1/meetings/upload</code>.
+    <div>
+      <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
+        <p style={{ fontFamily: serif, fontSize: 20, color: "var(--text)", margin: 0 }}>Upload a meeting</p>
+        <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+          Direct upload — Mode D, best for onboarding, backfill, and demos
         </p>
-      </div>
+      </header>
 
-      <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-slate-200 bg-white p-6">
-        <div>
-          <label htmlFor="file" className="block text-sm font-medium text-slate-700">
-            Recording (audio or video)
-          </label>
-          <input
-            id="file"
-            type="file"
-            accept="audio/*,video/*,.flac,.wav,.mp3,.m4a,.mp4,.webm,.ogg"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="mt-1 block w-full text-sm text-slate-700 file:mr-4 file:rounded-md file:border-0 file:bg-brand-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-brand-700 hover:file:bg-brand-100"
-          />
-        </div>
-
-        <div>
-          <label htmlFor="title" className="block text-sm font-medium text-slate-700">
-            Title <span className="text-slate-400 font-normal">(optional)</span>
-          </label>
-          <input
-            id="title"
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Infra sync — Jul 28"
-            className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {submitting ? "Uploading…" : "Upload"}
-        </button>
-
-        {submitError && (
-          <p className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-            {submitError}
-          </p>
-        )}
-      </form>
-
-      {uploadResult && (
-        <div className="rounded-lg border border-slate-200 bg-white p-6 space-y-4">
-          <div>
-            <h2 className="font-medium text-slate-900">Pipeline status</h2>
-            <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-              <dt className="text-slate-500">Meeting ID</dt>
-              <dd className="font-mono text-xs text-slate-700 break-all">{uploadResult.meeting_id}</dd>
-              <dt className="text-slate-500">Capture session ID</dt>
-              <dd className="font-mono text-xs text-slate-700 break-all">{uploadResult.capture_session_id}</dd>
-            </dl>
+      <main style={{ padding: "28px 32px 64px", maxWidth: 840, display: "flex", flexDirection: "column", gap: 22 }}>
+        <form onSubmit={handleSubmit}>
+          <div
+            style={{
+              border: "2px dashed var(--border-strong)",
+              borderRadius: 14,
+              padding: 44,
+              textAlign: "center",
+              background: "var(--surface)",
+            }}
+          >
+            <p style={{ fontFamily: mono, fontSize: 22, color: "var(--accent)", margin: "0 0 10px" }}>↑</p>
+            <p style={{ fontSize: 15.5, fontWeight: 500, color: "var(--text)", margin: "0 0 6px" }}>
+              {file ? file.name : "Drop an audio or video file, or choose one below"}
+            </p>
+            <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "0 0 20px" }}>
+              MP4, MOV, WAV, MP3 · up to 4 hours · Sinhala, Tamil, English, or mixed
+            </p>
+            <input
+              ref={fileInputRef}
+              id="file"
+              type="file"
+              accept="audio/*,video/*,.flac,.wav,.mp3,.m4a,.mp4,.webm,.ogg"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              style={{ display: "none" }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 600, color: "#fff", background: "var(--accent-strong)", padding: "10px 20px", borderRadius: 7, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Choose file
+            </button>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between text-sm mb-1">
-              <span className="font-medium text-slate-700">
-                {status?.state ?? uploadResult.state}
-              </span>
-              <span className="text-slate-500">{progress}%</span>
-            </div>
-            <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
-              <div
-                className={`h-full transition-all duration-500 ${
-                  status?.state === "failed" ? "bg-red-500" : "bg-brand-500"
-                }`}
-                style={{ width: `${status?.state === "failed" ? 100 : progress}%` }}
+          <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "flex-end" }}>
+            <label style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: 7 }}>
+              Title (optional)
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Infra sync — Jul 28"
+                style={{ fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 8, padding: "10px 13px" }}
               />
-            </div>
-            <ol className="mt-3 flex flex-wrap gap-2 text-xs">
-              {CAPTURE_SESSION_STATE_ORDER.map((s) => {
-                const currentIdx = status ? CAPTURE_SESSION_STATE_ORDER.indexOf(status.state) : -1;
-                const idx = CAPTURE_SESSION_STATE_ORDER.indexOf(s);
-                const reached = currentIdx >= idx;
-                return (
-                  <li
-                    key={s}
-                    className={`rounded-full px-2 py-1 border ${
-                      reached
-                        ? "border-brand-300 bg-brand-50 text-brand-700"
-                        : "border-slate-200 bg-slate-50 text-slate-400"
-                    }`}
-                  >
-                    {s}
-                  </li>
-                );
-              })}
-            </ol>
+            </label>
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{
+                fontFamily: sans,
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: "#fff",
+                background: "var(--accent-strong)",
+                padding: "11px 20px",
+                borderRadius: 7,
+                border: "none",
+                cursor: submitting ? "default" : "pointer",
+                opacity: submitting ? 0.6 : 1,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {submitting ? "Uploading…" : "Upload"}
+            </button>
           </div>
 
-          {status?.state === "failed" && (
-            <p className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-              Pipeline failed{status.error ? `: ${status.error}` : "."}
+          {submitError && (
+            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+              {submitError}
             </p>
           )}
+        </form>
 
-          {status &&
-            CAPTURE_SESSION_STATE_ORDER.indexOf(status.state) >
-              CAPTURE_SESSION_STATE_ORDER.indexOf("transcribing") && (
-              <div className="rounded-md bg-slate-50 border border-slate-200 px-3 py-2 text-sm text-slate-700 flex items-center justify-between">
-                <span>Transcript ready.</span>
+        {uploadResult && (
+          <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px 26px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", margin: 0 }}>
+                {title || uploadResult.meeting_id}
+              </p>
+              {status?.state === "done" && (
+                <Link
+                  href={`/meetings/${uploadResult.capture_session_id}/report`}
+                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--accent-strong)", background: "var(--accent-bg)", border: "1px solid var(--accent)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
+                >
+                  View report →
+                </Link>
+              )}
+              {status?.state && status.state !== "done" && !failed && (
                 <Link
                   href={`/meetings/${uploadResult.capture_session_id}/correct`}
-                  className="font-medium text-brand-700 underline hover:no-underline"
+                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--accent-strong)", background: "var(--accent-bg)", border: "1px solid var(--accent)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
                 >
                   Fix transcript →
                 </Link>
+              )}
+            </div>
+            <p style={{ fontFamily: mono, fontSize: 12.5, color: "var(--text-faint)", margin: "6px 0 0" }}>
+              {status?.state ?? uploadResult.state} · session {uploadResult.capture_session_id}
+            </p>
+
+            {failed ? (
+              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+                Pipeline failed{status?.error ? `: ${status.error}` : "."}
+              </p>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 8, marginTop: 26 }}>
+                {STAGE_DEFS.map((s, i) => {
+                  const isDone = i < currentStageIndex;
+                  const isActive = i === currentStageIndex;
+                  return (
+                    <div key={s.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+                      <div
+                        style={{
+                          width: 38,
+                          height: 38,
+                          borderRadius: "50%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontFamily: mono,
+                          fontSize: 14,
+                          fontWeight: 600,
+                          background: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence-bg)" : "var(--surface2)",
+                          color: isDone ? "#fff" : isActive ? "var(--evidence)" : "var(--text-faint)",
+                          border: isActive ? "2px solid var(--evidence)" : "1px solid var(--border-strong)",
+                        }}
+                      >
+                        {isDone ? "✓" : i + 1}
+                      </div>
+                      <p style={{ fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive || isDone ? "var(--text)" : "var(--text-faint)", margin: "10px 0 0" }}>
+                        {s.label}
+                      </p>
+                      <p
+                        style={{
+                          fontSize: 12,
+                          margin: "6px 0 0",
+                          fontWeight: isActive ? 600 : 400,
+                          color: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence)" : "var(--text-faint)",
+                        }}
+                      >
+                        {isDone ? "Done" : isActive ? "In progress" : "Queued"}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
-          {status?.state === "done" && (
-            <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800 flex items-center justify-between">
-              <span>Pipeline complete.</span>
-              <Link
-                href={`/meetings/${uploadResult.capture_session_id}/report`}
-                className="font-medium underline hover:no-underline"
-              >
-                View report →
-              </Link>
-            </div>
-          )}
-
-          {pollError && (
-            <p className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
-              Lost contact with status endpoint: {pollError}. Retrying every {POLL_INTERVAL_MS / 1000}s…
-            </p>
-          )}
-        </div>
-      )}
+            {pollError && (
+              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--evidence-bg)", border: "1px solid var(--evidence)", padding: "8px 12px", fontSize: 12.5, color: "var(--evidence)" }}>
+                Lost contact with status endpoint: {pollError}. Retrying every {POLL_INTERVAL_MS / 1000}s…
+              </p>
+            )}
+          </section>
+        )}
+      </main>
     </div>
   );
 }

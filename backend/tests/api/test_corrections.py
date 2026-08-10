@@ -5,6 +5,8 @@ update Utterance.text in place and preserve the original on the Correction
 row), the optional glossary-term side effect, and direct glossary CRUD.
 """
 
+import app.auth.dependency as auth_dep
+from app.auth.dependency import is_org_member as _real_is_org_member
 from app.db.models import CaptureSession, Correction, GlossaryTerm, Meeting, Org, Person, Utterance
 
 
@@ -151,6 +153,9 @@ def test_glossary_add_rejects_empty_term(client, db_session):
     assert resp.status_code == 400
 
 
-def test_glossary_404_for_unknown_org(client, db_session):
+def test_glossary_403_for_a_non_member_org(client, db_session, monkeypatch):
+    # See test_actions.py's equivalent test for why the real is_org_member
+    # is restored here instead of relying on conftest.py's default bypass.
+    monkeypatch.setattr(auth_dep, "is_org_member", _real_is_org_member)
     resp = client.get("/api/v1/orgs/does-not-exist/glossary")
-    assert resp.status_code == 404
+    assert resp.status_code == 403

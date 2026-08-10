@@ -17,31 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import dependency as auth_dep
+from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
-from app.db.models import CaptureSession, Correction, GlossaryTerm, Org, Person, Utterance
+from app.db.models import CaptureSession, Correction, GlossaryTerm, Person, User, Utterance
 
 router = APIRouter(prefix="/api/v1", tags=["corrections"])
-
-
-class OrgOut(BaseModel):
-    id: str
-    name: str
-
-
-@router.get("/orgs/default", response_model=OrgOut)
-async def get_default_org(db: Session = Depends(get_db)) -> OrgOut:
-    """Resolves the dev-convenience "default" org to its real id, auto-
-    creating it if it doesn't exist yet -- same convention as the Mode D
-    upload endpoint (app/api/upload.py), so the glossary page works even
-    before any meeting has been uploaded. The frontend hardcodes the org
-    *name* "default" (see frontend/lib config); this is what turns that into
-    the UUID every other org-scoped endpoint actually requires."""
-    org = db.query(Org).filter(Org.name == "default").one_or_none()
-    if org is None:
-        org = Org(name="default")
-        db.add(org)
-        db.commit()
-    return OrgOut(id=org.id, name=org.name)
 
 
 class UtteranceOut(BaseModel):
@@ -108,10 +89,18 @@ class CorrectionOut(BaseModel):
 
 
 @router.post("/corrections", response_model=CorrectionOut)
-async def submit_correction(req: CorrectionRequest, db: Session = Depends(get_db)) -> CorrectionOut:
+async def submit_correction(
+    req: CorrectionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> CorrectionOut:
     utterance = db.get(Utterance, req.utterance_id)
     if utterance is None:
         raise HTTPException(404, "utterance not found")
+    # org_id only exists on the looked-up utterance, not the request body
+    # itself -- same reasoning as chat.py/actions.py's approve/reject.
+    if not auth_dep.is_org_member(db, utterance.org_id, user):
+        raise HTTPException(403, "not a member of this org")
 
     corrected_text = req.corrected_text.strip()
     if not corrected_text:
@@ -162,10 +151,9 @@ class GlossaryTermOut(BaseModel):
 
 
 @router.get("/orgs/{org_id}/glossary", response_model=list[GlossaryTermOut])
-async def list_glossary(org_id: str, db: Session = Depends(get_db)) -> list[GlossaryTermOut]:
-    if db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
-
+async def list_glossary(
+    org_id: str, db: Session = Depends(get_db), _: None = Depends(require_org_member)
+) -> list[GlossaryTermOut]:
     terms = (
         db.query(GlossaryTerm)
         .filter(GlossaryTerm.org_id == org_id)
@@ -191,11 +179,11 @@ class AddGlossaryTermRequest(BaseModel):
 
 @router.post("/orgs/{org_id}/glossary", response_model=GlossaryTermOut)
 async def add_glossary_term(
-    org_id: str, req: AddGlossaryTermRequest, db: Session = Depends(get_db)
+    org_id: str,
+    req: AddGlossaryTermRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
 ) -> GlossaryTermOut:
-    if db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
-
     term = req.term.strip()
     if not term:
         raise HTTPException(400, "term must not be empty")
@@ -212,7 +200,12 @@ async def add_glossary_term(
 
 
 @router.delete("/orgs/{org_id}/glossary/{term_id}", status_code=204)
-async def delete_glossary_term(org_id: str, term_id: str, db: Session = Depends(get_db)) -> None:
+async def delete_glossary_term(
+    org_id: str,
+    term_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> None:
     row = db.get(GlossaryTerm, term_id)
     if row is None or row.org_id != org_id:
         raise HTTPException(404, "glossary term not found")

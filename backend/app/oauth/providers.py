@@ -26,6 +26,7 @@ class OAuthProviderConfig:
     scope: str
     extra_authorize_params: dict[str, str] = field(default_factory=dict)
     extra_token_params: dict[str, str] = field(default_factory=dict)
+    token_request_format: str = "form"
 
 
 class OAuthNotConfiguredError(Exception):
@@ -93,6 +94,7 @@ def jira_config(settings: Settings) -> OAuthProviderConfig:
         token_url="https://auth.atlassian.com/oauth/token",
         scope="write:jira-work offline_access",  # offline_access -> refresh_token issued
         extra_authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
+        token_request_format="json",
     )
 
 

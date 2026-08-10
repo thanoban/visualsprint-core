@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     microsoft_oauth_client_id: str | None = None
     microsoft_oauth_client_secret: str | None = None
 
+    # --- End-user authentication (Supabase Auth -- app/auth/) ---
+    # Backend only verifies tokens against the project's public JWKS
+    # endpoint; no service-role key is needed here.
+    supabase_url: str | None = None
+
     # --- ASR vendors (buy-everything strategy; see docs/PROJECT_PLAN.md) ---
     google_credentials_json: str | None = None  # path to service-account JSON
     azure_speech_key: str | None = None

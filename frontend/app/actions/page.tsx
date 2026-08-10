@@ -1,25 +1,21 @@
 "use client";
 
+// Ported from the Claude Design project "Visualsprint core development" ->
+// Actions.dc.html. AppSidebar isn't re-embedded (see report/page.tsx's
+// note). The mockup's "Based on: <evidence lines>" box has no backing field
+// on ProposedActionOut (id/kind/title/body/target/status/...), so it's
+// replaced with the real `target` dict the API actually returns -- same
+// data the pre-redesign page already surfaced, not fabricated evidence.
+// "History" is a real fetch (no status filter, split client-side) rather
+// than the mockup's hardcoded past-actions array.
+
 import { useEffect, useState } from "react";
-import { API_BASE_URL } from "@/lib/config";
+import { useAuth } from "@/lib/AuthProvider";
 import type { ProposedActionOut } from "@/lib/types";
 
-/** No auth/org-selection yet -- resolve the dev-convenience "default" org
- * name to its real id, same pattern as app/glossary/page.tsx and
- * app/chat/page.tsx (see those for why the literal string "default" is not
- * usable directly as an org_id). */
-async function resolveDefaultOrgId(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/default`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const org = (await res.json()) as { id: string; name: string };
-  return org.id;
-}
-
-async function fetchActions(orgId: string): Promise<ProposedActionOut[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/orgs/${orgId}/actions?status=pending_approval`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as ProposedActionOut[];
-}
+const sans = "'IBM Plex Sans', sans-serif";
+const serif = "'Source Serif 4', serif";
+const mono = "'IBM Plex Mono', monospace";
 
 const KIND_LABELS: Record<string, string> = {
   email_draft: "Email draft",
@@ -30,13 +26,21 @@ const KIND_LABELS: Record<string, string> = {
   reminder: "Reminder",
 };
 
-function ActionCard({
+function statusLabel(status: ProposedActionOut["status"]): string {
+  return { pending_approval: "Pending", approved: "Approved", rejected: "Rejected", executed: "Executed", failed: "Failed" }[status] ?? status;
+}
+function statusIsPositive(status: ProposedActionOut["status"]): boolean {
+  return status === "approved" || status === "executed";
+}
+
+function PendingCard({
   action,
   onResolved,
 }: {
   action: ProposedActionOut;
   onResolved: (id: string, updated: ProposedActionOut | null) => void;
 }) {
+  const { authedFetch } = useAuth();
   const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ProposedActionOut | null>(null);
@@ -45,7 +49,7 @@ function ActionCard({
     setBusy("approve");
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/actions/${action.id}/approve`, {
+      const res = await authedFetch(`/api/v1/actions/${action.id}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -68,9 +72,7 @@ function ActionCard({
     setBusy("reject");
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/actions/${action.id}/reject`, {
-        method: "POST",
-      });
+      const res = await authedFetch(`/api/v1/actions/${action.id}/reject`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `${res.status} ${res.statusText}`);
@@ -83,134 +85,209 @@ function ActionCard({
     }
   }
 
+  const targetLines = Object.entries(action.target).map(([k, v]) => `${k}: ${v}`);
+
   return (
-    <li className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+    <article style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span
+            style={{
+              fontFamily: mono,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+              textTransform: "uppercase",
+              color: "var(--accent-strong)",
+              background: "var(--accent-bg)",
+              padding: "3px 9px",
+              borderRadius: 4,
+            }}
+          >
             {KIND_LABELS[action.kind] ?? action.kind}
           </span>
-          <p className="mt-1.5 text-sm font-medium text-slate-900">{action.title}</p>
-        </div>
-      </div>
-
-      <p className="text-sm text-slate-600 whitespace-pre-wrap">{action.body}</p>
-
-      {Object.keys(action.target).length > 0 && (
-        <p className="text-xs text-slate-400">
-          {Object.entries(action.target)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join(" · ")}
-        </p>
-      )}
-
-      {result ? (
-        <div
-          className={`rounded-md px-3 py-2 text-sm ${
-            result.status === "executed"
-              ? "bg-green-50 border border-green-200 text-green-800"
-              : "bg-amber-50 border border-amber-200 text-amber-800"
-          }`}
-        >
-          {result.status === "executed" ? (
-            <>
-              Executed.{" "}
-              {result.external_url && (
-                <a href={result.external_url} target="_blank" rel="noreferrer" className="underline">
-                  View →
-                </a>
-              )}
-            </>
-          ) : (
-            <>Approved, but execution failed: {result.error}</>
+          <p style={{ fontFamily: serif, fontSize: 17, color: "var(--text)", margin: "12px 0 6px" }}>{action.title}</p>
+          <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-muted)", margin: 0, whiteSpace: "pre-wrap" }}>{action.body}</p>
+          {targetLines.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.02em", margin: "0 0 6px" }}>
+                Target
+              </p>
+              {targetLines.map((line) => (
+                <p key={line} style={{ fontFamily: mono, fontSize: 12, color: "var(--text-muted)", margin: "0 0 4px" }}>
+                  {line}
+                </p>
+              ))}
+            </div>
           )}
+          {result && (
+            <div
+              style={{
+                marginTop: 14,
+                borderRadius: 6,
+                padding: "8px 12px",
+                fontSize: 13,
+                background: result.status === "executed" ? "var(--accent-bg)" : "var(--evidence-bg)",
+                color: result.status === "executed" ? "var(--accent-strong)" : "var(--evidence)",
+              }}
+            >
+              {result.status === "executed" ? (
+                <>
+                  Executed.{" "}
+                  {result.external_url && (
+                    <a href={result.external_url} target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
+                      View →
+                    </a>
+                  )}
+                </>
+              ) : (
+                <>Approved, but execution failed: {result.error}</>
+              )}
+            </div>
+          )}
+          {error && <p style={{ fontSize: 12.5, color: "var(--gap)", marginTop: 8 }}>{error}</p>}
         </div>
-      ) : (
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={handleApprove}
-            disabled={busy !== null}
-            className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy === "approve" ? "Approving…" : "Approve"}
-          </button>
-          <button
-            type="button"
-            onClick={handleReject}
-            disabled={busy !== null}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {busy === "reject" ? "Rejecting…" : "Reject"}
-          </button>
-        </div>
-      )}
-
-      {error && <p className="text-xs text-red-700">{error}</p>}
-    </li>
+        {!result && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={handleApprove}
+              disabled={busy !== null}
+              style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--accent-strong)", border: "none", padding: "8px 18px", borderRadius: 7, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+            >
+              {busy === "approve" ? "Approving…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              onClick={handleReject}
+              disabled={busy !== null}
+              style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: "var(--text-muted)", background: "transparent", border: "1px solid var(--border-strong)", padding: "8px 18px", borderRadius: 7, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+            >
+              {busy === "reject" ? "Rejecting…" : "Reject"}
+            </button>
+          </div>
+        )}
+      </div>
+    </article>
   );
 }
 
 export default function ActionsPage() {
-  const [orgId, setOrgId] = useState<string | null>(null);
+  const { me, authedFetch } = useAuth();
   const [actions, setActions] = useState<ProposedActionOut[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    resolveDefaultOrgId()
-      .then((id) => {
-        setOrgId(id);
-        return fetchActions(id);
+    if (!me) return;
+    authedFetch(`/api/v1/orgs/${me.org.id}/actions`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json() as Promise<ProposedActionOut[]>;
       })
       .then(setActions)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load actions"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [me, authedFetch]);
 
   function handleResolved(actionId: string, updated: ProposedActionOut | null) {
-    if (updated === null || updated.status !== "pending_approval") {
-      // Approved (executed or failed) or rejected -- either way it leaves
-      // the pending queue. Keep an approved-but-failed card visible for a
-      // moment via its own inline result state rather than yanking it, but
-      // remove it from this list's backing data so a refresh doesn't re-show it.
-      setActions((prev) => (prev ? prev.filter((a) => a.id !== actionId) : prev));
-    }
+    setActions((prev) => {
+      if (!prev) return prev;
+      if (updated === null) return prev.filter((a) => a.id !== actionId);
+      return prev.map((a) => (a.id === actionId ? updated : a));
+    });
   }
 
   if (loading) {
-    return <p className="text-sm text-slate-500">Loading proposed actions…</p>;
+    return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading proposed actions…</p>;
   }
 
   if (error || !actions) {
     return (
-      <p className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+      <p style={{ margin: 32, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 14, color: "var(--gap)" }}>
         {error ?? "Failed to load."}
       </p>
     );
   }
 
-  return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Proposed actions</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Drafted from verified knowledge — nothing here has run yet. Approve to execute, or reject to
-          discard.
-        </p>
-      </div>
+  const pending = actions.filter((a) => a.status === "pending_approval");
+  const history = actions
+    .filter((a) => a.status !== "pending_approval")
+    .sort((a, b) => (b.approved_at ?? "").localeCompare(a.approved_at ?? ""));
 
-      {actions.length === 0 ? (
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          No actions awaiting approval.
+  return (
+    <div>
+      <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
+        <p style={{ fontFamily: serif, fontSize: 20, color: "var(--text)", margin: 0 }}>Actions</p>
+        <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+          Proposed by verified knowledge — nothing sends until you approve it.
         </p>
-      ) : (
-        <ul className="space-y-3">
-          {actions.map((a) => (
-            <ActionCard key={a.id} action={a} onResolved={handleResolved} />
-          ))}
-        </ul>
-      )}
+      </header>
+
+      <main style={{ padding: "28px 32px 64px", maxWidth: 820 }}>
+        <section>
+          <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+            Awaiting your approval ({pending.length})
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {pending.length === 0 ? (
+              <p style={{ fontSize: 14, color: "var(--text-faint)", padding: "20px 0" }}>
+                All caught up — no actions waiting on you.
+              </p>
+            ) : (
+              pending.map((a) => <PendingCard key={a.id} action={a} onResolved={handleResolved} />)
+            )}
+          </div>
+        </section>
+
+        {history.length > 0 && (
+          <section style={{ marginTop: 32 }}>
+            <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+              History
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {history.map((h) => (
+                <div
+                  key={h.id}
+                  style={{ display: "grid", gridTemplateColumns: "130px 1fr 90px", alignItems: "center", gap: 14, padding: "12px 4px", borderBottom: "1px solid var(--border)" }}
+                >
+                  <span
+                    style={{
+                      fontFamily: mono,
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      color: "var(--text-faint)",
+                      border: "1px solid var(--border-strong)",
+                      padding: "2px 7px",
+                      borderRadius: 4,
+                      width: "fit-content",
+                    }}
+                  >
+                    {KIND_LABELS[h.kind] ?? h.kind}
+                  </span>
+                  <span style={{ fontSize: 13, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {h.title}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      padding: "3px 9px",
+                      borderRadius: 20,
+                      width: "fit-content",
+                      justifySelf: "end",
+                      color: statusIsPositive(h.status) ? "var(--accent-strong)" : "var(--gap)",
+                      background: statusIsPositive(h.status) ? "var(--accent-bg)" : "var(--gap-bg)",
+                    }}
+                  >
+                    {statusLabel(h.status)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 }

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
+from app.auth.dependency import require_org_member
 from app.db.base import get_db
 from app.db.models import (
     AudioTrack,
@@ -41,7 +42,9 @@ class OrgSettingsOut(BaseModel):
 
 
 @router.get("/orgs/{org_id}/settings", response_model=OrgSettingsOut)
-async def get_org_settings(org_id: str, db: Session = Depends(get_db)) -> OrgSettingsOut:
+async def get_org_settings(
+    org_id: str, db: Session = Depends(get_db), _: None = Depends(require_org_member)
+) -> OrgSettingsOut:
     org = db.get(Org, org_id)
     if org is None:
         raise HTTPException(404, "org not found")
@@ -59,7 +62,10 @@ class UpdateOrgSettingsRequest(BaseModel):
 
 @router.patch("/orgs/{org_id}/settings", response_model=OrgSettingsOut)
 async def update_org_settings(
-    org_id: str, req: UpdateOrgSettingsRequest, db: Session = Depends(get_db)
+    org_id: str,
+    req: UpdateOrgSettingsRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
 ) -> OrgSettingsOut:
     org = db.get(Org, org_id)
     if org is None:
@@ -89,7 +95,12 @@ def _get_org_meeting(db: Session, org_id: str, meeting_id: str) -> Meeting:
 
 
 @router.get("/orgs/{org_id}/meetings/{meeting_id}/export")
-async def export_meeting(org_id: str, meeting_id: str, db: Session = Depends(get_db)) -> dict:
+async def export_meeting(
+    org_id: str,
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> dict:
     """Full data-portability dump: every row this org's data derived from
     this meeting, across every capture session it had. Blob content itself
     (audio/keyframe images) is referenced by URI, not inlined -- the
@@ -204,7 +215,11 @@ class EraseMeetingResponse(BaseModel):
 
 @router.delete("/orgs/{org_id}/meetings/{meeting_id}", response_model=EraseMeetingResponse)
 async def delete_meeting(
-    org_id: str, meeting_id: str, requested_by: str = "", db: Session = Depends(get_db)
+    org_id: str,
+    meeting_id: str,
+    requested_by: str = "",
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
 ) -> EraseMeetingResponse:
     """Irreversible. Deletes the meeting and everything derived from every
     capture session it had -- transcripts, keyframes, knowledge, actions,
