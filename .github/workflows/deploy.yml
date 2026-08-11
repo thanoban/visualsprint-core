@@ -48,11 +48,25 @@ jobs:
 
       - name: Deploy api to Cloud Run
         run: |
+          API_SECRETS="VS_DATABASE_URL=visualsprint-database-url:latest"
+          API_SECRETS="${API_SECRETS},VS_OAUTH_STATE_SECRET=visualsprint-oauth-state-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_SLACK_OAUTH_CLIENT_ID=visualsprint-slack-oauth-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_SLACK_OAUTH_CLIENT_SECRET=visualsprint-slack-oauth-client-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_OAUTH_CLIENT_ID=visualsprint-zoom-oauth-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_OAUTH_CLIENT_SECRET=visualsprint-zoom-oauth-client-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_CLIENT_ID=visualsprint-zoom-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_CLIENT_SECRET=visualsprint-zoom-client-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_WEBHOOK_SECRET_TOKEN=visualsprint-zoom-webhook-secret-token:latest"
+          API_SECRETS="${API_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_JIRA_OAUTH_CLIENT_ID=visualsprint-jira-oauth-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_JIRA_OAUTH_CLIENT_SECRET=visualsprint-jira-oauth-client-secret:latest"
           gcloud run deploy visualsprint-api \
             --image "${REGISTRY}/api:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
-            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest" \
+            --set-secrets="$API_SECRETS" \
+            --set-env-vars='VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=["https://visualsprint-web-5ieahiycsa-uw.a.run.app"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app' \
             --allow-unauthenticated \
             --quiet
 
@@ -78,7 +92,7 @@ jobs:
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --command python \
             --args="-m,app.orchestrator.worker" \
-            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest" \
+            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest,VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest,VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest,VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest" \
             --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json" \
             --no-cpu-throttling \
             --min-instances=1 --max-instances=1 \
@@ -163,7 +177,23 @@ jobs:
 # app/adapters/asr_google.py). Real key already generated and stored; this
 # one is live, not a placeholder. The `api` service does not need it (only
 # the agents/worker image calls the ASR cascade).
-# Azure Speech (VS_AZURE_SPEECH_KEY/_REGION) and Groq (VS_GROQ_API_KEY) are
-# NOT wired here -- both require signing up on the vendor's own site, which
-# has to happen outside this repo/workflow before a secret can be created
-# for them.
+# Azure Speech (VS_AZURE_SPEECH_KEY/_REGION) is wired via Secret Manager as
+# of 2026-08-11. Groq (VS_GROQ_API_KEY) is still NOT wired -- no account has
+# been created for it yet, so there's no value to store.
+#
+# OAuth clients (Slack, Zoom OAuth app + Zoom Server-to-Server, Microsoft,
+# Jira) and VS_OAUTH_STATE_SECRET are wired into the `api` service via
+# Secret Manager as of 2026-08-11 (secret names: visualsprint-<vendor>-...,
+# see the loop above). GitHub and Linear OAuth apps have not been created
+# yet -- VS_GITHUB_OAUTH_CLIENT_ID/SECRET and VS_LINEAR_OAUTH_CLIENT_ID/SECRET
+# have no value to store until that happens.
+#
+# VS_SUPABASE_URL, VS_CORS_ALLOWED_ORIGINS, VS_OAUTH_REDIRECT_BASE_URL, and
+# VS_FRONTEND_BASE_URL are set as plain (non-secret) env vars on `api` --
+# these are public URLs, not credentials. All four are load-bearing: without
+# VS_SUPABASE_URL every authenticated request 401s (JWT verification can't
+# reach Supabase's JWKS endpoint); without VS_CORS_ALLOWED_ORIGINS pointing
+# at the real web origin, the browser blocks every fetch from the deployed
+# frontend to the deployed api. If either Cloud Run URL ever changes (e.g.
+# service recreated in a different region), these hardcoded values need a
+# manual update here.
