@@ -36,8 +36,9 @@ asr = [
     "speechbrain>=1.0",  # VoxLingua107 language ID
 ]
 agents = [
-    "anthropic[vertex]>=0.40",
+    "anthropic[vertex]>=0.40",  # Claude LlmClient (app/adapters/llm_vertex.py) -- not the default provider, kept available
     "google-cloud-aiplatform>=1.70",  # Embedder swap point (app/adapters/embedder_vertex.py)
+    "google-genai>=1.0",  # Default Gemini LlmClient (app/adapters/llm_gemini_vertex.py) -- imported directly, not just transitively via google-cloud-aiplatform
 ]
 screen = [
     "opencv-python>=4.10",

@@ -47,14 +47,19 @@ _VLM_CAPTIONER_UNAVAILABLE = object()
 def _get_llm():
     global _llm_client
     if _llm_client is None:
-        if get_settings().llm_provider == "foundry":
+        provider = get_settings().llm_provider
+        if provider == "foundry":
             from app.adapters.llm_foundry import FoundryLlmClient
 
             _llm_client = FoundryLlmClient()
-        else:
+        elif provider == "vertex":
             from app.adapters.llm_vertex import VertexLlmClient
 
             _llm_client = VertexLlmClient()
+        else:
+            from app.adapters.llm_gemini_vertex import GeminiVertexLlmClient
+
+            _llm_client = GeminiVertexLlmClient()
     return _llm_client
 
 

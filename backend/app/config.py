@@ -82,25 +82,31 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     huggingface_token: str | None = None  # pyannote diarization pipelines are HF-gated
 
-    # --- Agents (Claude via Vertex AI by default; Microsoft Foundry is a
-    # swappable alternate transport behind the same LlmClient interface --
-    # both construct the identical forced-tool-use Messages API call, so
-    # agent code never knows which one is live. See app/adapters/llm_vertex.py
-    # / llm_foundry.py and CLAUDE.md's note on this.) ---
-    llm_provider: str = "vertex"  # "vertex" | "foundry"
+    # --- Agents (Gemini via Vertex AI by default as of 2026-08-11 -- Claude
+    # on Vertex/Foundry remain available behind the same LlmClient interface
+    # but are no longer the default: Anthropic's partner models on Vertex
+    # default new projects to zero quota per base model, requiring a manual
+    # quota-increase request, while Gemini is first-party and unblocked
+    # immediately. See app/adapters/llm_gemini_vertex.py's docstring for the
+    # full reasoning and CLAUDE.md's note on this.) ---
+    llm_provider: str = "gemini"  # "gemini" | "vertex" (Claude) | "foundry" (Claude)
     anthropic_api_key: str | None = None
     vertex_project_id: str | None = None
     vertex_region: str = "us-east5"
+    # Gemini's Vertex region availability differs from Claude's partner-model
+    # availability -- verified empirically, not guessed (see
+    # app/adapters/llm_gemini_vertex.py).
+    gemini_region: str = "us-central1"
     # Microsoft Foundry (Azure) -- api_key auth against
     # https://{foundry_resource}.services.ai.azure.com/anthropic/.
     foundry_api_key: str | None = None
     foundry_resource: str | None = None
-    model_extract: str = "claude-sonnet-5"
-    model_classify: str = "claude-haiku-4-5-20251001"
-    model_memory: str = "claude-opus-4-8"
-    model_verify: str = "claude-sonnet-5"
-    model_report: str = "claude-sonnet-5"
-    model_repair: str = "claude-haiku-4-5-20251001"  # cheap, high-volume: every ASR segment goes through this
+    model_extract: str = "gemini-2.5-pro"
+    model_classify: str = "gemini-2.5-flash-lite"
+    model_memory: str = "gemini-2.5-pro"
+    model_verify: str = "gemini-2.5-pro"
+    model_report: str = "gemini-2.5-pro"
+    model_repair: str = "gemini-2.5-flash-lite"  # cheap, high-volume: every ASR segment goes through this
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0

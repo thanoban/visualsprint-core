@@ -93,7 +93,7 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest,VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest,VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest,VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini" \
             --no-cpu-throttling \
             --min-instances=1 --max-instances=1 \
             --quiet
