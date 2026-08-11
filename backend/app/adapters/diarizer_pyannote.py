@@ -47,9 +47,11 @@ class _PyannoteBackend:
             )
         from pyannote.audio import Pipeline
 
-        self._pipeline = Pipeline.from_pretrained(
-            self._pipeline_name, use_auth_token=self._hf_token
-        )
+        # `token=`, not the older `use_auth_token=` -- pyannote.audio renamed
+        # it, and passing the old name raises TypeError rather than falling
+        # back, so this silently produced "diarization unavailable" on every
+        # run against pyannote>=4 (verified against 4.0.7's real signature).
+        self._pipeline = Pipeline.from_pretrained(self._pipeline_name, token=self._hf_token)
 
     def run(self, audio_path: str, min_speakers: int, max_speakers: int) -> list[RawSpeakerTurn]:
         self._ensure_loaded()
