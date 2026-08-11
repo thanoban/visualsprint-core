@@ -101,7 +101,10 @@ def test_complete_job_advances_to_the_next_stage(db):
     complete_job(db, job)
 
     assert job.status == JobStatus.DONE
-    next_job = db.query(PipelineJob).filter(PipelineJob.stage == "transcribe").one()
+    # acquire -> diarize, per STAGES (app/orchestrator/pipeline.py) --
+    # diarize runs before transcribe so speaker identity can be attached
+    # while utterances are created (docs/08-speaker-identity.md).
+    next_job = db.query(PipelineJob).filter(PipelineJob.stage == "diarize").one()
     assert next_job.status == JobStatus.QUEUED
 
 

@@ -31,6 +31,9 @@ from app.db.models import (
     Org,
     Participant,
     PipelineJob,
+    SessionSpeaker,
+    SpeakerResolution,
+    SpeakerTurn,
     User,
     Utterance,
     UtteranceKeyframe,
@@ -84,6 +87,41 @@ def fake_transcriber(monkeypatch):
     monkeypatch.setattr(worker, "_transcriber", fake)
     yield fake
     monkeypatch.setattr(worker, "_transcriber", None)
+
+
+class FakeDiarizer:
+    """Two speakers splitting the timeline at 2.5s -- deliberately aligned
+    with FakeTranscriber's segment boundary so each utterance lands cleanly
+    in one speaker, making the attribution assertions unambiguous.
+    Substituted for pyannote so this test never needs torch/pyannote.audio
+    installed or a Hugging Face token -- same seam as FakeTranscriber."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def diarize(self, audio_uri: str, min_speakers: int = 1, max_speakers: int = 20):
+        from app.interfaces.diarizer import DiarizationResult, SpeakerTurn
+
+        self.calls.append(audio_uri)
+        return DiarizationResult(
+            turns=[
+                SpeakerTurn(start_s=0.0, end_s=2.5, cluster_id="SPEAKER_00"),
+                SpeakerTurn(start_s=2.5, end_s=3600.0, cluster_id="SPEAKER_01"),
+            ],
+            num_speakers=2,
+        )
+
+
+@pytest.fixture(autouse=True)
+def fake_diarizer(monkeypatch):
+    """Autouse: without it the diarize stage constructs the real
+    PyannoteDiarizer, which drags in torch on import and makes every test in
+    this module slow (and fails outright on a machine with a broken
+    torchcodec build)."""
+    fake = FakeDiarizer()
+    monkeypatch.setattr(worker, "_diarizer", fake)
+    yield fake
+    monkeypatch.setattr(worker, "_diarizer", None)
 
 
 @pytest.fixture(autouse=True)
@@ -140,6 +178,8 @@ def _delete_default_org_children(db) -> None:
     db.query(UtteranceKeyframe).filter(UtteranceKeyframe.org_id == org.id).delete()
     db.query(Keyframe).filter(Keyframe.org_id == org.id).delete()
     db.query(Utterance).filter(Utterance.org_id == org.id).delete()
+    db.query(SpeakerTurn).filter(SpeakerTurn.org_id == org.id).delete()
+    db.query(SessionSpeaker).filter(SessionSpeaker.org_id == org.id).delete()
     db.query(Participant).filter(Participant.org_id == org.id).delete()
     db.query(PipelineJob).filter(PipelineJob.org_id == org.id).delete()
     db.query(ConsentRecord).filter(ConsentRecord.org_id == org.id).delete()
@@ -211,6 +251,7 @@ def test_upload_then_transcribe_produces_utterances(client, default_org_id, fake
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
     assert asyncio.run(worker.run_once()) is True  # transcribe
 
     assert fake_transcriber.calls, "transcribe stage never called the Transcriber"
@@ -242,6 +283,73 @@ def test_upload_then_transcribe_produces_utterances(client, default_org_id, fake
     # `understand` job is enqueued but hasn't been claimed by a worker yet.
     status = client.get(f"/api/v1/meetings/sessions/{session_id}")
     assert status.json()["state"] == CaptureState.TRANSCRIBING.value
+
+
+def test_mixed_audio_upload_separates_speakers_without_naming_them(
+    client, default_org_id, fake_transcriber, fake_diarizer
+):
+    """Phase A of docs/08-speaker-identity.md, end to end: a Mode D upload
+    (mixed audio, no per-participant tracks) gets each utterance assigned to
+    a distinct diarized voice.
+
+    The point of the second half of this test is what it does NOT claim: the
+    voices stay anonymous clusters and `attribution_confidence` stays 0.0,
+    because mapping a cluster to a real human is identity fusion (Phase B).
+    Naming a speaker we haven't actually identified would be worse than
+    admitting we don't know."""
+    import asyncio
+
+    resp = client.post(
+        "/api/v1/meetings/upload",
+        files={"file": ("standup.wav", FAKE_AUDIO_BYTES, "audio/wav")},
+        data={"title": "Sprint Planning", "org_id": default_org_id},
+    )
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["capture_session_id"]
+
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+
+    assert fake_diarizer.calls, "diarize stage never called the Diarizer"
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        utterances = (
+            db.execute(
+                select(Utterance)
+                .where(Utterance.capture_session_id == session_id)
+                .order_by(Utterance.start_s)
+            )
+            .scalars()
+            .all()
+        )
+        speakers = (
+            db.execute(
+                select(SessionSpeaker).where(SessionSpeaker.capture_session_id == session_id)
+            )
+            .scalars()
+            .all()
+        )
+        turns = (
+            db.execute(select(SpeakerTurn).where(SpeakerTurn.capture_session_id == session_id))
+            .scalars()
+            .all()
+        )
+
+    assert len(turns) == 2
+    assert {s.cluster_id for s in speakers} == {"SPEAKER_00", "SPEAKER_01"}
+
+    # The two utterances land on different voices — this is the separation
+    # that makes "who said what" possible at all.
+    assert utterances[0].speaker_cluster_id == "SPEAKER_00"
+    assert utterances[1].speaker_cluster_id == "SPEAKER_01"
+
+    # ...but nobody has been identified yet, and the data says so honestly.
+    assert all(u.person_id is None for u in utterances)
+    assert all(u.attribution_confidence == 0.0 for u in utterances)
+    assert all(s.person_id is None for s in speakers)
+    assert all(s.resolution_method == SpeakerResolution.UNRESOLVED for s in speakers)
 
 
 def test_transcribe_writes_coverage_gap_for_failed_segment(client, default_org_id, monkeypatch):
@@ -293,6 +401,7 @@ def test_transcribe_writes_coverage_gap_for_failed_segment(client, default_org_i
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert fake.calls
 
@@ -358,6 +467,7 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, default_org_i
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
     assert asyncio.run(worker.run_once()) is True  # transcribe
 
     with Session() as db:
@@ -424,6 +534,7 @@ def test_video_upload_produces_keyframes_and_grounding(client, default_org_id, f
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen
 
@@ -505,9 +616,10 @@ def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
 
     import asyncio
 
-    assert asyncio.run(worker.run_once()) is True
-    assert asyncio.run(worker.run_once()) is True
-    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+    assert asyncio.run(worker.run_once()) is True  # screen
 
     Session = get_sessionmaker()
     with Session() as db:
@@ -561,9 +673,10 @@ def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
 
     import asyncio
 
-    assert asyncio.run(worker.run_once()) is True
-    assert asyncio.run(worker.run_once()) is True
-    assert asyncio.run(worker.run_once()) is True
+    assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # transcribe
+    assert asyncio.run(worker.run_once()) is True  # screen
 
     Session = get_sessionmaker()
     with Session() as db:
@@ -588,6 +701,7 @@ def test_audio_only_upload_skips_screen_stage_without_failing(client, default_or
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
+    assert asyncio.run(worker.run_once()) is True  # diarize
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen -- must not raise
 

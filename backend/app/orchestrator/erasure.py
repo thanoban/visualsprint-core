@@ -33,6 +33,8 @@ from app.db.models import (
     Participant,
     PipelineJob,
     ProposedAction,
+    SessionSpeaker,
+    SpeakerTurn,
     Utterance,
     UtteranceKeyframe,
 )
@@ -136,6 +138,17 @@ async def _erase_capture_session(db: Session, session: CaptureSession, blob_stor
         synchronize_session=False
     )
     db.query(Participant).filter(Participant.capture_session_id == session.id).delete(
+        synchronize_session=False
+    )
+    # Speaker separation/identity rows (docs/08-speaker-identity.md). These
+    # are personal data in their own right -- a voice cluster tied to a
+    # person is biometric-adjacent -- so erasure must remove them, and the
+    # FK to capture_session means a missing delete here fails the whole
+    # cascade rather than silently leaking.
+    db.query(SpeakerTurn).filter(SpeakerTurn.capture_session_id == session.id).delete(
+        synchronize_session=False
+    )
+    db.query(SessionSpeaker).filter(SessionSpeaker.capture_session_id == session.id).delete(
         synchronize_session=False
     )
     db.query(PipelineJob).filter(PipelineJob.capture_session_id == session.id).delete(

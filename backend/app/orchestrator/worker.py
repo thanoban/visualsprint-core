@@ -37,6 +37,7 @@ async def _noop(db: object, job: PipelineJob) -> None:  # placeholder for unbuil
 
 _llm_client = None
 _transcriber = None
+_diarizer = None
 _platform_adapters = None
 _calendar_adapters = None
 _vlm_captioner = None
@@ -502,6 +503,124 @@ def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str
     return roster, glossary_terms, ocr_context
 
 
+def _build_diarizer():
+    from app.adapters.diarizer_pyannote import PyannoteDiarizer
+
+    return PyannoteDiarizer()
+
+
+def _get_diarizer():
+    """Lazy singleton, same pattern as _get_transcriber -- overridable in
+    tests via `app.orchestrator.worker._diarizer = <fake>` so the diarize
+    stage never needs pyannote.audio installed or a Hugging Face token."""
+    global _diarizer
+    if _diarizer is None:
+        _diarizer = _build_diarizer()
+    return _diarizer
+
+
+def _assign_cluster(
+    start_s: float, end_s: float, turns: list
+) -> tuple[str | None, float]:
+    """Returns (cluster_id, overlap_ratio) for the diarized turn overlapping
+    this utterance the most, or (None, 0.0) when nothing overlaps.
+
+    The ratio is what keeps `attribution_confidence` honest: an utterance
+    only 55% covered by a speaker turn must not claim the same certainty as
+    a Zoom per-participant track, which is exact by construction."""
+    duration = end_s - start_s
+    if duration <= 0:
+        return None, 0.0
+    best_cluster: str | None = None
+    best_overlap = 0.0
+    for turn in turns:
+        overlap = min(end_s, turn.end_s) - max(start_s, turn.start_s)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_cluster = turn.cluster_id
+    if best_cluster is None:
+        return None, 0.0
+    return best_cluster, min(best_overlap / duration, 1.0)
+
+
+@stage_handler("diarize")
+async def _handle_diarize(db: object, job: PipelineJob) -> None:
+    """Separates "who spoke when" from mixed audio, so every capture mode can
+    attribute speech to a speaker rather than only Zoom per-participant
+    tracks (docs/08-speaker-identity.md).
+
+    Skipped entirely for per-participant tracks -- those already carry exact
+    identity, and running diarization over them would replace a certainty
+    with an estimate.
+
+    Degrades rather than fails: pyannote's pipelines are Hugging-Face-gated
+    (VS_HUGGINGFACE_TOKEN) and the model is large. If it is unavailable the
+    session continues without speaker separation -- the same policy the
+    optional VLM captioner uses -- because losing speaker labels is worth far
+    less than losing the transcript entirely.
+
+    Idempotent: clears this session's prior turns/speakers before inserting.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import AudioTrack, CaptureSession, SessionSpeaker, SpeakerTurn
+
+    session = db.get(CaptureSession, job.capture_session_id)
+    if session is None:
+        raise RuntimeError(f"capture_session {job.capture_session_id} not found")
+
+    tracks = (
+        db.execute(select(AudioTrack).where(AudioTrack.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
+    mixed_tracks = [t for t in tracks if t.participant_person_id is None]
+    if not mixed_tracks:
+        log.info("diarize.skipped_per_participant", session=session.id)
+        return
+
+    db.query(SpeakerTurn).filter(SpeakerTurn.capture_session_id == session.id).delete()
+    db.query(SessionSpeaker).filter(SessionSpeaker.capture_session_id == session.id).delete()
+
+    try:
+        diarizer = _get_diarizer()
+    except Exception as exc:
+        log.warning("diarize.unavailable", session=session.id, error=str(exc))
+        return
+
+    for track in mixed_tracks:
+        try:
+            result = await diarizer.diarize(track.uri)
+        except Exception as exc:
+            # Never fail the session over speaker labels -- see docstring.
+            log.warning("diarize.failed", session=session.id, track=track.id, error=str(exc))
+            continue
+        for turn in result.turns:
+            db.add(
+                SpeakerTurn(
+                    org_id=session.org_id,
+                    capture_session_id=session.id,
+                    start_s=turn.start_s,
+                    end_s=turn.end_s,
+                    cluster_id=turn.cluster_id,
+                    confidence=turn.confidence,
+                )
+            )
+        for cluster_id in sorted({turn.cluster_id for turn in result.turns}):
+            # person_id stays null here: mapping a cluster to a real human is
+            # identity fusion (Phase B), and guessing a name would be worse
+            # than admitting the voice is unidentified.
+            db.add(
+                SessionSpeaker(
+                    org_id=session.org_id,
+                    capture_session_id=session.id,
+                    cluster_id=cluster_id,
+                )
+            )
+    db.flush()
+    log.info("diarize.done", session=session.id, tracks=len(mixed_tracks))
+
+
 @stage_handler("transcribe")
 async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     """Idempotent: clears any utterances (and this stage's coverage_interval
@@ -529,6 +648,8 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         CaptureSession,
         CoverageInterval,
         CoverageStatus,
+        SessionSpeaker,
+        SpeakerTurn,
         Utterance,
     )
     from app.interfaces.transcriber import TranscriptionRequest
@@ -551,6 +672,22 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     ).delete()
 
     roster, glossary_terms, ocr_context = _repair_context(db, session)
+    # Diarization output from the previous stage, if any -- absent when the
+    # session is per-participant (skipped) or pyannote was unavailable
+    # (degraded), both of which must still produce a full transcript.
+    speaker_turns = (
+        db.execute(select(SpeakerTurn).where(SpeakerTurn.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
+    cluster_to_person = {
+        s.cluster_id: s.person_id
+        for s in db.execute(
+            select(SessionSpeaker).where(SessionSpeaker.capture_session_id == session.id)
+        )
+        .scalars()
+        .all()
+    }
     transcriber = _get_transcriber()
     for track in tracks:
         result = await transcriber.transcribe(
@@ -577,20 +714,32 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
             model=get_settings().model_repair,
         )
         for original, seg in zip(result.segments, repaired_segments, strict=True):
+            if track.participant_person_id:
+                # Zoom per-participant track: identity is exact by
+                # construction, so diarization is neither used nor needed.
+                cluster_id: str | None = None
+                person_id: str | None = track.participant_person_id
+                attribution_confidence = 1.0
+            else:
+                cluster_id, overlap_ratio = _assign_cluster(
+                    seg.start_s, seg.end_s, speaker_turns
+                )
+                person_id = cluster_to_person.get(cluster_id) if cluster_id else None
+                # Unknown person => 0.0, even on a clean cluster match: the
+                # number claims confidence in *who*, not in the separation.
+                attribution_confidence = overlap_ratio if person_id else 0.0
             db.add(
                 Utterance(
                     org_id=session.org_id,
                     capture_session_id=session.id,
-                    person_id=track.participant_person_id,
+                    person_id=person_id,
                     start_s=seg.start_s,
                     end_s=seg.end_s,
                     text=seg.text,
                     lang_tags=[lang.value for lang in seg.lang_tags],
                     asr_confidence=seg.asr_confidence,
-                    # Zoom per-participant tracks carry exact identity; mixed
-                    # tracks (Mode D/Meet/Teams) have no attribution yet —
-                    # diarization/identity fusion lands with keyframes (Phase 3).
-                    attribution_confidence=1.0 if track.participant_person_id else 0.0,
+                    speaker_cluster_id=cluster_id,
+                    attribution_confidence=attribution_confidence,
                     provider=seg.provider,
                     repaired=seg.text != original.text,
                 )

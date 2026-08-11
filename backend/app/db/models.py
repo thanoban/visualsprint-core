@@ -24,6 +24,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -182,6 +183,7 @@ class CaptureState(enum.StrEnum):
     SCHEDULED = "scheduled"
     ACQUIRING = "acquiring"
     ACQUIRED = "acquired"
+    DIARIZING = "diarizing"
     TRANSCRIBING = "transcribing"
     PROCESSING_SCREEN = "processing_screen"
     UNDERSTANDING = "understanding"
@@ -272,6 +274,70 @@ class CoverageInterval(TimestampMixin, Base):
 
 
 # --------------------------------------------------------------------------- #
+# Speaker separation & identity (docs/08-speaker-identity.md)
+# --------------------------------------------------------------------------- #
+
+
+class SpeakerTurn(TimestampMixin, Base):
+    """One diarized span of speech by one (still anonymous) voice.
+
+    Written by the `diarize` stage for mixed-audio sessions only — Zoom
+    per-participant tracks already carry exact identity and skip diarization
+    entirely (app/interfaces/diarizer.py). `cluster_id` is session-local and
+    meaningless across sessions; `SessionSpeaker` is where it becomes a
+    person."""
+
+    __tablename__ = "speaker_turn"
+    __table_args__ = (Index("ix_speakerturn_session_start", "capture_session_id", "start_s"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    start_s: Mapped[float] = mapped_column(Float)
+    end_s: Mapped[float] = mapped_column(Float)
+    cluster_id: Mapped[str] = mapped_column(String(64))  # e.g. "SPEAKER_00"
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+
+
+class SpeakerResolution(enum.StrEnum):
+    """How a cluster got its person_id — surfaced so a report can state *how*
+    it knows who spoke, not just assert a name."""
+
+    ROSTER = "roster"  # platform-supplied speaker labels (Meet/Teams)
+    VOICEPRINT = "voiceprint"  # matched a known Person's enrolled voice
+    MANUAL = "manual"  # a human corrected it
+    UNRESOLVED = "unresolved"  # honestly unknown — never guess a name
+
+
+class SessionSpeaker(TimestampMixin, Base):
+    """One row per distinct voice in a session — where anonymous diarization
+    clusters become real people.
+
+    Split from `SpeakerTurn` so identity is resolved once per voice rather
+    than once per turn. The voiceprint embedding that carries identity across
+    meetings lands here in Phase B (docs/08-speaker-identity.md), once the
+    pyannote embedding dimensionality is verified against the real model
+    rather than assumed."""
+
+    __tablename__ = "session_speaker"
+    __table_args__ = (
+        Index("ix_sessionspeaker_session", "capture_session_id"),
+        UniqueConstraint("capture_session_id", "cluster_id", name="uq_session_speaker_cluster"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    cluster_id: Mapped[str] = mapped_column(String(64))
+    person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
+    resolution_method: Mapped[SpeakerResolution] = mapped_column(
+        Enum(SpeakerResolution, native_enum=False, length=16),
+        default=SpeakerResolution.UNRESOLVED,
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+# --------------------------------------------------------------------------- #
 # Evidence: utterances & keyframes
 # --------------------------------------------------------------------------- #
 
@@ -289,6 +355,13 @@ class Utterance(TimestampMixin, Base):
     text: Mapped[str] = mapped_column(Text)
     lang_tags: Mapped[list] = mapped_column(JSON, default=list)  # ["si","en"] per plan
     asr_confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    # Which diarized voice said this, when known. Distinct from person_id:
+    # a cluster separates speakers without naming them, so a transcript can
+    # show "Speaker 1 / Speaker 2" before identity fusion resolves who they
+    # actually are (docs/08-speaker-identity.md).
+    speaker_cluster_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Confidence that `person_id` is correct -- 0.0 whenever the person is
+    # unknown, even if the cluster assignment itself was clean.
     attribution_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     provider: Mapped[str] = mapped_column(String(64), default="")  # which vendor produced it
     repaired: Mapped[bool] = mapped_column(Boolean, default=False)  # LLM repair pass applied

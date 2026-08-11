@@ -9,7 +9,11 @@ from app.db.models import CaptureState
 
 # stage name -> (state while running, next stage)
 STAGES: dict[str, tuple[CaptureState, str | None]] = {
-    "acquire": (CaptureState.ACQUIRING, "transcribe"),
+    "acquire": (CaptureState.ACQUIRING, "diarize"),
+    # diarize runs before transcribe so `transcribe` can attach speaker
+    # identity as it creates Utterance rows, rather than needing a second
+    # update pass over them (docs/08-speaker-identity.md).
+    "diarize": (CaptureState.DIARIZING, "transcribe"),
     "transcribe": (CaptureState.TRANSCRIBING, "screen"),
     "screen": (CaptureState.PROCESSING_SCREEN, "understand"),
     "understand": (CaptureState.UNDERSTANDING, "verify"),
