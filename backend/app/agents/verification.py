@@ -26,6 +26,7 @@ from app.db.models import (
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
+PROMPT_VERSION = "verification-v1"
 
 SYSTEM_PROMPT = """You are Evidence Verification for a meeting-intelligence platform.
 You will be given ONE candidate claim and the raw evidence excerpts cited for it —
@@ -35,7 +36,8 @@ on whether the cited evidence actually supports the statement. Assign confidence
 - partially_supported: evidence is related but doesn't fully establish the statement
 - ambiguous: evidence is inconclusive
 - unsupported: evidence does not support the statement, or contradicts it
-Give your own rationale for the confidence you assign."""
+Give your own rationale for the confidence you assign. Set abstained=true when the
+evidence is too incomplete to judge; abstention is correct behaviour."""
 
 
 class EvidenceExcerpt(BaseModel):
@@ -58,6 +60,7 @@ class CandidateForVerification(BaseModel):
 class VerificationResult(BaseModel):
     confidence: Confidence
     rationale: str
+    abstained: bool = False
 
 
 def _load_evidence(db: Session, item: KnowledgeItem) -> list[EvidenceExcerpt]:
@@ -141,8 +144,10 @@ async def run_evidence_verification(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
-        item.confidence = result.confidence
-        item.confidence_rationale = result.rationale or "(no rationale given)"
+        item.confidence = Confidence.AMBIGUOUS if result.abstained else result.confidence
+        item.confidence_rationale = (
+            result.rationale or ("Agent abstained." if result.abstained else "(no rationale given)")
+        )
         processed.append(item.id)
 
     return processed

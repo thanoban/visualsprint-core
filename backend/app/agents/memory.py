@@ -29,6 +29,7 @@ from app.interfaces.embedder import Embedder
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
+PROMPT_VERSION = "memory-v1"
 
 SYSTEM_PROMPT = """You are Memory Intelligence for a meeting-intelligence platform.
 Given a newly verified knowledge item and a shortlist of possibly-related prior items
@@ -40,7 +41,7 @@ from the same organization's history, decide:
 Only propose an edge to an item id that appears in the provided related-items list.
 Give a rationale for each edge. Use blocks for blocker -> commitment/dependency links,
 including within the same meeting. If nothing is related, propose lifecycle_state=new
-and no edges."""
+and no edges. Set abstained=true when the evidence cannot support an edge."""
 
 _STOPWORDS = {
     "the",
@@ -90,6 +91,7 @@ class EdgeProposal(BaseModel):
 class MemoryDecision(BaseModel):
     lifecycle_state: LifecycleState
     edges: list[EdgeProposal] = []
+    abstained: bool = False
 
 
 def _keywords(text: str) -> set[str]:
@@ -227,7 +229,7 @@ async def run_memory_intelligence(
         )
 
         lifecycle_targets = {item.id}
-        for edge in decision.edges:
+        for edge in ([] if decision.abstained else decision.edges):
             if edge.to_item_id not in related_by_id:
                 log.warning(
                     "memory.edge_dropped_unknown_target", item=item.id, target=edge.to_item_id

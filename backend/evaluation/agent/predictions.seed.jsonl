@@ -1,0 +1,8 @@
+{"id":"context-en-contrast","items":[{"type":"commitment","statement":"Nimal will fix the payment gateway","owner_ref":"nimal","evidence_ids":["u-en-1"],"confidence":"verified"}]}
+{"id":"verification-si","items":[{"type":"decision","statement":"The team will use PostgreSQL","evidence_ids":["u-si-1"],"confidence":"verified"}]}
+{"id":"memory-ta","classification":"recurs"}
+{"id":"action-code-switch","classification":"task_create"}
+{"id":"report-en","classification":"grounded"}
+{"id":"context-si-passive","items":[{"type":"requirement","statement":"The payment gateway needs fixing","owner_ref":null,"evidence_ids":["u-si-2"],"confidence":"verified"}]}
+{"id":"context-ta-self","items":[{"type":"commitment","statement":"Kavitha will deploy the API","owner_ref":"kavitha","evidence_ids":["u-ta-1"],"confidence":"verified"}]}
+{"id":"context-code-switch","items":[{"type":"blocker","statement":"The vendor key is blocking deployment","owner_ref":null,"evidence_ids":["u-cs-1"],"confidence":"partially_supported"}],"pattern_label":"blocked"}

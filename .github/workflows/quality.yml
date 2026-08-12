@@ -1,0 +1,47 @@
+name: Quality
+
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: python -m ruff check app tests
+      - run: python -m pytest tests -q --deselect tests/test_vector_search_postgres.py
+      - name: Frozen agent-evaluation regression gate
+        run: >-
+          python -m app.evaluation.agent_eval
+          --gold evaluation/agent/gold.seed.jsonl
+          --predictions evaluation/agent/predictions.seed.jsonl
+          --baseline evaluation/agent/baseline.seed.json
+          --prompt-version context=context-v1
+          --prompt-version verification=verification-v1
+          --prompt-version memory=memory-v1
+          --prompt-version action=action-v1
+          --prompt-version report=report-v1
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

@@ -377,6 +377,36 @@ async def _run_work_tracking_sweep(db: object) -> None:
             log.warning("work_tracking.failed", org=org.id, error=str(exc))
 
 
+async def _run_longitudinal_sweep(db: object) -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.db.models import Person
+    from app.longitudinal.pipeline import run_person_analysis
+
+    settings = get_settings()
+    end = datetime.now(UTC)
+    start = end - timedelta(days=settings.longitudinal_analysis_window_days)
+    people = db.execute(select(Person)).scalars().all()
+    for person in people:
+        try:
+            run = await run_person_analysis(
+                db,
+                person.org_id,
+                person.id,
+                start,
+                end,
+                _get_llm(),
+                ensemble_size=settings.longitudinal_ensemble_size,
+            )
+            db.commit()
+            log.info("longitudinal.swept", person=person.id, state=run.state.value)
+        except Exception as exc:
+            db.rollback()
+            log.warning("longitudinal.sweep_failed", person=person.id, error=str(exc))
+
+
 def _person_for_roster_entry(db: object, org_id: str, entry):
     from sqlalchemy import select
 
@@ -1158,6 +1188,7 @@ async def main() -> None:
     last_action_triggers = datetime.min.replace(tzinfo=UTC)
     last_lifecycle_sweep = datetime.min.replace(tzinfo=UTC)
     last_work_tracking = datetime.min.replace(tzinfo=UTC)
+    last_longitudinal_analysis = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -1211,6 +1242,16 @@ async def main() -> None:
                 Session = get_sessionmaker()
                 with Session() as db:
                     await _run_work_tracking_sweep(db)
+
+            if (
+                settings.longitudinal_analysis_enabled
+                and (now - last_longitudinal_analysis).total_seconds()
+                >= settings.longitudinal_analysis_interval_s
+            ):
+                last_longitudinal_analysis = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_longitudinal_sweep(db)
     finally:
         health_task.cancel()
 

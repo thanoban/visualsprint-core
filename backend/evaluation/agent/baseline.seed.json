@@ -1,0 +1,740 @@
+{
+  "schema_version": 1,
+  "prompt_versions": {
+    "context": "context-v1",
+    "verification": "verification-v1",
+    "memory": "memory-v1",
+    "action": "action-v1",
+    "report": "report-v1"
+  },
+  "real_meeting_samples": 0,
+  "synthetic_samples": 8,
+  "aggregate": {
+    "samples": 8,
+    "gold_items": 5,
+    "predicted_items": 5,
+    "matched_items": 5,
+    "extraction_precision": 1.0,
+    "extraction_recall": 1.0,
+    "extraction_f1": 1.0,
+    "ownership_accuracy": 1.0,
+    "false_attribution_rate": 0.0,
+    "verification_accuracy": 1.0,
+    "pattern_accuracy": 1.0,
+    "classification_accuracy": 1.0,
+    "false_repetition_rate": 0.0,
+    "abstention_rate": 0.0,
+    "extraction_by_type": {
+      "decision": {
+        "gold": 1,
+        "predicted": 1,
+        "matched": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "commitment": {
+        "gold": 2,
+        "predicted": 2,
+        "matched": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "requirement": {
+        "gold": 1,
+        "predicted": 1,
+        "matched": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "blocker": {
+        "gold": 1,
+        "predicted": 1,
+        "matched": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "question": {
+        "gold": 0,
+        "predicted": 0,
+        "matched": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null
+      },
+      "fact": {
+        "gold": 0,
+        "predicted": 0,
+        "matched": 0,
+        "precision": null,
+        "recall": null,
+        "f1": null
+      }
+    },
+    "confidence_calibration": {
+      "verified": {
+        "predictions": 4,
+        "correct": 4,
+        "observed_accuracy": 1.0
+      },
+      "partially_supported": {
+        "predictions": 1,
+        "correct": 1,
+        "observed_accuracy": 1.0
+      }
+    }
+  },
+  "by_language": {
+    "en": {
+      "samples": 2,
+      "gold_items": 1,
+      "predicted_items": 1,
+      "matched_items": 1,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": 1.0,
+      "false_attribution_rate": 0.0,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": null,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "verified": {
+          "predictions": 1,
+          "correct": 1,
+          "observed_accuracy": 1.0
+        }
+      }
+    },
+    "si": {
+      "samples": 2,
+      "gold_items": 2,
+      "predicted_items": 2,
+      "matched_items": 2,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": null,
+      "classification_accuracy": null,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "verified": {
+          "predictions": 2,
+          "correct": 2,
+          "observed_accuracy": 1.0
+        }
+      }
+    },
+    "ta": {
+      "samples": 2,
+      "gold_items": 1,
+      "predicted_items": 1,
+      "matched_items": 1,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": 1.0,
+      "false_attribution_rate": 0.0,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": null,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "verified": {
+          "predictions": 1,
+          "correct": 1,
+          "observed_accuracy": 1.0
+        }
+      }
+    },
+    "code_switch": {
+      "samples": 2,
+      "gold_items": 1,
+      "predicted_items": 1,
+      "matched_items": 1,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": 1.0,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": 0.0,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "partially_supported": {
+          "predictions": 1,
+          "correct": 1,
+          "observed_accuracy": 1.0
+        }
+      }
+    }
+  },
+  "by_agent": {
+    "action": {
+      "samples": 1,
+      "gold_items": 0,
+      "predicted_items": 0,
+      "matched_items": 0,
+      "extraction_precision": null,
+      "extraction_recall": null,
+      "extraction_f1": null,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": null,
+      "pattern_accuracy": null,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {}
+    },
+    "context": {
+      "samples": 4,
+      "gold_items": 4,
+      "predicted_items": 4,
+      "matched_items": 4,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": 1.0,
+      "false_attribution_rate": 0.0,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": 1.0,
+      "classification_accuracy": null,
+      "false_repetition_rate": 0.0,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 2,
+          "predicted": 2,
+          "matched": 2,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "requirement": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "blocker": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "verified": {
+          "predictions": 3,
+          "correct": 3,
+          "observed_accuracy": 1.0
+        },
+        "partially_supported": {
+          "predictions": 1,
+          "correct": 1,
+          "observed_accuracy": 1.0
+        }
+      }
+    },
+    "memory": {
+      "samples": 1,
+      "gold_items": 0,
+      "predicted_items": 0,
+      "matched_items": 0,
+      "extraction_precision": null,
+      "extraction_recall": null,
+      "extraction_f1": null,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": null,
+      "pattern_accuracy": null,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {}
+    },
+    "report": {
+      "samples": 1,
+      "gold_items": 0,
+      "predicted_items": 0,
+      "matched_items": 0,
+      "extraction_precision": null,
+      "extraction_recall": null,
+      "extraction_f1": null,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": null,
+      "pattern_accuracy": null,
+      "classification_accuracy": 1.0,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {}
+    },
+    "verification": {
+      "samples": 1,
+      "gold_items": 1,
+      "predicted_items": 1,
+      "matched_items": 1,
+      "extraction_precision": 1.0,
+      "extraction_recall": 1.0,
+      "extraction_f1": 1.0,
+      "ownership_accuracy": null,
+      "false_attribution_rate": null,
+      "verification_accuracy": 1.0,
+      "pattern_accuracy": null,
+      "classification_accuracy": null,
+      "false_repetition_rate": null,
+      "abstention_rate": 0.0,
+      "extraction_by_type": {
+        "decision": {
+          "gold": 1,
+          "predicted": 1,
+          "matched": 1,
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0
+        },
+        "commitment": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "requirement": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "blocker": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "question": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        },
+        "fact": {
+          "gold": 0,
+          "predicted": 0,
+          "matched": 0,
+          "precision": null,
+          "recall": null,
+          "f1": null
+        }
+      },
+      "confidence_calibration": {
+        "verified": {
+          "predictions": 1,
+          "correct": 1,
+          "observed_accuracy": 1.0
+        }
+      }
+    }
+  },
+  "missing_prediction_ids": [],
+  "extra_prediction_ids": []
+}

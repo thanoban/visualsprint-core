@@ -94,6 +94,7 @@ class GeminiVertexLlmClient:
         user_content: str,
         schema: type[T],
         max_tokens: int = 4096,
+        temperature: float = 0.0,
         images: list[bytes] = [],  # noqa: B006 — never mutated, see interfaces/llm.py
     ) -> tuple[T, LlmUsage]:
         from google.genai import types
@@ -119,6 +120,7 @@ class GeminiVertexLlmClient:
                 response_mime_type="application/json",
                 response_schema=schema,
                 max_output_tokens=max_tokens,
+                temperature=temperature,
             ),
         )
         usage = LlmUsage(

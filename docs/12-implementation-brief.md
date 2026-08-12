@@ -6,6 +6,26 @@ design documents it consolidates. Everything here has been reviewed and approved
 the project owner. Nothing described as "planned" below is implemented; everything
 described as "done" is verified in code as of 2026-08-11.
 
+## Implementation update — 2026-08-12
+
+The code-side consolidated build is now implemented locally in two checkpoints:
+
+- participant intelligence: identity fusion, lifecycle/ownership fixes, people API/UI,
+  correction cascade, and work tracking;
+- accuracy and longitudinal intelligence: temperature control, explicit abstention,
+  offline multilingual evaluator and CI regression gate, deterministic person-scoped
+  FSM, agents 6–10, grounding/auditing/ensemble controls, evidence-linked graphs, and
+  four approval-gated automation drafts.
+
+The longitudinal worker cadence is disabled by default to prevent unapproved Gemini /
+Vertex cost (`VS_LONGITUDINAL_ANALYSIS_ENABLED=false`). The repository contains an
+explicitly synthetic multilingual scorer fixture, not a claimed model baseline. The
+remaining acceptance work cannot be manufactured in code: consented human-labelled
+real meetings in all language cohorts, live model evaluation/calibration, production
+Supabase migration review, live platform timing/voice validation, and measured model
+tier selection. The deferred shared-account identity-claims design remains out of
+scope by the owner's 2026-08-11 decision.
+
 ## Read first, in this order
 
 1. `CLAUDE.md` (repo root) — non-negotiable architecture rules. Do not start coding

@@ -32,6 +32,7 @@ from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
 MIN_OWNER_ATTRIBUTION_CONFIDENCE = 0.75
+PROMPT_VERSION = "context-v1"
 
 SYSTEM_PROMPT = """You are Context Intelligence for a meeting-intelligence platform.
 Read the utterances (speech) and keyframes (screen) from one meeting and extract
@@ -57,7 +58,8 @@ responsible. Set owner_is_speaker=true and owner_utterance_id when the speaker c
 themself ("I'll...", "I will...", "මම...", "நான்...", including common romanized
 forms). Do not default ownership to the speaker for passive statements like "the
 gateway needs fixing". Use due_hint for explicit or relative dates such as "tomorrow"
-or "next week"; the meeting date is supplied in the prompt."""
+or "next week"; the meeting date is supplied in the prompt. Set abstained=true and
+return no items when there is not enough evidence; abstention is correct behaviour."""
 
 
 class CandidateKnowledgeItem(BaseModel):
@@ -74,6 +76,7 @@ class CandidateKnowledgeItem(BaseModel):
 
 class CandidateExtractionResult(BaseModel):
     items: list[CandidateKnowledgeItem] = []
+    abstained: bool = False
 
 
 def _format_utterance(u: Utterance) -> str:

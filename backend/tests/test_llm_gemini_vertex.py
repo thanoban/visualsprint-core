@@ -72,6 +72,21 @@ async def test_no_images_sends_plain_string_content_unchanged():
     assert models.calls[0]["contents"] == ["plain text prompt"]
     assert models.calls[0]["config"].system_instruction == "sys"
     assert models.calls[0]["config"].response_schema is _Result
+    assert models.calls[0]["config"].temperature == 0.0
+
+
+async def test_temperature_is_forwarded():
+    client, models = _make_client(_fake_response('{"answer": "yes"}'))
+
+    await client.complete_structured(
+        model="gemini-2.5-pro",
+        system="sys",
+        user_content="write prose",
+        schema=_Result,
+        temperature=0.25,
+    )
+
+    assert models.calls[0]["config"].temperature == 0.25
 
 
 async def test_images_are_sent_before_the_text_content():

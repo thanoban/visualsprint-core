@@ -72,6 +72,19 @@ async def test_no_images_sends_plain_string_content_unchanged():
     assert usage == LlmUsage(input_tokens=10, output_tokens=5, model="claude-sonnet-5")
     sent_messages = messages.calls[0]["messages"]
     assert sent_messages == [{"role": "user", "content": "plain text prompt"}]
+    assert messages.calls[0]["temperature"] == 0.0
+
+
+async def test_temperature_is_forwarded():
+    client, messages = _make_client(_fake_tool_use_response({"answer": "yes"}))
+    await client.complete_structured(
+        model="claude-sonnet-5",
+        system="sys",
+        user_content="write prose",
+        schema=_Result,
+        temperature=0.25,
+    )
+    assert messages.calls[0]["temperature"] == 0.25
 
 
 async def test_images_are_sent_before_the_text_block():

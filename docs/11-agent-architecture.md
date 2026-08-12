@@ -10,7 +10,13 @@ that makes those agents trustworthy. Companion to
 [09-participant-intelligence.md](09-participant-intelligence.md) (data layer) and
 [10-longitudinal-intelligence.md](10-longitudinal-intelligence.md) (analysis layer).
 
-**Status: design only. Nothing here is implemented.**
+**Status update 2026-08-12:** temperature control, explicit abstention, prompt
+versioning, the offline per-language/per-agent evaluation harness, deterministic
+grounding, high-stakes ensemble agreement, agents 6–10, and the transcript-free
+narrator schema are implemented locally. The checked-in frozen baseline is synthetic
+and deliberately cannot substantiate an accuracy claim; consented real Sinhala,
+Tamil, English, and code-switched meetings plus human labels are still required for
+calibration and measured model-tier routing.
 
 ## Two accuracy defects in the current system
 

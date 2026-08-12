@@ -626,6 +626,94 @@ class WorkEvidence(TimestampMixin, Base):
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+# --------------------------------------------------------------------------- #
+# Person-scoped longitudinal intelligence
+# --------------------------------------------------------------------------- #
+
+
+class LongitudinalState(enum.StrEnum):
+    ASSEMBLING = "assembling"
+    DETECTING = "detecting"
+    ASSESSING = "assessing"
+    AUDITING = "auditing"
+    NARRATING = "narrating"
+    RECOMMENDING = "recommending"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class FindingKind(enum.StrEnum):
+    DECISION_TRAJECTORY = "decision_trajectory"
+    REPETITION = "repetition"
+    PROGRESS = "progress"
+
+
+class FindingAuditStatus(enum.StrEnum):
+    PENDING = "pending"
+    SUPPORTED = "supported"
+    PARTIALLY_SUPPORTED = "partially_supported"
+    UNSUPPORTED = "unsupported"
+
+
+class PersonAnalysisRun(TimestampMixin, Base):
+    """Idempotent person-scoped analysis run for a fixed period/evidence set."""
+
+    __tablename__ = "person_analysis_run"
+    __table_args__ = (
+        UniqueConstraint(
+            "person_id", "period_start", "period_end", name="uq_person_analysis_period"
+        ),
+        Index("ix_person_analysis_org_state", "org_id", "state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    person_id: Mapped[str] = mapped_column(ForeignKey("person.id"))
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    evidence_hash: Mapped[str] = mapped_column(String(64))
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    state: Mapped[LongitudinalState] = mapped_column(
+        Enum(LongitudinalState, native_enum=False, length=24),
+        default=LongitudinalState.ASSEMBLING,
+    )
+    summary: Mapped[str] = mapped_column(Text, default="")
+    coverage_disclosure: Mapped[dict] = mapped_column(JSON, default=dict)
+    prompt_versions: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class LongitudinalFinding(TimestampMixin, Base):
+    """Evidence-bound claim emitted by a person-level agent and blind-audited."""
+
+    __tablename__ = "longitudinal_finding"
+    __table_args__ = (
+        Index("ix_longitudinal_finding_run", "analysis_run_id"),
+        Index("ix_longitudinal_finding_org_person", "org_id", "person_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    person_id: Mapped[str] = mapped_column(ForeignKey("person.id"))
+    analysis_run_id: Mapped[str] = mapped_column(ForeignKey("person_analysis_run.id"))
+    kind: Mapped[FindingKind] = mapped_column(
+        Enum(FindingKind, native_enum=False, length=24)
+    )
+    statement: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[Confidence] = mapped_column(
+        Enum(Confidence, native_enum=False, length=24), default=Confidence.AMBIGUOUS
+    )
+    evidence_item_ids: Mapped[list] = mapped_column(JSON, default=list)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    finding_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    audit_status: Mapped[FindingAuditStatus] = mapped_column(
+        Enum(FindingAuditStatus, native_enum=False, length=24),
+        default=FindingAuditStatus.PENDING,
+    )
+    audit_rationale: Mapped[str] = mapped_column(Text, default="")
+    prompt_version: Mapped[str] = mapped_column(String(64), default="")
+
+
 class Correction(TimestampMixin, Base):
     """User transcript/entity fixes — product feature now, si-ta-en corpus forever."""
 

@@ -335,8 +335,11 @@ export interface PersonKnowledgeOut {
   owner_source: string | null;
   owner_confidence: number | null;
   meeting_id: string;
+  capture_session_id: string;
   meeting_title: string;
   occurred_at: string;
+  coverage_gap: boolean;
+  evidence_url: string;
   blockers: BlockerRef[];
 }
 
@@ -354,6 +357,66 @@ export interface PersonDetail {
   commitments: PersonKnowledgeOut[];
   decisions_authored: PersonKnowledgeOut[];
   coverage: CoverageDisclosure;
+}
+
+export interface LongitudinalFindingOut {
+  id: string;
+  kind: string;
+  statement: string;
+  confidence: string;
+  audit_status: string;
+  sample_size: number;
+  evidence: PersonKnowledgeOut[];
+}
+
+export interface LifecycleHopOut {
+  edge_id: string;
+  from_item_id: string;
+  to_item_id: string;
+  kind: string;
+  rationale: string;
+  from_statement: string;
+  from_meeting_title: string;
+  from_occurred_at: string;
+  evidence_url: string;
+}
+
+export interface PersonAnalysisOut {
+  available: boolean;
+  run_id: string | null;
+  state: string | null;
+  summary: string;
+  coverage: Record<string, number>;
+  findings: LongitudinalFindingOut[];
+  commitment_timeline: PersonKnowledgeOut[];
+  follow_through_trend: Array<{
+    period: string;
+    delivered: number;
+    total: number;
+    coverage_gap: boolean;
+    evidence_url: string | null;
+  }>;
+  recurrence_heat_strip: PersonKnowledgeOut[][];
+  decision_evolution: LifecycleHopOut[];
+  commitment_funnel: {
+    stated: number;
+    open: number;
+    recurring: number;
+    blocked: number;
+    delivered: number;
+  } | null;
+  status_distribution: Record<string, number>;
+}
+
+export interface InteractionMapOut {
+  nodes: Array<{ person_id: string; display_name: string }>;
+  edges: Array<{
+    from_person_id: string;
+    to_person_id: string;
+    kind: string;
+    weight: number;
+    evidence_url: string;
+  }>;
 }
 
 // ---------------------------------------------------------------------------

@@ -24,19 +24,22 @@ from app.interfaces.actions import ActionKind
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
+PROMPT_VERSION = "action-v1"
 
 SYSTEM_PROMPT = """You are Action Intelligence for a meeting-intelligence platform.
 Given one verified knowledge item, propose ONE automation: draft the title and body
 text, pick the most appropriate kind, and note a target hint (e.g. a channel name or
 assignee) if apparent from the statement. Never claim this action has already run —
-you are drafting a suggestion for a human to approve."""
+you are drafting a suggestion for a human to approve. Set abstained=true when no
+responsible action can be grounded in the item."""
 
 
 class ActionDraft(BaseModel):
-    kind: ActionKind
-    title: str
-    body: str
+    kind: ActionKind = ActionKind.REMINDER
+    title: str = ""
+    body: str = ""
     target_hint: str = ""
+    abstained: bool = False
 
 
 def _eligible(item: KnowledgeItem) -> bool:
@@ -90,6 +93,8 @@ async def run_action_intelligence(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
+        if draft.abstained:
+            continue
         action = ProposedAction(
             org_id=item.org_id,
             capture_session_id=capture_session_id,

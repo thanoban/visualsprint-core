@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     action_trigger_interval_s: float = 300.0
     lifecycle_sweep_interval_s: float = 300.0
     work_tracking_interval_s: float = 900.0
+    # Person-level analysis can multiply LLM spend through the high-stakes
+    # ensemble. It is fully wired but opt-in so local/test deployments and
+    # budget-constrained projects never incur surprise vendor calls.
+    longitudinal_analysis_enabled: bool = False
+    longitudinal_analysis_interval_s: float = 86400.0
+    longitudinal_analysis_window_days: int = 90
+    longitudinal_ensemble_size: int = 3
     # How far ahead of a commitment's due date to start proposing a
     # reminder (also covers already-overdue commitments).
     action_trigger_reminder_window_hours: float = 24.0

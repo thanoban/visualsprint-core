@@ -31,6 +31,7 @@ from app.db.models import (
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
+PROMPT_VERSION = "report-v1"
 
 SYSTEM_PROMPT = """You are Report Intelligence for a meeting-intelligence platform.
 You receive only verified knowledge items and their evidence references — never raw
@@ -40,7 +41,8 @@ present. Do not speculate beyond the given statements.
 
 LANGUAGE: item statements are already normalized to English by Context Intelligence
 regardless of the meeting's spoken language(s) — write your executive summary and
-all report prose in English as well, for a single consistent reading language."""
+all report prose in English as well, for a single consistent reading language. Set
+abstained=true if the supplied verified item set is insufficient for a report."""
 
 
 class UtteranceRef(BaseModel):
@@ -96,9 +98,10 @@ class ReportSection(BaseModel):
 
 
 class GeneratedReport(BaseModel):
-    title: str
-    executive_summary: str
-    sections: list[ReportSection]
+    title: str = ""
+    executive_summary: str = ""
+    sections: list[ReportSection] = []
+    abstained: bool = False
 
 
 def _load_utterance_ref(db: Session, utterance_id: str) -> UtteranceRef | None:

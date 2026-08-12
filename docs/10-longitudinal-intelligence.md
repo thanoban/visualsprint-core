@@ -9,7 +9,13 @@ Companion to [09-participant-intelligence.md](09-participant-intelligence.md), w
 built the data layer (identity, ownership, lifecycle). This document plans the
 intelligence layer on top of it.
 
-**Status: design only. Nothing here is implemented.**
+**Status update 2026-08-12:** the person-scoped FSM, deterministic repetition
+shortlisting, four person-level agents plus blind auditor, evidence-grounding checks,
+approval-gated automations, API surface, and evidence-linked graphs are implemented
+locally. The cadence is opt-in to avoid surprise model spend. Accuracy claims remain
+blocked on a private consented real-meeting corpus; the committed multilingual corpus
+is explicitly synthetic and tests the evaluator, not model quality. Identity claims /
+shared-account detection remain deferred by the project-owner decision below.
 
 ## Where the intelligence gap actually is
 

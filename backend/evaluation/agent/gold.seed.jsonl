@@ -1,0 +1,8 @@
+{"id":"context-en-contrast","agent":"context","language":"en","source_kind":"synthetic","items":[{"type":"commitment","statement":"Nimal will fix the payment gateway","owner_ref":"nimal","evidence_ids":["u-en-1"],"confidence":"verified"}]}
+{"id":"verification-si","agent":"verification","language":"si","source_kind":"synthetic","items":[{"type":"decision","statement":"The team will use PostgreSQL","evidence_ids":["u-si-1"],"confidence":"verified"}]}
+{"id":"memory-ta","agent":"memory","language":"ta","source_kind":"synthetic","classification":"recurs"}
+{"id":"action-code-switch","agent":"action","language":"code_switch","source_kind":"synthetic","classification":"task_create"}
+{"id":"report-en","agent":"report","language":"en","source_kind":"synthetic","classification":"grounded"}
+{"id":"context-si-passive","agent":"context","language":"si","source_kind":"synthetic","items":[{"type":"requirement","statement":"The payment gateway needs fixing","owner_ref":null,"evidence_ids":["u-si-2"],"confidence":"verified"}]}
+{"id":"context-ta-self","agent":"context","language":"ta","source_kind":"synthetic","items":[{"type":"commitment","statement":"Kavitha will deploy the API","owner_ref":"kavitha","evidence_ids":["u-ta-1"],"confidence":"verified"}]}
+{"id":"context-code-switch","agent":"context","language":"code_switch","source_kind":"synthetic","items":[{"type":"blocker","statement":"The vendor key is blocking deployment","owner_ref":null,"evidence_ids":["u-cs-1"],"confidence":"partially_supported"}],"pattern_label":"blocked"}

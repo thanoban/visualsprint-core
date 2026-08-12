@@ -28,9 +28,15 @@ class LlmClient(Protocol):
         user_content: str,
         schema: type[T],
         max_tokens: int = 4096,
+        temperature: float = 0.0,
         images: list[bytes] = [],  # noqa: B006 — Protocol default, never mutated
     ) -> tuple[T, LlmUsage]:
         """Run one structured completion; raises on schema-invalid output after retries.
+
+        `temperature` defaults to zero because extraction, classification,
+        verification, and judgement must be reproducible. A non-zero value is
+        reserved for deliberately generative prose and must be justified at
+        the call site.
 
         `images` is optional and additive — every existing text-only call
         site is unaffected by its presence. Raw JPEG/PNG bytes (as produced

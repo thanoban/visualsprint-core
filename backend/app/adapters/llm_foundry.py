@@ -78,6 +78,7 @@ class FoundryLlmClient:
         user_content: str,
         schema: type[T],
         max_tokens: int = 4096,
+        temperature: float = 0.0,
         images: list[bytes] = [],  # noqa: B006 — never mutated, see interfaces/llm.py
     ) -> tuple[T, LlmUsage]:
         tool = {
@@ -105,6 +106,7 @@ class FoundryLlmClient:
             model=model,
             system=system,
             max_tokens=max_tokens,
+            temperature=temperature,
             tools=[tool],
             tool_choice={"type": "tool", "name": _TOOL_NAME},
             messages=[{"role": "user", "content": content}],

@@ -89,6 +89,7 @@ def test_person_detail_shows_blocker_next_to_overdue_commitment(client, db_sessi
     assert body["display_name"] == "Nimal Perera"
     assert len(body["commitments"]) == 1
     assert body["commitments"][0]["blockers"][0]["statement"] == "API key has not arrived"
+    assert body["commitments"][0]["evidence_url"].endswith(f"item={_commitment.id}")
 
 
 def test_interaction_map_returns_relationship_edges(client, db_session):
@@ -107,4 +108,23 @@ def test_interaction_map_returns_relationship_edges(client, db_session):
     } == {
         (blocker_owner.id, owner.id, "delegates_to"),
         (blocker_owner.id, owner.id, "blocks"),
+    }
+    assert all(edge["evidence_url"].startswith("/meetings/") for edge in body["edges"])
+
+
+def test_analysis_surface_returns_deterministic_graphs_before_agent_run(client, db_session):
+    org, owner, _blocker_owner, _commitment = _seed(db_session)
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/people/{owner.id}/analysis/latest")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["available"] is False
+    assert len(body["commitment_timeline"]) == 1
+    assert body["commitment_funnel"] == {
+        "stated": 1,
+        "open": 1,
+        "recurring": 0,
+        "blocked": 1,
+        "delivered": 0,
     }
