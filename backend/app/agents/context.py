@@ -31,6 +31,7 @@ from app.db.models import (
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
+MIN_OWNER_ATTRIBUTION_CONFIDENCE = 0.75
 
 SYSTEM_PROMPT = """You are Context Intelligence for a meeting-intelligence platform.
 Read the utterances (speech) and keyframes (screen) from one meeting and extract
@@ -49,7 +50,14 @@ original language(s) — you have full context here to translate accurately, whi
 later isolated translation pass would not. Do NOT translate or paraphrase the
 evidence itself; you are only choosing the language of your own summary sentence.
 The original-language utterance text remains the evidence of record downstream and
-is never altered."""
+is never altered.
+
+OWNERSHIP: For commitments, set owner_hint only when a named person is explicitly
+responsible. Set owner_is_speaker=true and owner_utterance_id when the speaker commits
+themself ("I'll...", "I will...", "මම...", "நான்...", including common romanized
+forms). Do not default ownership to the speaker for passive statements like "the
+gateway needs fixing". Use due_hint for explicit or relative dates such as "tomorrow"
+or "next week"; the meeting date is supplied in the prompt."""
 
 
 class CandidateKnowledgeItem(BaseModel):
@@ -58,6 +66,8 @@ class CandidateKnowledgeItem(BaseModel):
     supporting_utterance_ids: list[str] = []
     supporting_keyframe_ids: list[str] = []
     owner_hint: str | None = None
+    owner_is_speaker: bool = False
+    owner_utterance_id: str | None = None
     due_hint: str | None = None
     rationale: str
 
@@ -79,8 +89,10 @@ def _format_keyframe(k: Keyframe) -> str:
     return " ".join(parts)
 
 
-def _build_user_content(utterances: list[Utterance], keyframes: list[Keyframe]) -> str:
-    lines = ["UTTERANCES:"]
+def _build_user_content(
+    utterances: list[Utterance], keyframes: list[Keyframe], *, meeting_date: str
+) -> str:
+    lines = [f"MEETING_DATE: {meeting_date}", "", "UTTERANCES:"]
     lines.extend(_format_utterance(u) for u in utterances)
     lines.append("")
     lines.append("KEYFRAMES:")
@@ -88,29 +100,64 @@ def _build_user_content(utterances: list[Utterance], keyframes: list[Keyframe]) 
     return "\n".join(lines)
 
 
-def _resolve_owner(db: Session, org_id: str, owner_hint: str | None) -> str | None:
+def _resolve_owner_hint(db: Session, org_id: str, owner_hint: str | None) -> str | None:
     if not owner_hint:
         return None
     from app.db.models import Person
 
     candidates = db.query(Person).filter(Person.org_id == org_id).all()
     hint_lower = owner_hint.strip().lower()
+    matches: list[str] = []
     for person in candidates:
         if person.display_name.strip().lower() == hint_lower:
-            return person.id
+            matches.append(person.id)
+            continue
         if any(str(alias).strip().lower() == hint_lower for alias in person.aliases):
-            return person.id
-    return None
+            matches.append(person.id)
+    return matches[0] if len(set(matches)) == 1 else None
+
+
+def _has_self_reference(text: str) -> bool:
+    lowered = f" {text.lower()} "
+    tokens = (
+        " i'll ",
+        " i’ll ",
+        " i will ",
+        " im going to ",
+        " i'm going to ",
+        " i can ",
+        " i’ll take ",
+        " i'll take ",
+        " mage ",
+        " mama ",
+        " mam ",
+        " මම",
+        " நான்",
+        " naan ",
+        " nan ",
+    )
+    return any(token in lowered for token in tokens)
+
+
+def _resolve_owner_from_speaker(
+    utterance: Utterance | None,
+) -> tuple[str | None, str | None, float | None]:
+    if utterance is None or utterance.person_id is None:
+        return None, None, None
+    confidence = utterance.attribution_confidence
+    if confidence >= MIN_OWNER_ATTRIBUTION_CONFIDENCE:
+        return utterance.person_id, None, confidence
+    return None, utterance.person_id, confidence
 
 
 def _overlaps_any_gap(start_s: float, end_s: float, gaps: list[CoverageInterval]) -> bool:
     return any(start_s < g.end_s and end_s > g.start_s for g in gaps)
 
 
-def _parse_due(due_hint: str | None):
+def _parse_due(due_hint: str | None, *, meeting_dt):
     if not due_hint:
         return None
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
         try:
@@ -118,6 +165,21 @@ def _parse_due(due_hint: str | None):
             return dt.replace(tzinfo=UTC)
         except ValueError:
             continue
+    base = meeting_dt.astimezone(UTC) if meeting_dt else datetime.now(UTC)
+    lowered = due_hint.strip().lower()
+    if lowered in {"tomorrow", "හෙට", "நாளை", "nalai"}:
+        return (base + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    if lowered in {
+        "next week",
+        "ලබන සතියේ",
+        "adutha varam",
+        "அடுத்த வாரம்",
+        "next monday",
+    }:
+        days_until_next_monday = (7 - base.weekday()) or 7
+        return (base + timedelta(days=days_until_next_monday)).replace(
+            hour=9, minute=0, second=0, microsecond=0
+        )
     return None
 
 
@@ -150,6 +212,10 @@ async def run_context_intelligence(
     known_utterance_ids = {u.id for u in utterances}
     known_keyframe_ids = {k.id for k in keyframes}
     utterance_by_id = {u.id: u for u in utterances}
+    meeting_dt = (
+        session.meeting.scheduled_start if session.meeting else None
+    ) or session.created_at
+    meeting_date = meeting_dt.date().isoformat()
     coverage_gaps = (
         db.query(CoverageInterval)
         .filter(
@@ -165,7 +231,7 @@ async def run_context_intelligence(
     result, usage = await llm.complete_structured(
         model=model,
         system=SYSTEM_PROMPT,
-        user_content=_build_user_content(utterances, keyframes),
+        user_content=_build_user_content(utterances, keyframes, meeting_date=meeting_date),
         schema=CandidateExtractionResult,
     )
     log.info(
@@ -201,17 +267,53 @@ async def run_context_intelligence(
         # audio-modality gaps (app/asr/coverage.py); a keyframe can't overlap
         # an audio gap in any meaningful sense.
         overlaps_gap = any(
-            _overlaps_any_gap(utterance_by_id[uid].start_s, utterance_by_id[uid].end_s, coverage_gaps)
+            _overlaps_any_gap(
+                utterance_by_id[uid].start_s, utterance_by_id[uid].end_s, coverage_gaps
+            )
             for uid in utterance_ids
         )
+        owner_person_id = _resolve_owner_hint(db, session.org_id, candidate.owner_hint)
+        owner_candidate_person_id = None
+        owner_source = "spoken_name" if owner_person_id else None
+        owner_utterance_id = None
+        owner_confidence = 1.0 if owner_person_id else None
+
+        explicit_owner_utterance = (
+            utterance_by_id.get(candidate.owner_utterance_id)
+            if candidate.owner_utterance_id
+            else None
+        )
+        self_reference_utterance = explicit_owner_utterance
+        if self_reference_utterance is None:
+            self_reference_utterance = next(
+                (
+                    utterance_by_id[uid]
+                    for uid in utterance_ids
+                    if _has_self_reference(utterance_by_id[uid].text)
+                ),
+                None,
+            )
+        if owner_person_id is None and (candidate.owner_is_speaker or self_reference_utterance):
+            resolved_owner, candidate_owner, confidence = _resolve_owner_from_speaker(
+                self_reference_utterance
+            )
+            owner_person_id = resolved_owner
+            owner_candidate_person_id = candidate_owner
+            owner_utterance_id = self_reference_utterance.id if self_reference_utterance else None
+            owner_source = "speaker_derived" if resolved_owner else "speaker_candidate"
+            owner_confidence = confidence
 
         item = KnowledgeItem(
             org_id=session.org_id,
             capture_session_id=capture_session_id,
             type=candidate.type,
             statement=candidate.statement,
-            owner_person_id=_resolve_owner(db, session.org_id, candidate.owner_hint),
-            due_at=_parse_due(candidate.due_hint),
+            owner_person_id=owner_person_id,
+            owner_candidate_person_id=owner_candidate_person_id,
+            owner_utterance_id=owner_utterance_id,
+            owner_source=owner_source,
+            owner_attribution_confidence=owner_confidence,
+            due_at=_parse_due(candidate.due_hint, meeting_dt=meeting_dt),
             confidence=Confidence.AMBIGUOUS,
             confidence_rationale="",
             overlaps_coverage_gap=overlaps_gap,

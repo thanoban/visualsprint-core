@@ -379,7 +379,7 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
         {report.engagement.participants.length > 0 && (
           <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "22px 24px" }}>
             <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.03em", margin: "0 0 16px" }}>
-              Participant engagement
+              Speech captured per speaker
             </p>
             <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 18 }}>
               {report.engagement.participants.map((p, i) => (
@@ -408,7 +408,7 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
                       {p.display_name}
                     </p>
                     <p style={{ fontFamily: mono, fontSize: 12, color: "var(--text-faint)", margin: "2px 0 0" }}>
-                      {formatTimestamp(p.talk_time_s)} · {p.utterance_count} utterances
+                      {formatTimestamp(p.talk_time_s)} captured · {p.utterance_count} utterances
                     </p>
                   </div>
                   <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>

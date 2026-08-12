@@ -124,6 +124,18 @@ def fake_diarizer(monkeypatch):
     monkeypatch.setattr(worker, "_diarizer", None)
 
 
+class FakeSpeakerEmbedder:
+    async def embed_speakers(self, audio_uri, turns):
+        return {}
+
+
+@pytest.fixture(autouse=True)
+def fake_speaker_embedder(monkeypatch):
+    monkeypatch.setattr(worker, "_speaker_embedder", FakeSpeakerEmbedder())
+    yield
+    monkeypatch.setattr(worker, "_speaker_embedder", None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_screen_captioner(monkeypatch):
     monkeypatch.setattr(worker, "_vlm_captioner", worker._VLM_CAPTIONER_UNAVAILABLE)
@@ -247,11 +259,12 @@ def test_upload_then_transcribe_produces_utterances(client, default_org_id, fake
     session_id = body["capture_session_id"]
     assert body["state"] == CaptureState.SCHEDULED.value
 
-    # Drive the FSM by hand: one claim = one stage. acquire, then transcribe.
+    # Drive the FSM by hand: one claim = one stage.
     import asyncio
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
 
     assert fake_transcriber.calls, "transcribe stage never called the Transcriber"
@@ -309,6 +322,7 @@ def test_mixed_audio_upload_separates_speakers_without_naming_them(
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
 
     assert fake_diarizer.calls, "diarize stage never called the Diarizer"
@@ -402,6 +416,7 @@ def test_transcribe_writes_coverage_gap_for_failed_segment(client, default_org_i
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert fake.calls
 
@@ -423,7 +438,9 @@ def test_transcribe_writes_coverage_gap_for_failed_segment(client, default_org_i
     assert "unrouted" in gaps[0].reason
 
 
-def test_transcribe_applies_llm_repair_when_context_exists(client, default_org_id, fake_transcriber, monkeypatch):
+def test_transcribe_applies_llm_repair_when_context_exists(
+    client, default_org_id, fake_transcriber, monkeypatch
+):
     """With a participant roster present, the transcribe stage must actually
     call through app.asr.repair and persist the repaired text with
     repaired=True — proving worker.py's wiring, not just repair_segments in
@@ -468,6 +485,7 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, default_org_i
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
 
     with Session() as db:
@@ -487,7 +505,9 @@ def test_transcribe_applies_llm_repair_when_context_exists(client, default_org_i
     assert utterances[1].repaired is False  # unchanged text -> not flagged as repaired
 
 
-def test_video_upload_produces_keyframes_and_grounding(client, default_org_id, fake_transcriber, monkeypatch):
+def test_video_upload_produces_keyframes_and_grounding(
+    client, default_org_id, fake_transcriber, monkeypatch
+):
     """A video-format Mode D upload doubles as the screen source (see
     api/upload.py) -- proves acquire -> transcribe -> screen wires keyframe
     detection, OCR, and speech<->screen grounding together end-to-end, using
@@ -535,6 +555,7 @@ def test_video_upload_produces_keyframes_and_grounding(client, default_org_id, f
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen
 
@@ -618,6 +639,7 @@ def test_video_upload_persists_vlm_caption_when_captioner_is_configured(
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen
 
@@ -675,6 +697,7 @@ def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen
 
@@ -688,7 +711,9 @@ def test_video_upload_keeps_keyframe_when_vlm_captioning_fails(
     assert keyframe.vlm_caption == ""
 
 
-def test_audio_only_upload_skips_screen_stage_without_failing(client, default_org_id, fake_transcriber):
+def test_audio_only_upload_skips_screen_stage_without_failing(
+    client, default_org_id, fake_transcriber
+):
     """No video_uri (plain .wav upload) is a normal outcome, not a failure --
     the screen stage must complete cleanly with zero keyframes."""
     resp = client.post(
@@ -702,6 +727,7 @@ def test_audio_only_upload_skips_screen_stage_without_failing(client, default_or
 
     assert asyncio.run(worker.run_once()) is True  # acquire
     assert asyncio.run(worker.run_once()) is True  # diarize
+    assert asyncio.run(worker.run_once()) is True  # identify
     assert asyncio.run(worker.run_once()) is True  # transcribe
     assert asyncio.run(worker.run_once()) is True  # screen -- must not raise
 

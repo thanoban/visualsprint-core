@@ -13,7 +13,8 @@ STAGES: dict[str, tuple[CaptureState, str | None]] = {
     # diarize runs before transcribe so `transcribe` can attach speaker
     # identity as it creates Utterance rows, rather than needing a second
     # update pass over them (docs/08-speaker-identity.md).
-    "diarize": (CaptureState.DIARIZING, "transcribe"),
+    "diarize": (CaptureState.DIARIZING, "identify"),
+    "identify": (CaptureState.IDENTIFYING, "transcribe"),
     "transcribe": (CaptureState.TRANSCRIBING, "screen"),
     "screen": (CaptureState.PROCESSING_SCREEN, "understand"),
     "understand": (CaptureState.UNDERSTANDING, "verify"),

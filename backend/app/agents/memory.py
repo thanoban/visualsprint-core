@@ -17,6 +17,7 @@ import structlog
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.agents.lifecycle import derive_lifecycle_states_for_items
 from app.db.models import (
     Confidence,
     EdgeKind,
@@ -32,11 +33,14 @@ log = structlog.get_logger()
 SYSTEM_PROMPT = """You are Memory Intelligence for a meeting-intelligence platform.
 Given a newly verified knowledge item and a shortlist of possibly-related prior items
 from the same organization's history, decide:
-1. lifecycle_state for the new item: new, recurring, reopened, resolved, or superseded.
-2. Any edges to prior items: supersedes, contradicts, continues, recurs, resolves.
+1. Any edges to related items: supersedes, contradicts, continues, recurs, resolves,
+   or blocks.
+2. A lifecycle_state for compatibility with the response schema. The app ignores this
+   field and derives lifecycle from verified inbound edges after writing them.
 Only propose an edge to an item id that appears in the provided related-items list.
-Give a rationale for each edge. If nothing is related, propose lifecycle_state=new and
-no edges."""
+Give a rationale for each edge. Use blocks for blocker -> commitment/dependency links,
+including within the same meeting. If nothing is related, propose lifecycle_state=new
+and no edges."""
 
 _STOPWORDS = {
     "the",
@@ -106,7 +110,6 @@ def _vector_related(
         .filter(
             KnowledgeItem.org_id == item.org_id,
             KnowledgeItem.id != item.id,
-            KnowledgeItem.capture_session_id != item.capture_session_id,
             KnowledgeItem.confidence.in_([Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED]),
             KnowledgeItem.embedding.isnot(None),
         )
@@ -119,7 +122,7 @@ def _vector_related(
 def _find_related(
     db: Session, item: KnowledgeItem, embedding: list[float] | None = None, limit: int = 8
 ) -> list[KnowledgeItem]:
-    """Hybrid shortlist scoped to the org, excluding the item's own session:
+    """Hybrid shortlist scoped to the org, including the item's own session:
     pgvector similarity (when `embedding` is given and the dialect supports
     it) merged ahead of a keyword-overlap fallback/booster, deduped by id."""
     vector_matches = _vector_related(db, item, embedding, limit) if embedding is not None else []
@@ -132,7 +135,6 @@ def _find_related(
             .filter(
                 KnowledgeItem.org_id == item.org_id,
                 KnowledgeItem.id != item.id,
-                KnowledgeItem.capture_session_id != item.capture_session_id,
                 KnowledgeItem.confidence.in_([Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED]),
             )
             .all()
@@ -218,13 +220,13 @@ async def run_memory_intelligence(
         log.info(
             "memory.decided",
             item=item.id,
-            lifecycle_state=decision.lifecycle_state,
+            suggested_lifecycle_state=decision.lifecycle_state,
             edges=len(decision.edges),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
         )
-        item.lifecycle_state = decision.lifecycle_state
 
+        lifecycle_targets = {item.id}
         for edge in decision.edges:
             if edge.to_item_id not in related_by_id:
                 log.warning(
@@ -251,6 +253,8 @@ async def run_memory_intelligence(
                     rationale=edge.rationale,
                 )
             )
+            lifecycle_targets.add(edge.to_item_id)
+        derive_lifecycle_states_for_items(db, lifecycle_targets)
         processed.append(item.id)
 
     return processed

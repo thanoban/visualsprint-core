@@ -133,7 +133,7 @@ function PendingCard({
             >
               {result.status === "executed" ? (
                 <>
-                  Executed.{" "}
+                  Executed{result.external_id ? ` (${result.external_id})` : ""}.{" "}
                   {result.external_url && (
                     <a href={result.external_url} target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
                       View →

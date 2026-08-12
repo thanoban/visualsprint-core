@@ -9,6 +9,7 @@ import { API_BASE_URL } from "./config";
 interface Me {
   user: { id: string; email: string; display_name: string | null };
   org: { id: string; name: string };
+  person: { id: string; display_name: string; email: string | null } | null;
 }
 
 interface AuthContextValue {

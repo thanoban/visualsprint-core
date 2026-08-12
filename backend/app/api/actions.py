@@ -96,6 +96,7 @@ class ProposedActionOut(BaseModel):
     approved_by: str | None = None
     approved_at: str | None = None
     executed_at: str | None = None
+    external_id: str | None = None
     external_url: str | None = None
     error: str | None = None
 
@@ -116,6 +117,7 @@ def _to_out(db: Session, action: ProposedAction) -> ProposedActionOut:
         approved_by=approved_by,
         approved_at=action.approved_at.isoformat() if action.approved_at else None,
         executed_at=action.executed_at.isoformat() if action.executed_at else None,
+        external_id=action.external_id,
         external_url=action.external_url,
         error=action.error,
     )
@@ -195,6 +197,7 @@ async def approve_action(
         result = await connector.execute(payload)
         action.status = ActionStatus.EXECUTED
         action.executed_at = datetime.now(UTC)
+        action.external_id = result.external_id
         action.external_url = result.external_url
     except Exception as exc:  # noqa: BLE001 — surfaced on the row, never swallowed silently
         action.status = ActionStatus.FAILED

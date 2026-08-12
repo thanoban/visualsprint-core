@@ -110,13 +110,8 @@ async def test_vendor_sdk_error_is_wrapped_not_leaked():
 
 
 async def test_missing_api_key_raises_before_touching_the_network(monkeypatch):
-    from app.config import get_settings
+    adapter = GroqSpeechAdapter()
+    adapter._api_key = None
 
-    get_settings.cache_clear()
-    monkeypatch.delenv("VS_GROQ_API_KEY", raising=False)
-    try:
-        adapter = GroqSpeechAdapter()
-        with pytest.raises(VendorTranscriptionError, match="not configured"):
-            await adapter.transcribe_segment(b"raw-pcm", "en")
-    finally:
-        get_settings.cache_clear()
+    with pytest.raises(VendorTranscriptionError, match="not configured"):
+        await adapter.transcribe_segment(b"raw-pcm", "en")

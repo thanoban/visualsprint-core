@@ -21,7 +21,7 @@ from app.db.models import (
     Person,
     ProposedAction,
 )
-from app.interfaces.actions import ActionKind
+from app.interfaces.actions import ActionKind, ActionResult
 
 
 def _seed(db, *, kind: str = "email_draft", target: dict | None = None):
@@ -123,6 +123,35 @@ def test_approve_can_be_retried_after_failure(client, db_session):
     second = client.post(f"/api/v1/actions/{action_id}/approve", json={})
     assert second.status_code == 200
     assert second.json()["status"] == "failed"  # still no credentials, still fails cleanly
+
+
+def test_approve_persists_external_id_from_successful_connector(client, db_session, monkeypatch):
+    class FakeConnector:
+        async def execute(self, payload):
+            return ActionResult(
+                external_id="PAY-501",
+                external_url="https://jira.example.test/browse/PAY-501",
+                detail="created",
+            )
+
+    org_id, action_id, person_id = _seed(
+        db_session,
+        kind=ActionKind.TASK_CREATE.value,
+        target={"provider": "jira", "project_key": "PAY"},
+    )
+    import app.api.actions as actions_api
+
+    monkeypatch.setattr(actions_api, "_get_connector", lambda db, org_id, kind: FakeConnector())
+
+    resp = client.post(
+        f"/api/v1/actions/{action_id}/approve", json={"approved_by_person_id": person_id}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "executed"
+    assert resp.json()["external_id"] == "PAY-501"
+    row = db_session.get(ProposedAction, action_id)
+    assert row.external_id == "PAY-501"
 
 
 def test_approve_escalation_records_approval_and_a_clear_error(client, db_session):
@@ -228,9 +257,7 @@ def test_approve_and_reject_never_leak_the_action_title_into_the_audit_trail(cli
     org_id2, action_id2, _ = _seed(db_session)
     client.post(f"/api/v1/actions/{action_id2}/reject")
 
-    entries = (
-        db_session.query(AuditLog).filter(AuditLog.org_id.in_([org_id, org_id2])).all()
-    )
+    entries = db_session.query(AuditLog).filter(AuditLog.org_id.in_([org_id, org_id2])).all()
     assert len(entries) == 2
     for entry in entries:
         assert "title" not in entry.detail
@@ -279,7 +306,10 @@ def test_build_org_token_provider_returns_a_real_provider_bound_to_this_orgs_con
     db_session.flush()
     db_session.add(
         OrgConnection(
-            org_id=org.id, provider="slack", account_label="Acme Workspace", secret_ref="oauth/slack/x"
+            org_id=org.id,
+            provider="slack",
+            account_label="Acme Workspace",
+            secret_ref="oauth/slack/x",
         )
     )
     db_session.commit()
@@ -309,10 +339,14 @@ def test_two_orgs_connectors_use_their_own_connections_not_each_others(db_sessio
     db_session.add_all([org_a, org_b])
     db_session.flush()
     db_session.add(
-        OrgConnection(org_id=org_a.id, provider="slack", account_label="A", secret_ref="oauth/slack/a")
+        OrgConnection(
+            org_id=org_a.id, provider="slack", account_label="A", secret_ref="oauth/slack/a"
+        )
     )
     db_session.add(
-        OrgConnection(org_id=org_b.id, provider="slack", account_label="B", secret_ref="oauth/slack/b")
+        OrgConnection(
+            org_id=org_b.id, provider="slack", account_label="B", secret_ref="oauth/slack/b"
+        )
     )
     db_session.commit()
 
@@ -336,7 +370,10 @@ def test_get_connector_falls_back_to_unconfigured_when_google_client_isnt_set_up
     db_session.flush()
     db_session.add(
         CalendarConnection(
-            org_id=org.id, provider="google", account_email="team@acme.test", secret_ref="oauth/google/x"
+            org_id=org.id,
+            provider="google",
+            account_email="team@acme.test",
+            secret_ref="oauth/google/x",
         )
     )
     db_session.commit()

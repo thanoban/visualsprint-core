@@ -18,6 +18,8 @@ export type CaptureSessionState =
   | "scheduled"
   | "acquiring"
   | "acquired"
+  | "diarizing"
+  | "identifying"
   | "transcribing"
   | "processing_screen"
   | "understanding"
@@ -32,6 +34,8 @@ export const CAPTURE_SESSION_STATE_ORDER: CaptureSessionState[] = [
   "scheduled",
   "acquiring",
   "acquired",
+  "diarizing",
+  "identifying",
   "transcribing",
   "processing_screen",
   "understanding",
@@ -60,22 +64,13 @@ export interface CaptureSessionStatus {
 
 /** Mirrors knowledge_item.type in docs/05-data-model.md */
 export type KnowledgeItemType =
-  | "decision"
-  | "commitment"
-  | "requirement"
-  | "blocker"
-  | "question"
-  | "fact";
+  "decision" | "commitment" | "requirement" | "blocker" | "question" | "fact";
 
 /** Mirrors knowledge_item.lifecycle_state. Values are lowercase, matching the
  * backend's LifecycleState StrEnum (backend/app/db/models.py) as serialized
  * by report.py's `.value` — not the uppercase display convention. */
 export type LifecycleState =
-  | "new"
-  | "recurring"
-  | "reopened"
-  | "resolved"
-  | "superseded";
+  "new" | "recurring" | "reopened" | "resolved" | "superseded";
 
 /**
  * Confidence badge shown on every knowledge item. Verification never sees
@@ -83,10 +78,7 @@ export type LifecycleState =
  * that independent verification step, surfaced to the user.
  */
 export type ConfidenceLevel =
-  | "verified"
-  | "partially_supported"
-  | "ambiguous"
-  | "unsupported";
+  "verified" | "partially_supported" | "ambiguous" | "unsupported";
 
 /** A single piece of evidence backing a knowledge item (knowledge_evidence -> utterance/keyframe). */
 export interface EvidenceRef {
@@ -131,7 +123,7 @@ export interface CoverageGap {
   end_s: number;
 }
 
-/** Per-participant talk time -- backend/app/api/report.py's engagement summary. */
+/** Speech-captured-per-speaker summary -- not a contribution score. */
 export interface ParticipantEngagement {
   person_id: string | null;
   display_name: string;
@@ -220,8 +212,41 @@ export interface UtteranceOut {
   text: string;
   lang_tags: string[];
   speaker: string;
+  speaker_cluster_id: string | null;
+  session_speaker_id: string | null;
+  person_id: string | null;
+  attribution_confidence: number;
   asr_confidence: number;
   repaired: boolean;
+}
+
+export interface PersonOptionOut {
+  id: string;
+  display_name: string;
+  email: string | null;
+}
+
+export interface SessionSpeakerOut {
+  id: string;
+  cluster_id: string;
+  person_id: string | null;
+  display_name: string | null;
+  resolution_method: string;
+  confidence: number;
+  utterance_count: number;
+}
+
+export interface MeetingSpeakersOut {
+  people: PersonOptionOut[];
+  speakers: SessionSpeakerOut[];
+}
+
+export interface SpeakerCorrectionResponse {
+  session_speaker_id: string;
+  person_id: string | null;
+  display_name: string | null;
+  utterance_ids: string[];
+  updated_owner_item_ids: string[];
 }
 
 /** Request body of POST /api/v1/corrections */
@@ -265,7 +290,8 @@ export type ActionKind =
   | "reminder";
 
 /** Mirrors ActionStatus in backend/app/db/models.py */
-export type ActionStatusValue = "pending_approval" | "approved" | "rejected" | "executed" | "failed";
+export type ActionStatusValue =
+  "pending_approval" | "approved" | "rejected" | "executed" | "failed";
 
 /** Row shape of GET /api/v1/orgs/{org_id}/actions and the approve/reject responses */
 export interface ProposedActionOut {
@@ -279,8 +305,55 @@ export interface ProposedActionOut {
   approved_by: string | null;
   approved_at: string | null;
   executed_at: string | null;
+  external_id: string | null;
   external_url: string | null;
   error: string | null;
+}
+
+export interface PersonListItem {
+  id: string;
+  display_name: string;
+  email: string | null;
+  user_id: string | null;
+  open_commitments: number;
+  overdue_commitments: number;
+}
+
+export interface BlockerRef {
+  id: string;
+  statement: string;
+  confidence: string;
+}
+
+export interface PersonKnowledgeOut {
+  id: string;
+  type: string;
+  statement: string;
+  lifecycle_state: string;
+  confidence: string;
+  due_at: string | null;
+  owner_source: string | null;
+  owner_confidence: number | null;
+  meeting_id: string;
+  meeting_title: string;
+  occurred_at: string;
+  blockers: BlockerRef[];
+}
+
+export interface CoverageDisclosure {
+  utterance_count: number;
+  low_confidence_or_gap_count: number;
+  excluded_item_count: number;
+}
+
+export interface PersonDetail {
+  id: string;
+  display_name: string;
+  email: string | null;
+  user_id: string | null;
+  commitments: PersonKnowledgeOut[];
+  decisions_authored: PersonKnowledgeOut[];
+  coverage: CoverageDisclosure;
 }
 
 // ---------------------------------------------------------------------------

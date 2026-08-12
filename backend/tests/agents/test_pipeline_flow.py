@@ -179,6 +179,83 @@ async def test_context_does_not_flag_items_outside_any_coverage_gap(db):
     assert item.overlaps_coverage_gap is False
 
 
+async def test_context_resolves_first_person_owner_from_speaker(db):
+    session_id = _seed_session_with_utterance(db, text="I'll fix the payment gateway tomorrow")
+    session = db.get(CaptureSession, session_id)
+    from app.db.models import Person
+
+    owner = Person(org_id=session.org_id, display_name="Nimal Perera")
+    db.add(owner)
+    db.flush()
+    utterance = db.query(Utterance).filter(Utterance.capture_session_id == session_id).one()
+    utterance.person_id = owner.id
+    utterance.attribution_confidence = 0.91
+    db.commit()
+
+    llm = FakeLlmClient(
+        CandidateExtractionResult(
+            items=[
+                CandidateKnowledgeItem(
+                    type=KnowledgeType.COMMITMENT,
+                    statement="Fix the payment gateway",
+                    supporting_utterance_ids=[utterance.id],
+                    owner_is_speaker=True,
+                    owner_utterance_id=utterance.id,
+                    due_hint="tomorrow",
+                    rationale="speaker committed directly",
+                )
+            ]
+        )
+    )
+
+    created_ids = await run_context_intelligence(db, session_id, llm)
+    db.commit()
+
+    item = db.get(KnowledgeItem, created_ids[0])
+    assert item.owner_person_id == owner.id
+    assert item.owner_source == "speaker_derived"
+    assert item.owner_attribution_confidence == 0.91
+    assert item.owner_utterance_id == utterance.id
+    assert item.due_at is not None
+
+
+async def test_context_keeps_low_confidence_speaker_owner_out_of_metrics(db):
+    session_id = _seed_session_with_utterance(db, text="I'll fix the payment gateway")
+    session = db.get(CaptureSession, session_id)
+    from app.db.models import Person
+
+    candidate_owner = Person(org_id=session.org_id, display_name="Nimal Perera")
+    db.add(candidate_owner)
+    db.flush()
+    utterance = db.query(Utterance).filter(Utterance.capture_session_id == session_id).one()
+    utterance.person_id = candidate_owner.id
+    utterance.attribution_confidence = 0.55
+    db.commit()
+
+    llm = FakeLlmClient(
+        CandidateExtractionResult(
+            items=[
+                CandidateKnowledgeItem(
+                    type=KnowledgeType.COMMITMENT,
+                    statement="Fix the payment gateway",
+                    supporting_utterance_ids=[utterance.id],
+                    owner_is_speaker=True,
+                    owner_utterance_id=utterance.id,
+                    rationale="speaker committed directly",
+                )
+            ]
+        )
+    )
+
+    created_ids = await run_context_intelligence(db, session_id, llm)
+    db.commit()
+
+    item = db.get(KnowledgeItem, created_ids[0])
+    assert item.owner_person_id is None
+    assert item.owner_candidate_person_id == candidate_owner.id
+    assert item.owner_source == "speaker_candidate"
+
+
 async def test_memory_assigns_lifecycle_and_creates_edge(db):
     session_id = _seed_session_with_utterance(db)
     org_id = db.get(CaptureSession, session_id).org_id
@@ -203,12 +280,27 @@ async def test_memory_assigns_lifecycle_and_creates_edge(db):
     db.add_all([prior, new_item])
     db.commit()
 
-    llm = FakeLlmClient(MemoryDecision(lifecycle_state=LifecycleState.SUPERSEDED, edges=[]))
+    from app.agents.memory import EdgeProposal
+    from app.db.models import EdgeKind
+
+    llm = FakeLlmClient(
+        MemoryDecision(
+            lifecycle_state=LifecycleState.NEW,
+            edges=[
+                EdgeProposal(
+                    to_item_id=prior.id,
+                    kind=EdgeKind.SUPERSEDES,
+                    rationale="Postgres replaces MongoDB",
+                )
+            ],
+        )
+    )
     processed = await run_memory_intelligence(db, session_id, llm)
 
     assert new_item.id in processed
     db.commit()
-    assert new_item.lifecycle_state == LifecycleState.SUPERSEDED
+    assert new_item.lifecycle_state == LifecycleState.NEW
+    assert prior.lifecycle_state == LifecycleState.SUPERSEDED
 
 
 async def test_memory_populates_embedding_once_when_embedder_given(db):

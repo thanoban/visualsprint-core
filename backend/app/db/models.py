@@ -67,13 +67,27 @@ class Person(TimestampMixin, Base):
     """Org-level identity; aliases let 'Nimal' / 'nimal.p' / 'Nimal Perera' resolve to one person."""
 
     __tablename__ = "person"
-    __table_args__ = (Index("ix_person_org", "org_id"),)
+    __table_args__ = (
+        Index("ix_person_org", "org_id"),
+        Index("ix_person_org_email", "org_id", "email"),
+        Index("ix_person_org_user", "org_id", "user_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
     display_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     aliases: Mapped[list] = mapped_column(JSON, default=list)
+    # Enrolled voice centroid — what carries identity from one meeting to the
+    # next (docs/08-speaker-identity.md Phase B). 512 dims read empirically
+    # from pyannote/embedding's real output, not assumed from documentation.
+    # Derived from resolved SessionSpeaker rows rather than updated as a
+    # running mean, so re-running/correcting a session cannot double-count or
+    # leave stale voice in the centroid.
+    voiceprint: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
+    voiceprint_sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    voiceprint_reliable: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class User(TimestampMixin, Base):
@@ -147,7 +161,9 @@ class OrgConnection(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     provider: Mapped[str] = mapped_column(String(32))  # slack | jira | github | linear | zoom
-    account_label: Mapped[str] = mapped_column(String(320))  # workspace/site/username, human-readable
+    account_label: Mapped[str] = mapped_column(
+        String(320)
+    )  # workspace/site/username, human-readable
     external_id: Mapped[str | None] = mapped_column(String(255), default=None)
     # OAuth tokens live in a secret store, not here; this row holds the reference.
     secret_ref: Mapped[str] = mapped_column(String(255))
@@ -184,6 +200,7 @@ class CaptureState(enum.StrEnum):
     ACQUIRING = "acquiring"
     ACQUIRED = "acquired"
     DIARIZING = "diarizing"
+    IDENTIFYING = "identifying"
     TRANSCRIBING = "transcribing"
     PROCESSING_SCREEN = "processing_screen"
     UNDERSTANDING = "understanding"
@@ -293,6 +310,7 @@ class SpeakerTurn(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    audio_track_id: Mapped[str | None] = mapped_column(ForeignKey("audio_track.id"), default=None)
     start_s: Mapped[float] = mapped_column(Float)
     end_s: Mapped[float] = mapped_column(Float)
     cluster_id: Mapped[str] = mapped_column(String(64))  # e.g. "SPEAKER_00"
@@ -322,12 +340,18 @@ class SessionSpeaker(TimestampMixin, Base):
     __tablename__ = "session_speaker"
     __table_args__ = (
         Index("ix_sessionspeaker_session", "capture_session_id"),
-        UniqueConstraint("capture_session_id", "cluster_id", name="uq_session_speaker_cluster"),
+        UniqueConstraint(
+            "capture_session_id",
+            "audio_track_id",
+            "cluster_id",
+            name="uq_session_speaker_track_cluster",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    audio_track_id: Mapped[str | None] = mapped_column(ForeignKey("audio_track.id"), default=None)
     cluster_id: Mapped[str] = mapped_column(String(64))
     person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
     resolution_method: Mapped[SpeakerResolution] = mapped_column(
@@ -335,6 +359,31 @@ class SessionSpeaker(TimestampMixin, Base):
         default=SpeakerResolution.UNRESOLVED,
     )
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # This cluster's centroid voice embedding for the session. Kept even when
+    # the speaker stays unresolved: a later manual correction can enroll it
+    # against a Person retroactively, and re-running identity fusion after
+    # more people are known never needs the audio again.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
+
+
+class PlatformSpeakerLabel(TimestampMixin, Base):
+    """Platform transcript speaker-name spans retained for roster fusion.
+
+    Meet/Teams can provide useful labels even when their transcript text is
+    not trusted for code-switching. These rows keep only the timing/name
+    signal needed to map diarized clusters to People.
+    """
+
+    __tablename__ = "platform_speaker_label"
+    __table_args__ = (Index("ix_platformlabel_session_start", "capture_session_id", "start_s"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
+    start_s: Mapped[float] = mapped_column(Float)
+    end_s: Mapped[float] = mapped_column(Float)
+    display_name: Mapped[str] = mapped_column(String(255))
+    provider: Mapped[str] = mapped_column(String(64), default="")
 
 
 # --------------------------------------------------------------------------- #
@@ -430,6 +479,7 @@ class KnowledgeItem(TimestampMixin, Base):
     __tablename__ = "knowledge_item"
     __table_args__ = (
         Index("ix_ki_org_type_state", "org_id", "type", "lifecycle_state"),
+        Index("ix_ki_org_owner_state", "org_id", "owner_person_id", "lifecycle_state"),
         Index("ix_ki_session", "capture_session_id"),
     )
 
@@ -439,6 +489,12 @@ class KnowledgeItem(TimestampMixin, Base):
     type: Mapped[KnowledgeType] = mapped_column(Enum(KnowledgeType, native_enum=False, length=16))
     statement: Mapped[str] = mapped_column(Text)
     owner_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
+    owner_candidate_person_id: Mapped[str | None] = mapped_column(
+        ForeignKey("person.id"), default=None
+    )
+    owner_utterance_id: Mapped[str | None] = mapped_column(ForeignKey("utterance.id"), default=None)
+    owner_source: Mapped[str | None] = mapped_column(String(32), default=None)
+    owner_attribution_confidence: Mapped[float | None] = mapped_column(Float, default=None)
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     lifecycle_state: Mapped[LifecycleState] = mapped_column(
         Enum(LifecycleState, native_enum=False, length=16), default=LifecycleState.NEW
@@ -475,6 +531,7 @@ class EdgeKind(enum.StrEnum):
     CONTINUES = "continues"
     RECURS = "recurs"
     RESOLVES = "resolves"
+    BLOCKS = "blocks"
 
 
 class KnowledgeEdge(TimestampMixin, Base):
@@ -530,8 +587,43 @@ class ProposedAction(TimestampMixin, Base):
     approved_by_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    external_id: Mapped[str | None] = mapped_column(String(255), default=None)
     external_url: Mapped[str | None] = mapped_column(String(1000), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class WorkStatus(enum.StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+    UNKNOWN = "unknown"
+
+
+class WorkEvidence(TimestampMixin, Base):
+    """Snapshot of an external tracker check for an executed action.
+
+    The snapshot is not itself lifecycle state; when it proves closure the
+    work-tracking sweep writes a normal KnowledgeEdge.RESOLVES so lifecycle
+    derivation stays one rule over evidence-backed edges.
+    """
+
+    __tablename__ = "work_evidence"
+    __table_args__ = (
+        Index("ix_workevidence_action", "action_id"),
+        Index("ix_workevidence_item", "knowledge_item_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    action_id: Mapped[str] = mapped_column(ForeignKey("proposed_action.id"))
+    knowledge_item_id: Mapped[str] = mapped_column(ForeignKey("knowledge_item.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(255))
+    status: Mapped[WorkStatus] = mapped_column(
+        Enum(WorkStatus, native_enum=False, length=16), default=WorkStatus.UNKNOWN
+    )
+    status_label: Mapped[str] = mapped_column(String(255), default="")
+    external_url: Mapped[str | None] = mapped_column(String(1000), default=None)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Correction(TimestampMixin, Base):
@@ -564,7 +656,9 @@ class GlossaryTerm(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     term: Mapped[str] = mapped_column(String(255))
     added_by_person_id: Mapped[str | None] = mapped_column(ForeignKey("person.id"), default=None)
-    source_correction_id: Mapped[str | None] = mapped_column(ForeignKey("correction.id"), default=None)
+    source_correction_id: Mapped[str | None] = mapped_column(
+        ForeignKey("correction.id"), default=None
+    )
 
 
 class ConsentRecord(TimestampMixin, Base):
@@ -614,7 +708,7 @@ class PipelineJob(TimestampMixin, Base):
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
     stage: Mapped[str] = mapped_column(
         String(32)
-    )  # acquire|transcribe|understand|verify|remember|propose|report
+    )  # acquire|diarize|identify|transcribe|understand|verify|remember|propose|report
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, native_enum=False, length=16), default=JobStatus.QUEUED
     )

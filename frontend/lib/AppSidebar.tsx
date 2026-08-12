@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "meetings", label: "Meetings", href: "/", glyph: "M" },
   { key: "chat", label: "Org Chat", href: "/chat", glyph: "C" },
   { key: "upload", label: "Upload", href: "/upload", glyph: "U" },
+  { key: "people", label: "People", href: "/people", glyph: "P" },
   { key: "actions", label: "Actions", href: "/actions", glyph: "A" },
   { key: "glossary", label: "Glossary", href: "/glossary", glyph: "Gl" },
   { key: "data-rights", label: "Data rights", href: "/data-rights", glyph: "DR" },

@@ -79,7 +79,10 @@ services:
     build:
       context: ../frontend
       args:
+        APP_DEPLOYMENT_TARGET: local
         NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
     container_name: visualsprint-frontend
     ports:
       - "3000:3000"

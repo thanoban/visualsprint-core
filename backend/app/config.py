@@ -106,7 +106,9 @@ class Settings(BaseSettings):
     model_memory: str = "gemini-2.5-pro"
     model_verify: str = "gemini-2.5-pro"
     model_report: str = "gemini-2.5-pro"
-    model_repair: str = "gemini-2.5-flash-lite"  # cheap, high-volume: every ASR segment goes through this
+    model_repair: str = (
+        "gemini-2.5-flash-lite"  # cheap, high-volume: every ASR segment goes through this
+    )
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0
@@ -133,6 +135,8 @@ class Settings(BaseSettings):
     # calendar sync: these are the automations most likely to be
     # user-visibly late if checked too coarsely, unlike retention/backfill.
     action_trigger_interval_s: float = 300.0
+    lifecycle_sweep_interval_s: float = 300.0
+    work_tracking_interval_s: float = 900.0
     # How far ahead of a commitment's due date to start proposing a
     # reminder (also covers already-overdue commitments).
     action_trigger_reminder_window_hours: float = 24.0

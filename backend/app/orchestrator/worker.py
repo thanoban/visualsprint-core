@@ -38,10 +38,12 @@ async def _noop(db: object, job: PipelineJob) -> None:  # placeholder for unbuil
 _llm_client = None
 _transcriber = None
 _diarizer = None
+_speaker_embedder = None
 _platform_adapters = None
 _calendar_adapters = None
 _vlm_captioner = None
 _EMBEDDER_UNAVAILABLE = object()
+_SPEAKER_EMBEDDER_UNAVAILABLE = object()
 _VLM_CAPTIONER_UNAVAILABLE = object()
 
 
@@ -102,6 +104,31 @@ def _get_embedder():
             log.warning("embedder.unavailable", error=str(exc))
             return None
     return _embedder
+
+
+def _build_speaker_embedder():
+    from app.adapters.speaker_embedder_pyannote import PyannoteSpeakerEmbedder
+
+    return PyannoteSpeakerEmbedder()
+
+
+def _get_speaker_embedder():
+    """Optional voice embedding backend for identity fusion.
+
+    Missing Hugging Face credentials or pyannote deps leave speakers
+    unresolved/roster-resolved; they must not break transcription.
+    """
+    global _speaker_embedder
+    if _speaker_embedder is _SPEAKER_EMBEDDER_UNAVAILABLE:
+        return None
+    if _speaker_embedder is None:
+        try:
+            _speaker_embedder = _build_speaker_embedder()
+        except Exception as exc:
+            _speaker_embedder = _SPEAKER_EMBEDDER_UNAVAILABLE
+            log.warning("speaker_embedder.unavailable", error=str(exc))
+            return None
+    return _speaker_embedder
 
 
 # platform (Meeting.platform / CaptureArtifacts source) -> the OAuth
@@ -205,7 +232,9 @@ async def _sync_all_calendars(db: object) -> None:
         try:
             adapter = _get_calendar_adapter_for_connection(db, connection)
         except Exception as exc:
-            log.warning("calendar_sync.adapter_unavailable", connection=connection.id, error=str(exc))
+            log.warning(
+                "calendar_sync.adapter_unavailable", connection=connection.id, error=str(exc)
+            )
             continue
         if adapter is None:
             log.warning(
@@ -302,11 +331,50 @@ async def _run_action_triggers(db: object) -> None:
             db.commit()
             if escalated or reminded:
                 log.info(
-                    "action_triggers.swept", org=org.id, escalated=len(escalated), reminded=len(reminded)
+                    "action_triggers.swept",
+                    org=org.id,
+                    escalated=len(escalated),
+                    reminded=len(reminded),
                 )
         except Exception as exc:
             db.rollback()
             log.warning("action_triggers.failed", org=org.id, error=str(exc))
+
+
+async def _run_lifecycle_sweep(db: object) -> None:
+    from sqlalchemy import select
+
+    from app.agents.lifecycle import sweep_org_lifecycle
+    from app.db.models import Org
+
+    orgs = db.execute(select(Org)).scalars().all()
+    for org in orgs:
+        try:
+            changed = sweep_org_lifecycle(db, org.id)
+            db.commit()
+            if changed:
+                log.info("lifecycle.swept", org=org.id, changed=len(changed))
+        except Exception as exc:
+            db.rollback()
+            log.warning("lifecycle.failed", org=org.id, error=str(exc))
+
+
+async def _run_work_tracking_sweep(db: object) -> None:
+    from sqlalchemy import select
+
+    from app.db.models import Org
+    from app.orchestrator.work_tracking import sweep_work_tracking
+
+    orgs = db.execute(select(Org)).scalars().all()
+    for org in orgs:
+        try:
+            created = await sweep_work_tracking(db, org.id)
+            db.commit()
+            if created:
+                log.info("work_tracking.swept", org=org.id, evidence=len(created))
+        except Exception as exc:
+            db.rollback()
+            log.warning("work_tracking.failed", org=org.id, error=str(exc))
 
 
 def _person_for_roster_entry(db: object, org_id: str, entry):
@@ -343,7 +411,7 @@ def _person_for_roster_entry(db: object, org_id: str, entry):
 
 
 def _persist_capture_artifacts(db: object, session, artifacts) -> None:
-    from app.db.models import AudioTrack, Participant
+    from app.db.models import AudioTrack, Participant, PlatformSpeakerLabel
 
     participant_by_key = {}
     for entry in artifacts.roster:
@@ -401,6 +469,18 @@ def _persist_capture_artifacts(db: object, session, artifacts) -> None:
             )
         )
 
+    for label in artifacts.speaker_labels:
+        db.add(
+            PlatformSpeakerLabel(
+                org_id=session.org_id,
+                capture_session_id=session.id,
+                start_s=label.start_s,
+                end_s=label.end_s,
+                display_name=label.display_name,
+                provider=artifacts.mode.value,
+            )
+        )
+
     session.video_uri = artifacts.screen_share_uri or artifacts.video_uri
 
 
@@ -413,7 +493,7 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
     and failing explicitly beats producing an empty session."""
     from sqlalchemy import select
 
-    from app.db.models import AudioTrack, CaptureSession, Participant
+    from app.db.models import AudioTrack, CaptureSession, Participant, PlatformSpeakerLabel
 
     session = db.get(CaptureSession, job.capture_session_id)
     if session is None:
@@ -450,6 +530,9 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
 
     db.query(AudioTrack).filter(AudioTrack.capture_session_id == session.id).delete()
     db.query(Participant).filter(Participant.capture_session_id == session.id).delete()
+    db.query(PlatformSpeakerLabel).filter(
+        PlatformSpeakerLabel.capture_session_id == session.id
+    ).delete()
     artifacts = await adapter.acquire(platform_capture_id)
     if not artifacts.audio_tracks:
         raise RuntimeError("PlatformAdapter returned no audio tracks")
@@ -519,9 +602,7 @@ def _get_diarizer():
     return _diarizer
 
 
-def _assign_cluster(
-    start_s: float, end_s: float, turns: list
-) -> tuple[str | None, float]:
+def _assign_cluster(start_s: float, end_s: float, turns: list) -> tuple[str | None, float]:
     """Returns (cluster_id, overlap_ratio) for the diarized turn overlapping
     this utterance the most, or (None, 0.0) when nothing overlaps.
 
@@ -600,6 +681,7 @@ async def _handle_diarize(db: object, job: PipelineJob) -> None:
                 SpeakerTurn(
                     org_id=session.org_id,
                     capture_session_id=session.id,
+                    audio_track_id=track.id,
                     start_s=turn.start_s,
                     end_s=turn.end_s,
                     cluster_id=turn.cluster_id,
@@ -614,11 +696,88 @@ async def _handle_diarize(db: object, job: PipelineJob) -> None:
                 SessionSpeaker(
                     org_id=session.org_id,
                     capture_session_id=session.id,
+                    audio_track_id=track.id,
                     cluster_id=cluster_id,
                 )
             )
     db.flush()
     log.info("diarize.done", session=session.id, tracks=len(mixed_tracks))
+
+
+@stage_handler("identify")
+async def _handle_identify(db: object, job: PipelineJob) -> None:
+    """Resolve diarized clusters to Person rows when deterministic evidence is strong.
+
+    Roster labels and already-enrolled voiceprints are useful; uncalibrated
+    guesses are not. Missing pyannote embedding support leaves embeddings
+    blank and resolution falls back to roster-only or unresolved.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import (
+        AudioTrack,
+        CaptureSession,
+        SessionSpeaker,
+        SpeakerResolution,
+        SpeakerTurn,
+    )
+    from app.speakers.identity import recompute_voiceprint, resolve_session_speakers
+
+    session = db.get(CaptureSession, job.capture_session_id)
+    if session is None:
+        raise RuntimeError(f"capture_session {job.capture_session_id} not found")
+
+    speakers = (
+        db.execute(select(SessionSpeaker).where(SessionSpeaker.capture_session_id == session.id))
+        .scalars()
+        .all()
+    )
+    if not speakers:
+        log.info("identify.no_speakers", session=session.id)
+        return
+
+    embedder = _get_speaker_embedder()
+    if embedder is not None:
+        tracks = (
+            db.execute(select(AudioTrack).where(AudioTrack.capture_session_id == session.id))
+            .scalars()
+            .all()
+        )
+        speakers_by_track_cluster = {(s.audio_track_id, s.cluster_id): s for s in speakers}
+        for track in tracks:
+            turns = (
+                db.execute(
+                    select(SpeakerTurn).where(
+                        SpeakerTurn.capture_session_id == session.id,
+                        SpeakerTurn.audio_track_id == track.id,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not turns:
+                continue
+            try:
+                embeddings = await embedder.embed_speakers(track.uri, turns)
+            except Exception as exc:
+                log.warning(
+                    "identify.embedding_failed", session=session.id, track=track.id, error=str(exc)
+                )
+                continue
+            for cluster_id, embedding in embeddings.items():
+                speaker = speakers_by_track_cluster.get((track.id, cluster_id))
+                if speaker is not None:
+                    speaker.embedding = embedding
+        db.flush()
+
+    changed = resolve_session_speakers(db, session.id)
+    for resolved in changed:
+        if resolved.person_id and resolved.method in (
+            SpeakerResolution.ROSTER,
+            SpeakerResolution.MANUAL,
+        ):
+            recompute_voiceprint(db, resolved.person_id)
+    log.info("identify.done", session=session.id, resolved=len(changed), speakers=len(speakers))
 
 
 @stage_handler("transcribe")
@@ -681,7 +840,7 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         .all()
     )
     cluster_to_person = {
-        s.cluster_id: s.person_id
+        (s.audio_track_id, s.cluster_id): s.person_id
         for s in db.execute(
             select(SessionSpeaker).where(SessionSpeaker.capture_session_id == session.id)
         )
@@ -721,10 +880,9 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
                 person_id: str | None = track.participant_person_id
                 attribution_confidence = 1.0
             else:
-                cluster_id, overlap_ratio = _assign_cluster(
-                    seg.start_s, seg.end_s, speaker_turns
-                )
-                person_id = cluster_to_person.get(cluster_id) if cluster_id else None
+                track_turns = [turn for turn in speaker_turns if turn.audio_track_id == track.id]
+                cluster_id, overlap_ratio = _assign_cluster(seg.start_s, seg.end_s, track_turns)
+                person_id = cluster_to_person.get((track.id, cluster_id)) if cluster_id else None
                 # Unknown person => 0.0, even on a clean cluster match: the
                 # number claims confidence in *who*, not in the separation.
                 attribution_confidence = overlap_ratio if person_id else 0.0
@@ -998,6 +1156,8 @@ async def main() -> None:
     last_retention_sweep = datetime.min.replace(tzinfo=UTC)
     last_transcode_backfill = datetime.min.replace(tzinfo=UTC)
     last_action_triggers = datetime.min.replace(tzinfo=UTC)
+    last_lifecycle_sweep = datetime.min.replace(tzinfo=UTC)
+    last_work_tracking = datetime.min.replace(tzinfo=UTC)
     try:
         while True:
             processed = await run_once()
@@ -1039,6 +1199,18 @@ async def main() -> None:
                 Session = get_sessionmaker()
                 with Session() as db:
                     await _run_action_triggers(db)
+
+            if (now - last_lifecycle_sweep).total_seconds() >= settings.lifecycle_sweep_interval_s:
+                last_lifecycle_sweep = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_lifecycle_sweep(db)
+
+            if (now - last_work_tracking).total_seconds() >= settings.work_tracking_interval_s:
+                last_work_tracking = now
+                Session = get_sessionmaker()
+                with Session() as db:
+                    await _run_work_tracking_sweep(db)
     finally:
         health_task.cancel()
 

@@ -47,7 +47,8 @@ screen = [
     "numpy>=1.26",
     "Pillow>=10.4",
     "paddleocr>=2.9",
-    "pyannote.audio>=3.3",
+    "pyannote.audio>=3.3",  # speaker diarization (app/adapters/diarizer_pyannote.py)
+    "omegaconf>=2.3",  # pyannote loads model configs through it but does NOT declare it — verified missing against pyannote-audio 4.0.7, whose own metadata omits it
 ]
 storage = [
     "botocore>=1.35",  # SigV4 signing only, not the full boto3 SDK -- see adapters/blobstore_s3.py

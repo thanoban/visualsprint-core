@@ -114,8 +114,9 @@ def _truncate(text: str, limit: int = QUOTE_MAX_CHARS) -> str:
 
 
 def _build_engagement(db: Session, capture_session_id: str) -> EngagementSummary:
-    """Talk-time-per-participant, matching the "who talked how much" report
-    every competitor ships (Zoom AI Companion, Fireflies, Otter). Pure
+    """Speech-captured-per-speaker summary, not a contribution score.
+
+    Pure
     aggregation over Utterance rows already written by the transcribe stage
     -- no new capture, no LLM call, no extra cost. Attribution confidence is
     NOT filtered here: an org with only mixed audio (Mode D/Meet, no

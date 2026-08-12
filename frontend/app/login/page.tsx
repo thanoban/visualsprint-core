@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
 import { getSupabaseClient } from "@/lib/supabaseClient";
@@ -172,13 +173,13 @@ export default function LoginPage() {
           minHeight: "100vh",
         }}
       >
-        <a href="/" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+        <Link href="/" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
           <span style={{ fontFamily: mono, color: LIGHT.accent, fontWeight: 600 }}>[</span>
           <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 16, fontWeight: 600, color: LIGHT.text }}>
             VisualSprint
           </span>
           <span style={{ fontFamily: mono, color: LIGHT.accent, fontWeight: 600 }}>]</span>
-        </a>
+        </Link>
 
         <div style={{ maxWidth: 380, width: "100%", margin: "0 auto" }}>
           <div

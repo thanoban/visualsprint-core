@@ -9,14 +9,16 @@ already covers the JWT-parsing boundary itself.
 """
 
 from app.auth.dependency import get_current_user
-from app.db.models import Org, OrgMember, User
+from app.db.models import Org, OrgMember, Person, User
 from app.main import app
 
 
 def test_first_login_creates_a_personal_org(client, db_session, monkeypatch):
     import app.auth.dependency as auth_dep
 
-    monkeypatch.setattr(auth_dep, "verify_jwt", lambda token: {"sub": "user-abc", "email": "nimal@acme.com"})
+    monkeypatch.setattr(
+        auth_dep, "verify_jwt", lambda token: {"sub": "user-abc", "email": "nimal@acme.com"}
+    )
     app.dependency_overrides.pop(get_current_user, None)
 
     resp = client.get("/api/v1/me", headers={"Authorization": "Bearer whatever"})
@@ -38,7 +40,9 @@ def test_first_login_creates_a_personal_org(client, db_session, monkeypatch):
 def test_second_login_reuses_the_same_org(client, db_session, monkeypatch):
     import app.auth.dependency as auth_dep
 
-    monkeypatch.setattr(auth_dep, "verify_jwt", lambda token: {"sub": "user-abc", "email": "nimal@acme.com"})
+    monkeypatch.setattr(
+        auth_dep, "verify_jwt", lambda token: {"sub": "user-abc", "email": "nimal@acme.com"}
+    )
     app.dependency_overrides.pop(get_current_user, None)
 
     first = client.get("/api/v1/me", headers={"Authorization": "Bearer t1"})
@@ -46,6 +50,27 @@ def test_second_login_reuses_the_same_org(client, db_session, monkeypatch):
 
     assert first.json()["org"]["id"] == second.json()["org"]["id"]
     assert db_session.query(OrgMember).filter(OrgMember.user_id == "user-abc").count() == 1
+
+
+def test_me_links_to_a_person_only_on_unique_email_match(client, db_session, monkeypatch):
+    import app.auth.dependency as auth_dep
+
+    monkeypatch.setattr(
+        auth_dep, "verify_jwt", lambda token: {"sub": "user-abc", "email": "nimal@acme.com"}
+    )
+    app.dependency_overrides.pop(get_current_user, None)
+
+    first = client.get("/api/v1/me", headers={"Authorization": "Bearer t1"})
+    org_id = first.json()["org"]["id"]
+    person = Person(org_id=org_id, display_name="Nimal Perera", email="nimal@acme.com")
+    db_session.add(person)
+    db_session.commit()
+
+    resp = client.get("/api/v1/me", headers={"Authorization": "Bearer t2"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["person"]["id"] == person.id
+    assert db_session.get(Person, person.id).user_id == "user-abc"
 
 
 def test_missing_authorization_header_is_401(client):

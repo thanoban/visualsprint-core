@@ -7,10 +7,11 @@ got done, and whether the same thing keeps coming back unresolved.
 Prerequisite: [08-speaker-identity.md](08-speaker-identity.md). Phase A (speaker
 separation) shipped 2026-08-11 and is live in production.
 
-**Status: planned, not yet implemented.** This document is the design; nothing in
-Phases B–F below has been coded. The full plan (with file-level detail, risk analysis,
-and step dependencies) was reviewed and approved 2026-08-11; this doc is its durable
-record in the project's own docs, superseding the earlier draft of this file.
+**Status: implementation pass completed 2026-08-11.** Phases B–F now have schema,
+pipeline, lifecycle, ownership, person-surface, correction, and work-tracking code in
+place. The verification checklist at the end still distinguishes shipped local code
+from real-audio calibration and live vendor behavior that must be measured outside
+the local test suite.
 
 ## Three concrete defects this plan fixes
 
@@ -326,8 +327,10 @@ Step 5 (voice identity, the part that genuinely needs real-audio tuning).
 
 ## Verification checklist — what must be proven, not assumed
 
-- [ ] pyannote embedding dimensionality — **done**, 512, read from the real model
-- [ ] Whether pyannote's raw embedding output is L2-normalized
+- [x] pyannote embedding dimensionality — **done**, 512, read from the real model
+- [x] Whether pyannote's raw embedding output is L2-normalized — **not normalized**
+      (real-model norms measured at 1529.925 and 1825.812 on 2026-08-11), so the
+      adapter now L2-normalizes every embedding before persistence or matching
 - [ ] Diarization + identity accuracy measured on **Sinhala/Tamil/English
       code-switched** audio, not English-only — the actual workload, and the one most
       likely to behave differently from published benchmarks
