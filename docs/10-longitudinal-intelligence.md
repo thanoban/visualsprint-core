@@ -127,6 +127,14 @@ most reputationally dangerous output in the product anchored to reproducible sig
 
 ## Hard problem 2 — identity: many names, and shared accounts
 
+> **Deferred by decision (2026-08-11).** Descoped for now to keep focus on
+> per-participant decision tracking and agent accuracy
+> ([11-agent-architecture.md](11-agent-architecture.md)). The design below is kept
+> because the shared-account case is a genuine correctness risk, not a nicety: an
+> account used by two people will merge two people's accountability into one record,
+> and no downstream metric can detect that after the fact. Revisit before onboarding
+> any org that uses shared conference-room accounts.
+
 Currently identity rests on `Person.display_name`, `email`, `aliases` (a JSON list),
 `user_id`, and `voiceprint`. That handles the easy direction and fails the dangerous one.
 
