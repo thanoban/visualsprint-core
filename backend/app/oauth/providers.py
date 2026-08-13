@@ -53,11 +53,20 @@ def google_config(settings: Settings) -> OAuthProviderConfig:
         # fetch), Drive (Meet stores the recording file there), Gmail
         # drafts (email_draft connector) -- one grant covers every
         # capture/action surface that shares this one OAuth client.
+        # userinfo.email is required too, not optional: _finish_google_
+        # connection calls Google's userinfo endpoint to learn the
+        # connecting account's email (stored as CalendarConnection.
+        # account_email), and that call 401s without it -- confirmed live
+        # against a real production callback, not assumed. The access
+        # token this client receives is only authorized for whatever
+        # scopes were actually requested; wanting the caller's identity
+        # needs its own explicit scope like any other permission here.
         scope=(
             "https://www.googleapis.com/auth/calendar.readonly "
             "https://www.googleapis.com/auth/meetings.space.readonly "
             "https://www.googleapis.com/auth/drive.readonly "
-            "https://www.googleapis.com/auth/gmail.compose"
+            "https://www.googleapis.com/auth/gmail.compose "
+            "https://www.googleapis.com/auth/userinfo.email"
         ),
         extra_authorize_params={
             # offline access -> refresh_token issued; prompt=consent forces
