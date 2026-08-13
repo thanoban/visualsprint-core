@@ -112,6 +112,12 @@ class Settings(BaseSettings):
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0
+    # Safety cap on one Cloud Scheduler-triggered pass (VS_WORKER_MODE=http)
+    # -- keeps a single invocation from running indefinitely if the queue is
+    # deep, so the container reliably returns and can scale back to zero.
+    # Comfortably under Cloud Run's request timeout (set to 3600s for this
+    # service in deploy.yml).
+    worker_pass_max_seconds: float = 300.0
     job_max_attempts: int = 5
     # How often the worker polls every CalendarConnection for new events
     # (app/orchestrator/scheduler.py). Deliberately much coarser than the

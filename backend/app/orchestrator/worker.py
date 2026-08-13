@@ -1153,108 +1153,164 @@ async def run_once() -> bool:
         return True
 
 
-async def _serve_health_check(port: int) -> None:
-    """The worker has no HTTP interface of its own -- it's a poll loop, not
-    a request handler. That's fine for docker-compose (no port mapping,
-    nothing depends on it), but deploying this process as a Cloud Run
-    *Service* (google-github-actions/deploy-cloudrun targeting
-    visualsprint-agents, see .github/workflows/deploy.yml) requires
-    something listening on $PORT or Cloud Run kills the container as
-    unhealthy. Reuses starlette/uvicorn -- already dependencies via
-    fastapi[standard]/uvicorn[standard], so this adds nothing new."""
-    import uvicorn
+def _sweep_registry(settings) -> list[tuple[str, float, Callable[[object], Awaitable[None]]]]:
+    """(name, interval_seconds, coroutine_fn) for every periodic sweep.
+
+    Single source of truth for both the local-dev loop and the production
+    bounded pass, so the two modes cannot silently drift apart -- a sweep
+    added to one and not the other was a real risk with the old duplicated
+    if-blocks this replaced."""
+    sweeps: list[tuple[str, float, Callable[[object], Awaitable[None]]]] = [
+        ("calendar_sync", settings.calendar_sync_interval_s, _sync_all_calendars),
+        ("retention_sweep", settings.retention_sweep_interval_s, _run_retention_sweep),
+        ("transcode_backfill", settings.transcode_backfill_interval_s, _run_transcode_backfill),
+        ("action_triggers", settings.action_trigger_interval_s, _run_action_triggers),
+        ("lifecycle_sweep", settings.lifecycle_sweep_interval_s, _run_lifecycle_sweep),
+        ("work_tracking", settings.work_tracking_interval_s, _run_work_tracking_sweep),
+    ]
+    if settings.longitudinal_analysis_enabled:
+        sweeps.append(
+            ("longitudinal_analysis", settings.longitudinal_analysis_interval_s, _run_longitudinal_sweep)
+        )
+    return sweeps
+
+
+def _sweep_due(db, name: str, interval_s: float, now: datetime) -> bool:
+    """Durable due-check backed by WorkerSweepState (see its docstring) --
+    not an in-memory timestamp, because the production worker no longer
+    stays running between checks."""
+    from app.db.models import WorkerSweepState
+
+    state = db.get(WorkerSweepState, name)
+    if state is None:
+        return True
+    last_run_at = state.last_run_at
+    if last_run_at.tzinfo is None:
+        last_run_at = last_run_at.replace(tzinfo=UTC)
+    return (now - last_run_at).total_seconds() >= interval_s
+
+
+def _mark_swept(db, name: str, now: datetime) -> None:
+    from app.db.models import WorkerSweepState
+
+    state = db.get(WorkerSweepState, name)
+    if state is None:
+        db.add(WorkerSweepState(name=name, last_run_at=now))
+    else:
+        state.last_run_at = now
+    db.commit()
+
+
+async def run_due_sweeps() -> list[str]:
+    """Runs whichever periodic sweeps are due, using DB-persisted timestamps
+    so this is correct whether called from an infinite loop or a fresh
+    process spun up by Cloud Scheduler. Returns the names of sweeps that ran."""
+    settings = get_settings()
+    now = datetime.now(UTC)
+    ran: list[str] = []
+    for name, interval_s, fn in _sweep_registry(settings):
+        Session = get_sessionmaker()
+        with Session() as db:
+            if not _sweep_due(db, name, interval_s, now):
+                continue
+        with Session() as db:
+            await fn(db)
+        with Session() as db:
+            _mark_swept(db, name, now)
+        ran.append(name)
+    return ran
+
+
+async def run_bounded_pass(max_seconds: float) -> dict:
+    """Drain the job queue and run any due sweeps, then return -- this is
+    the whole point of the scale-to-zero worker: Cloud Scheduler invokes it
+    on a short interval, it does whatever work is pending, and the container
+    is free to scale back to zero afterward instead of holding a paid vCPU
+    open 24/7 waiting for the next job (see .github/workflows/deploy.yml and
+    docs/EXTERNAL_SETUP.md's cost note). `max_seconds` is a safety bound, not
+    a target -- an empty queue with no due sweeps returns almost instantly.
+    """
+    start = asyncio.get_event_loop().time()
+    jobs_processed = 0
+    while asyncio.get_event_loop().time() - start < max_seconds:
+        processed = await run_once()
+        if not processed:
+            break
+        jobs_processed += 1
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        reaped = q.reap_stuck_jobs(db)
+        db.commit()
+
+    swept = await run_due_sweeps()
+    return {"jobs_processed": jobs_processed, "reaped": reaped, "swept": swept}
+
+
+def _build_http_app():
+    """Serves both the liveness probe Cloud Run requires of every Service
+    (see the original docstring this replaced) and the trigger endpoint
+    Cloud Scheduler calls to run one bounded pass. Reuses starlette/uvicorn
+    -- already dependencies via fastapi[standard]/uvicorn[standard]."""
     from starlette.applications import Starlette
-    from starlette.responses import PlainTextResponse
+    from starlette.responses import JSONResponse, PlainTextResponse
     from starlette.routing import Route
 
     async def healthz(request):
         return PlainTextResponse("ok")
 
-    app = Starlette(routes=[Route("/healthz", healthz), Route("/", healthz)])
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
+    async def run_endpoint(request):
+        settings = get_settings()
+        result = await run_bounded_pass(settings.worker_pass_max_seconds)
+        return JSONResponse(result)
+
+    return Starlette(
+        routes=[
+            Route("/healthz", healthz),
+            Route("/", healthz),
+            Route("/run", run_endpoint, methods=["POST"]),
+        ]
+    )
+
+
+async def serve_http(port: int) -> None:
+    """Production entrypoint: an HTTP server that does nothing until
+    Cloud Scheduler calls POST /run, so Cloud Run can scale this service to
+    zero between invocations instead of billing a permanently-open vCPU."""
+    import uvicorn
+
+    config = uvicorn.Config(_build_http_app(), host="0.0.0.0", port=port, log_level="warning")
     await uvicorn.Server(config).serve()
 
 
 async def main() -> None:
+    """Local-dev entrypoint (docker-compose): an always-on poll loop, same
+    behaviour as before this module was split for production cost reasons.
+    Production uses `serve_http` instead -- see VS_WORKER_MODE in
+    app/config.py and .github/workflows/deploy.yml."""
     import os
 
     settings = get_settings()
-    log.info("worker.start", worker=q.WORKER_ID)
-    health_task = asyncio.create_task(_serve_health_check(int(os.environ.get("PORT", "8080"))))
-    reap_counter = 0
-    last_calendar_sync = datetime.min.replace(tzinfo=UTC)
-    last_retention_sweep = datetime.min.replace(tzinfo=UTC)
-    last_transcode_backfill = datetime.min.replace(tzinfo=UTC)
-    last_action_triggers = datetime.min.replace(tzinfo=UTC)
-    last_lifecycle_sweep = datetime.min.replace(tzinfo=UTC)
-    last_work_tracking = datetime.min.replace(tzinfo=UTC)
-    last_longitudinal_analysis = datetime.min.replace(tzinfo=UTC)
+    log.info("worker.start", worker=q.WORKER_ID, mode="loop")
+    health_task = asyncio.create_task(serve_http(int(os.environ.get("PORT", "8080"))))
     try:
         while True:
             processed = await run_once()
             if not processed:
                 await asyncio.sleep(settings.worker_poll_seconds)
-            reap_counter += 1
-            if reap_counter >= 100:
-                reap_counter = 0
-                Session = get_sessionmaker()
-                with Session() as db:
-                    n = q.reap_stuck_jobs(db)
-                    db.commit()
-                    if n:
-                        log.warning("worker.reaped", count=n)
-
-            now = datetime.now(UTC)
-            if (now - last_calendar_sync).total_seconds() >= settings.calendar_sync_interval_s:
-                last_calendar_sync = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _sync_all_calendars(db)
-
-            if (now - last_retention_sweep).total_seconds() >= settings.retention_sweep_interval_s:
-                last_retention_sweep = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_retention_sweep(db)
-
-            if (
-                now - last_transcode_backfill
-            ).total_seconds() >= settings.transcode_backfill_interval_s:
-                last_transcode_backfill = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_transcode_backfill(db)
-
-            if (now - last_action_triggers).total_seconds() >= settings.action_trigger_interval_s:
-                last_action_triggers = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_action_triggers(db)
-
-            if (now - last_lifecycle_sweep).total_seconds() >= settings.lifecycle_sweep_interval_s:
-                last_lifecycle_sweep = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_lifecycle_sweep(db)
-
-            if (now - last_work_tracking).total_seconds() >= settings.work_tracking_interval_s:
-                last_work_tracking = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_work_tracking_sweep(db)
-
-            if (
-                settings.longitudinal_analysis_enabled
-                and (now - last_longitudinal_analysis).total_seconds()
-                >= settings.longitudinal_analysis_interval_s
-            ):
-                last_longitudinal_analysis = now
-                Session = get_sessionmaker()
-                with Session() as db:
-                    await _run_longitudinal_sweep(db)
+            await run_due_sweeps()
     finally:
         health_task.cancel()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import os
+
+    # VS_WORKER_MODE=http is production's mode (Cloud Run scale-to-zero,
+    # triggered by Cloud Scheduler POST /run -- see .github/workflows/
+    # deploy.yml). Anything else (including unset, the local-dev default)
+    # keeps the always-on poll loop docker-compose relies on.
+    if os.environ.get("VS_WORKER_MODE", "loop") == "http":
+        asyncio.run(serve_http(int(os.environ.get("PORT", "8080"))))
+    else:
+        asyncio.run(main())

@@ -787,6 +787,25 @@ class JobStatus(enum.StrEnum):
     FAILED = "failed"
 
 
+class WorkerSweepState(TimestampMixin, Base):
+    """Durable last-run timestamp for each periodic worker sweep (calendar
+    sync, retention, lifecycle, etc.), keyed by sweep name.
+
+    Exists because the worker no longer runs as an always-on process: it
+    scales to zero between Cloud Scheduler-triggered invocations to avoid
+    paying for idle compute (see .github/workflows/deploy.yml and
+    app/orchestrator/worker.py's `run_bounded_pass`). An in-memory `last_run`
+    variable -- the previous approach -- resets to nothing on every cold
+    start, which would make every sweep fire on every single invocation
+    regardless of its configured interval. This table is what lets a sweep
+    still mean "at most every N seconds" across restarts."""
+
+    __tablename__ = "worker_sweep_state"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class PipelineJob(TimestampMixin, Base):
     __tablename__ = "pipeline_job"
     __table_args__ = (Index("ix_job_status_runat", "status", "run_at"),)

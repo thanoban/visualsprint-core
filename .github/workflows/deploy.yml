@@ -84,6 +84,16 @@ jobs:
           docker push "${REGISTRY}/agents:${{ github.sha }}"
           docker push "${REGISTRY}/agents:latest"
 
+      # Scale-to-zero, not always-on: budget-constrained deploy (GCP GenAI
+      # App Builder trial credit only, no backing payment method) can't
+      # absorb a permanently-open vCPU (~$60-65/month at 1 vCPU + 512Mi
+      # regardless of traffic). VS_WORKER_MODE=http switches the entrypoint
+      # from an infinite poll loop to an HTTP server that only does work
+      # when Cloud Scheduler calls POST /run (see app/orchestrator/
+      # worker.py's serve_http/run_bounded_pass and the Cloud Scheduler
+      # setup note at the bottom of this file). --timeout is set well above
+      # settings.worker_pass_max_seconds (300s) so a deep queue can't be cut
+      # off mid-pass.
       - name: Deploy agents to Cloud Run
         run: |
           gcloud run deploy visualsprint-agents \
@@ -93,9 +103,9 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest,VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest,VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest,VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini" \
-            --no-cpu-throttling \
-            --min-instances=1 --max-instances=1 \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http" \
+            --timeout=600 \
+            --max-instances=2 \
             --quiet
 
       # --- Web: needs the api's live URL baked in at build time (Next.js
@@ -197,3 +207,30 @@ jobs:
 # frontend to the deployed api. If either Cloud Run URL ever changes (e.g.
 # service recreated in a different region), these hardcoded values need a
 # manual update here.
+#
+# Cloud Scheduler (agents/worker trigger, set up once, not per-run):
+# visualsprint-agents runs with no --min-instances, so nothing invokes it
+# unless something calls POST /run. `visualsprint-agents` is NOT
+# --allow-unauthenticated -- deliberately, since this endpoint drains the
+# job queue and would otherwise be a free-for-all trigger for anyone who
+# finds the URL. Cloud Scheduler needs its own invoker identity:
+#   gcloud iam service-accounts create visualsprint-scheduler \
+#     --project=visualsprint-agent \
+#     --display-name="Cloud Scheduler -> visualsprint-agents /run"
+#   gcloud run services add-iam-policy-binding visualsprint-agents \
+#     --region=us-west1 --project=visualsprint-agent \
+#     --member="serviceAccount:visualsprint-scheduler@visualsprint-agent.iam.gserviceaccount.com" \
+#     --role="roles/run.invoker"
+#   gcloud scheduler jobs create http visualsprint-agents-run \
+#     --project=visualsprint-agent --location=us-west1 \
+#     --schedule="*/2 * * * *" \
+#     --uri="https://<agents-service-url>/run" \
+#     --http-method=POST \
+#     --oidc-service-account-email="visualsprint-scheduler@visualsprint-agent.iam.gserviceaccount.com" \
+#     --oidc-token-audience="https://<agents-service-url>"
+# Every 2 minutes is a deliberate balance: frequent enough that a real
+# meeting doesn't sit queued for long, infrequent enough that idle-queue
+# invocations (which return almost instantly -- see run_bounded_pass's
+# empty-queue test) stay a rounding error next to what the old always-on
+# instance cost. Adjust --schedule if that trade-off needs to move either
+# way.
