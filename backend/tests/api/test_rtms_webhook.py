@@ -146,7 +146,11 @@ async def test_rtms_started_then_stopped_finalizes_capture_session(client, db_se
         .filter(PipelineJob.capture_session_id == session.id)
         .one()
     )
-    assert job.stage == "transcribe"
+    # "diarize", not "transcribe" -- RTMS skips "acquire" (it already wrote
+    # its own AudioTrack above) but must still enter the pipeline at the
+    # stage right after acquire, same as every other capture mode, so its
+    # mixed-audio session gets speaker separation like Mode D/A2 do.
+    assert job.stage == "diarize"
 
 
 def test_rtms_stopped_unknown_stream_404s(client):

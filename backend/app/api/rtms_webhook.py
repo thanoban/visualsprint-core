@@ -36,6 +36,7 @@ from app.capture.rtms_protocol import compute_webhook_validation_response
 from app.config import get_settings
 from app.db.base import get_db
 from app.db.models import AudioTrack, CaptureSession, Meeting, Org, OrgConnection
+from app.orchestrator.pipeline import FIRST_STAGE, next_stage
 from app.orchestrator.queue import enqueue_stage
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["rtms"])
@@ -186,7 +187,17 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
             ),
         )
 
-        enqueue_stage(db, org_id, session.id, "transcribe")
+        # Derived from the pipeline graph (next_stage(FIRST_STAGE)), not a
+        # hardcoded stage name -- RTMS writes its own AudioTrack directly
+        # above (there's nothing to pull, so the "acquire" stage itself is
+        # skipped), but still needs to enter at whatever stage comes right
+        # after it. A literal string here was the actual gap: it read
+        # "transcribe" from before the diarize stage existed and was never
+        # updated when diarize was inserted into the chain, so a live Zoom
+        # meeting silently got zero speaker separation while Mode D/A2 did
+        # not. Deriving it from pipeline.py means the next stage-order
+        # change can't cause the same class of bug again here.
+        enqueue_stage(db, org_id, session.id, next_stage(FIRST_STAGE))
         db.commit()
         return {"status": "finalized", "capture_session_id": session.id}
 
