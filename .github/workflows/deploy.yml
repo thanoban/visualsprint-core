@@ -93,7 +93,14 @@ jobs:
       # worker.py's serve_http/run_bounded_pass and the Cloud Scheduler
       # setup note at the bottom of this file). --timeout is set well above
       # settings.worker_pass_max_seconds (300s) so a deep queue can't be cut
-      # off mid-pass.
+      # off mid-pass. --min-instances=0 and --cpu-throttling are passed
+      # EXPLICITLY, not just omitted -- verified empirically that `gcloud
+      # run deploy` treats scaling annotations as sticky across revisions:
+      # a deploy that previously set --min-instances=1/--no-cpu-throttling
+      # and then merely stops passing those flags does NOT reset them, it
+      # silently keeps the old (expensive) values. Omitting them here would
+      # look correct in this file while the live service kept billing for
+      # an always-on instance.
       - name: Deploy agents to Cloud Run
         run: |
           gcloud run deploy visualsprint-agents \
@@ -105,7 +112,8 @@ jobs:
             --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest,VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest,VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest,VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest" \
             --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http" \
             --timeout=600 \
-            --max-instances=2 \
+            --min-instances=0 --max-instances=2 \
+            --cpu-throttling \
             --quiet
 
       # --- Web: needs the api's live URL baked in at build time (Next.js
