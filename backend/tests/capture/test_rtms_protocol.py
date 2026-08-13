@@ -10,10 +10,14 @@ import json
 from app.capture.rtms_protocol import (
     CLIENT_READY_ACK,
     DATA_HAND_SHAKE_REQ,
+    EVENT_SUBSCRIPTION,
+    EVENT_TYPE_ACTIVE_SPEAKER_CHANGE,
+    EVENT_TYPE_PARTICIPANT_JOIN,
     KEEP_ALIVE_RESP,
     MEDIA_TYPE_AUDIO,
     SIGNALING_HAND_SHAKE_REQ,
     build_client_ready_ack,
+    build_event_subscription,
     build_keep_alive_resp,
     build_media_handshake,
     build_signaling_handshake,
@@ -53,6 +57,20 @@ def test_build_media_handshake_shape():
     assert msg["media_type"] == MEDIA_TYPE_AUDIO
     assert msg["payload_encryption"] is False
     assert msg["signature"] == compute_signature("cid", "muid", "sid", "secret")
+
+
+def test_build_event_subscription_shape():
+    msg = build_event_subscription(
+        rtms_stream_id="sid",
+        event_types=[EVENT_TYPE_PARTICIPANT_JOIN, EVENT_TYPE_ACTIVE_SPEAKER_CHANGE],
+    )
+
+    assert msg["msg_type"] == EVENT_SUBSCRIPTION
+    assert msg["rtms_stream_id"] == "sid"
+    assert msg["events"] == [
+        {"event_type": EVENT_TYPE_PARTICIPANT_JOIN, "subscribe": True},
+        {"event_type": EVENT_TYPE_ACTIVE_SPEAKER_CHANGE, "subscribe": True},
+    ]
 
 
 def test_build_client_ready_ack():

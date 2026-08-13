@@ -4,10 +4,11 @@ Unlike every other capture mode, A1 is event-driven: Zoom tells us when a
 stream starts and stops, rather than us polling for a finished artifact.
 `meeting.rtms_started` kicks off a live WebSocket session (app/capture/
 rtms_client.py) tracked in-process by rtms_stream_id; `meeting.rtms_stopped`
-finalizes it into an AudioTrack and enqueues the `transcribe` stage
-directly, bypassing the `acquire` PipelineJob stage entirely -- queue.py's
-enqueue_stage takes an arbitrary stage string, nothing enforces acquire
-running first.
+finalizes it into an AudioTrack (plus roster/speaker-label rows when
+participant events were captured -- see app/capture/persist.py) and
+enqueues the pipeline one stage past FIRST_STAGE, bypassing only the
+`acquire` PipelineJob stage itself -- queue.py's enqueue_stage takes an
+arbitrary stage string, nothing enforces acquire running first.
 
 In-process task tracking means a worker restart mid-stream loses that
 session -- same maturity level as every other vendor path in this codebase,
@@ -31,11 +32,13 @@ from sqlalchemy.orm import Session
 from app.adapters.blobstore_s3 import get_blobstore
 from app.capture.blob_ingest import pcm_to_flac_blob
 from app.capture.consent import record_disclosure
+from app.capture.persist import persist_capture_artifacts
 from app.capture.rtms_client import RtmsResult, RtmsSession, WebSocketConnector
 from app.capture.rtms_protocol import compute_webhook_validation_response
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import AudioTrack, CaptureSession, Meeting, Org, OrgConnection
+from app.db.models import CaptureSession, Meeting, Org, OrgConnection
+from app.interfaces.platform import AudioTrack, CaptureArtifacts, CaptureMode
 from app.orchestrator.pipeline import FIRST_STAGE, next_stage
 from app.orchestrator.queue import enqueue_stage
 
@@ -173,7 +176,24 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         blob_uri = await pcm_to_flac_blob(
             result.pcm_bytes, get_blobstore(), f"zoom-rtms/{org_id}/{session_id}"
         )
-        db.add(AudioTrack(org_id=org_id, capture_session_id=session.id, uri=blob_uri))
+        # Same persistence path as every other capture mode
+        # (app/capture/persist.py), not a hand-rolled second copy: turns
+        # result.roster/speaker_labels (docs/13-participant-identity-
+        # capture.md's "Option A" -- PARTICIPANT_JOIN/ACTIVE_SPEAKER_CHANGE
+        # events, see app/capture/rtms_client.py) into the same
+        # Participant/PlatformSpeakerLabel rows Meet/Teams/Zoom-cloud
+        # already produce, so identity resolution (app/speakers/identity.py)
+        # treats a live Zoom meeting no differently from any other mode.
+        persist_capture_artifacts(
+            db,
+            session,
+            CaptureArtifacts(
+                mode=CaptureMode.OFFICIAL_REALTIME,
+                audio_tracks=[AudioTrack(uri=blob_uri)],
+                roster=result.roster,
+                speaker_labels=result.speaker_labels,
+            ),
+        )
 
         record_disclosure(
             db,

@@ -7,7 +7,39 @@ worth nothing if the person is anonymous.
 
 This document plans name capture across **every** supported platform, not just Zoom.
 
-**Status: design only. Nothing here is implemented.**
+**Status update 2026-08-13 — Step 1–3 (Zoom RTMS Option A) implemented.**
+`rtms_protocol.py` now carries the verified `EVENT_SUBSCRIPTION`/`EVENT_UPDATE`/
+`RTMS_EVENT_TYPE` constants and a `build_event_subscription` message builder;
+`rtms_client.py` subscribes to `PARTICIPANT_JOIN`/`PARTICIPANT_LEAVE`/
+`ACTIVE_SPEAKER_CHANGE` on the signaling connection and now listens on it
+*concurrently* with the media connection (the real structural gap this section
+originally flagged — a live meeting previously stopped reading `signaling`
+entirely once media started), converting events into `RosterEntry`/
+`SpeakerLabelSpan` via a defensive `_EventTracker` that logs the raw payload on
+an unrecognized shape rather than guessing field names. `rtms_webhook.py` feeds
+the result through a newly-shared `app/capture/persist.py::persist_capture_artifacts`
+(extracted from `worker.py`, which now delegates to it too, so Mode A1/A2 use one
+persistence path, not two) — a live Zoom meeting now produces the same
+`Participant`/`PlatformSpeakerLabel` rows Meet/Teams/Zoom-cloud already did.
+Verified with 12 new/updated tests (491→503 passing), including an end-to-end
+webhook test proving a `PARTICIPANT_JOIN` + two `ACTIVE_SPEAKER_CHANGE` events
+land as real database rows, not just parsed in memory.
+
+**What's still unverified — stated plainly, not hidden by the above:** the exact
+`EVENT_UPDATE` payload shape (which key holds a joining participant's name) is
+not published in any source this session could reach — see the constants'
+docstring in `rtms_protocol.py`. The message-type and event-type *numbers* are
+pinned to Zoom's own reference implementation with the same rigor as every other
+constant in that file; the payload *shape* is deliberately handled by
+`_extract_participant`'s multi-candidate lookup plus a one-time warning log, so
+the real shape gets learned from the first real production webhook rather than
+assumed. Also unverified: whether `ACTIVE_SPEAKER_CHANGE` timing is precise
+enough for good span boundaries (risk 3 below), and the whole thing needs an
+actual live Zoom meeting to confirm end-to-end — everything above is proven
+against a faithful fake, not yet against Zoom's real servers.
+
+**Option B (per-participant audio streams), and platforms 2–4 below, remain design
+only.**
 
 ## A locked assumption that is now false
 
@@ -131,15 +163,15 @@ to match.
 
 ## Build order
 
-| Step | Work | Depends |
-|---|---|---|
-| 1 | Correct the false docstring in `rtms_client.py` | — |
-| 2 | Verify RTMS event wire shapes against Zoom's reference implementation | — |
-| 3 | Option A: participant events → `RosterEntry` + `SpeakerLabelSpan` | 2 |
-| 4 | End-to-end verification of Meet / Teams / Zoom-cloud label capture | — |
-| 5 | Roster/audio clock-offset check across all platforms | 3,4 |
-| 6 | Option B: per-participant RTMS streams → per-participant `AudioTrack` | 3 |
-| 7 | Product copy explaining the one-time naming step for uploads | — |
+| Step | Work | Depends | Status |
+|---|---|---|---|
+| 1 | Correct the false docstring in `rtms_client.py` | — | ✅ done |
+| 2 | Verify RTMS event wire shapes against Zoom's reference implementation | — | ✅ done for message/event-type numbers; payload shape still unverified, see status note above |
+| 3 | Option A: participant events → `RosterEntry` + `SpeakerLabelSpan` | 2 | ✅ done, tested; not yet confirmed against a real live meeting |
+| 4 | End-to-end verification of Meet / Teams / Zoom-cloud label capture | — | not started |
+| 5 | Roster/audio clock-offset check across all platforms | 3,4 | not started |
+| 6 | Option B: per-participant RTMS streams → per-participant `AudioTrack` | 3 | not started |
+| 7 | Product copy explaining the one-time naming step for uploads | — | not started |
 
 Steps 1 and 4 need no vendor work and can start immediately. Step 6 is the largest
 single accuracy win available anywhere in this system, and should not be attempted

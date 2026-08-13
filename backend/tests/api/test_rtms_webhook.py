@@ -1,6 +1,7 @@
 """Zoom RTMS webhook receiver — full flow via the FastAPI test client with a
 fake WebSocketConnector injected, no real network."""
 
+import asyncio
 import json
 
 import pytest
@@ -14,7 +15,9 @@ from app.db.models import (
     Meeting,
     Org,
     OrgConnection,
+    Participant,
     PipelineJob,
+    PlatformSpeakerLabel,
 )
 
 
@@ -27,6 +30,11 @@ class FakeWsConn:
         self.sent.append(data if isinstance(data, str) else data.decode())
 
     async def recv(self):
+        # A real websocket recv() always suspends until a frame arrives --
+        # RtmsSession.run() relies on that to let its concurrent signaling
+        # event loop actually get scheduled (see app/capture/rtms_client.py
+        # and tests/capture/test_rtms_client.py's identical fix).
+        await asyncio.sleep(0)
         return self._scripted_recv.pop(0)
 
     async def close(self) -> None:
@@ -151,6 +159,118 @@ async def test_rtms_started_then_stopped_finalizes_capture_session(client, db_se
     # stage right after acquire, same as every other capture mode, so its
     # mixed-audio session gets speaker separation like Mode D/A2 do.
     assert job.stage == "diarize"
+
+
+async def test_rtms_stopped_persists_roster_and_speaker_labels(client, db_session):
+    """docs/13-participant-identity-capture.md's Option A, end to end
+    through the real webhook (not just RtmsSession in isolation): a
+    PARTICIPANT_JOIN + ACTIVE_SPEAKER_CHANGE event pair reaching
+    rtms_stopped must land as real Participant/PlatformSpeakerLabel rows,
+    the same shape identity resolution already consumes for Meet/Teams."""
+    import time
+
+    now_ms = time.time() * 1000.0
+    signaling_conn = FakeWsConn(
+        scripted_recv=[
+            json.dumps(
+                {
+                    "msg_type": 2,
+                    "media_server": {"server_urls": {"audio": "ws://fake-media/audio"}},
+                }
+            ),
+            json.dumps(
+                {
+                    "msg_type": 6,  # EVENT_UPDATE
+                    "content": {
+                        "event_type": 3,  # PARTICIPANT_JOIN
+                        "user_id": "u1",
+                        "user_name": "Nimal",
+                        "timestamp": now_ms,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "msg_type": 6,
+                    "content": {
+                        "event_type": 2,  # ACTIVE_SPEAKER_CHANGE
+                        "user_id": "u1",
+                        "user_name": "Nimal",
+                        "timestamp": now_ms + 500,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "msg_type": 6,
+                    "content": {
+                        "event_type": 2,
+                        "user_id": "u2",
+                        "user_name": "Kamal",
+                        "timestamp": now_ms + 3000,
+                    },
+                }
+            ),
+        ]
+    )
+    media_conn = FakeWsConn(
+        scripted_recv=[
+            json.dumps({"msg_type": 4}),
+            b"\x01\x02\xff",
+            # Slack (see test_rtms_client.py's identical comment) so the
+            # concurrent signaling event loop has room to drain before the
+            # media loop reaches STREAM_STATE_TERMINATED.
+            *(json.dumps({"msg_type": 12, "timestamp": i}) for i in range(5)),
+            json.dumps({"msg_type": 8, "state": 4, "reason": "STOP_BC_MEETING_ENDED"}),
+        ]
+    )
+    rtms_webhook.set_websocket_connector(FakeConnector(signaling_conn, media_conn))
+
+    started_resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        json={
+            "event": "meeting.rtms_started",
+            "payload": {
+                "meeting_uuid": "muid-roster",
+                "operator_id": "op-1",
+                "rtms_stream_id": "stream-roster",
+                "server_urls": "ws://fake-signaling",
+            },
+        },
+    )
+    assert started_resp.status_code == 200
+
+    meeting = db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-roster").one()
+    session = db_session.query(CaptureSession).filter(CaptureSession.meeting_id == meeting.id).one()
+
+    stopped_resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        json={
+            "event": "meeting.rtms_stopped",
+            "payload": {
+                "meeting_uuid": "muid-roster",
+                "rtms_stream_id": "stream-roster",
+                "stop_reason": 6,
+            },
+        },
+    )
+    assert stopped_resp.status_code == 200
+
+    participants = (
+        db_session.query(Participant).filter(Participant.capture_session_id == session.id).all()
+    )
+    assert len(participants) == 1
+    assert participants[0].display_name == "Nimal"
+
+    labels = (
+        db_session.query(PlatformSpeakerLabel)
+        .filter(PlatformSpeakerLabel.capture_session_id == session.id)
+        .all()
+    )
+    assert len(labels) == 1
+    assert labels[0].display_name == "Nimal"
+    assert labels[0].provider == "A1"
+    assert labels[0].end_s > labels[0].start_s
 
 
 def test_rtms_stopped_unknown_stream_404s(client):
