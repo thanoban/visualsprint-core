@@ -61,6 +61,8 @@ jobs:
           API_SECRETS="${API_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
           API_SECRETS="${API_SECRETS},VS_JIRA_OAUTH_CLIENT_ID=visualsprint-jira-oauth-client-id:latest"
           API_SECRETS="${API_SECRETS},VS_JIRA_OAUTH_CLIENT_SECRET=visualsprint-jira-oauth-client-secret:latest"
+          API_SECRETS="${API_SECRETS},VS_GOOGLE_OAUTH_CLIENT_ID=visualsprint-google-oauth-client-id:latest"
+          API_SECRETS="${API_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
           gcloud run deploy visualsprint-api \
             --image "${REGISTRY}/api:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
