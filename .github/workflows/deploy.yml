@@ -105,13 +105,39 @@ jobs:
       # an always-on instance.
       - name: Deploy agents to Cloud Run
         run: |
+          AGENTS_SECRETS="VS_DATABASE_URL=visualsprint-database-url:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest"
+          # OAuth client credentials -- the worker needs its own copy of
+          # these, not just `api`. Real gap found live: the calendar-sync
+          # sweep (app/orchestrator/worker.py::_sync_all_calendars, which
+          # only this service runs) calls build_org_token_provider ->
+          # get_provider_config, which raises OAuthNotConfiguredError
+          # without these -- silently degrading every connection to
+          # "calendar_sync.unknown_provider" even though the OAuth grant
+          # itself succeeded and the CalendarConnection row is real.
+          # Google/Microsoft: calendar sync + Meet/Teams artifact pulling.
+          # Zoom (OAuth app, not the S2S/RTMS one): cloud-recording
+          # artifact pulling (Mode A2). Jira: work-tracking status sweep.
+          # Slack and VS_OAUTH_STATE_SECRET stay api-only -- nothing this
+          # service does touches either.
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_GOOGLE_OAUTH_CLIENT_ID=visualsprint-google-oauth-client-id:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_ZOOM_OAUTH_CLIENT_ID=visualsprint-zoom-oauth-client-id:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_ZOOM_OAUTH_CLIENT_SECRET=visualsprint-zoom-oauth-client-secret:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_JIRA_OAUTH_CLIENT_ID=visualsprint-jira-oauth-client-id:latest"
+          AGENTS_SECRETS="${AGENTS_SECRETS},VS_JIRA_OAUTH_CLIENT_SECRET=visualsprint-jira-oauth-client-secret:latest"
           gcloud run deploy visualsprint-agents \
             --image "${REGISTRY}/agents:${{ github.sha }}" \
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --command python \
             --args="-m,app.orchestrator.worker" \
-            --set-secrets="VS_DATABASE_URL=visualsprint-database-url:latest,/secrets/google-speech-credentials.json=visualsprint-google-speech-credentials:latest,VS_AZURE_SPEECH_KEY=visualsprint-azure-speech-key:latest,VS_AZURE_SPEECH_REGION=visualsprint-azure-speech-region:latest,VS_HUGGINGFACE_TOKEN=visualsprint-huggingface-token:latest" \
+            --set-secrets="$AGENTS_SECRETS" \
             --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http" \
             --timeout=600 \
             --min-instances=0 --max-instances=2 \
