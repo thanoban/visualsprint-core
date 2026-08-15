@@ -569,7 +569,7 @@ def test_callback_creates_a_microsoft_calendar_connection(client, db_session):
     state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/organizations/oauth2/v2.0/token":
+        if request.url.path == "/common/oauth2/v2.0/token":
             return httpx.Response(
                 200, json={"access_token": "ms-token", "refresh_token": "rt-1", "expires_in": 3600}
             )
@@ -606,7 +606,7 @@ def test_callback_falls_back_to_user_principal_name_when_mail_is_null(client, db
     state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/organizations/oauth2/v2.0/token":
+        if request.url.path == "/common/oauth2/v2.0/token":
             return httpx.Response(200, json={"access_token": "ms-token", "expires_in": 3600})
         return httpx.Response(
             200, json={"mail": None, "userPrincipalName": "ops@acme.onmicrosoft.com"}

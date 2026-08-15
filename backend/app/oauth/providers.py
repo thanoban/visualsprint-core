@@ -156,9 +156,12 @@ def zoom_config(settings: Settings) -> OAuthProviderConfig:
 
 
 def microsoft_config(settings: Settings) -> OAuthProviderConfig:
-    """Azure AD v2.0 endpoint, "organizations" tenant (not "common") --
-    this product has no use for personal Microsoft accounts, only work/
-    school accounts with Teams/Exchange calendars behind them."""
+    """Azure AD v2.0 endpoint, "common" tenant -- accepts both work/school
+    and personal Microsoft accounts. A personal account won't have a Teams/
+    Exchange calendar behind it, so Mode A2 capture and calendar watch
+    degrade to "nothing found" for that account rather than failing the
+    connection itself; same non-fatal-degrade shape as every other optional
+    integration in this codebase."""
     return OAuthProviderConfig(
         provider="microsoft",
         client_id=_require(
@@ -167,8 +170,8 @@ def microsoft_config(settings: Settings) -> OAuthProviderConfig:
         client_secret=_require(
             settings.microsoft_oauth_client_secret, setting_name="VS_MICROSOFT_OAUTH_CLIENT_SECRET"
         ),
-        authorize_url="https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
-        token_url="https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+        authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
         # offline_access -> refresh_token issued (Graph tokens are short-lived
         # by design, unlike Google's). User.Read resolves the connected
         # account's email at connect time; Calendars.Read backs
