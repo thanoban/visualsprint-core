@@ -146,10 +146,12 @@ def zoom_config(settings: Settings) -> OAuthProviderConfig:
         ),
         authorize_url="https://zoom.us/oauth/authorize",
         token_url="https://zoom.us/oauth/token",
-        # cloud_recording:read for Mode A2, rtms:read for Mode A1 -- exact
-        # granular-scope strings to confirm against the app's own
-        # scope-picker UI when registering, Zoom's naming has shifted before.
-        scope="cloud_recording:read:list_recording_files:admin rtms:read:list_meeting_rtms_app:admin",
+        # user:read:user — lets us call /v2/users/me to get account_id,
+        # which is the only thing this General OAuth grant does (RTMS stream
+        # auth uses the separate Server-to-Server app credentials).
+        # Mode A2 cloud-recording scopes can be added here later once RTMS
+        # capture is proven end-to-end.
+        scope="user:read:user",
     )
 
 

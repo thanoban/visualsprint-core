@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     # --- API ---
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
     # VS_CORS_ALLOWED_ORIGINS=["https://app.example.com","https://staging.example.com"]
-    cors_allowed_origins: list[str] = ["http://localhost:3000"]
+    cors_allowed_origins: list[str] = ["https://visualsprint-web-5ieahiycsa-uw.a.run.app"]
 
 
 @lru_cache
