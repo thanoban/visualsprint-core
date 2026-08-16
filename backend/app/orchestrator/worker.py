@@ -8,7 +8,7 @@ phase is built — the walking skeleton runs end-to-end from day one.
 import asyncio
 import traceback
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -377,6 +377,69 @@ async def _run_work_tracking_sweep(db: object) -> None:
             log.warning("work_tracking.failed", org=org.id, error=str(exc))
 
 
+_bot_tasks: set[asyncio.Task] = set()
+
+
+async def _run_bot_dispatch_sweep(db: object) -> None:
+    """Launches due BotSession rows as background asyncio tasks
+    (app/bot/runner.py, Mode B). Only meaningful in a long-running worker
+    process (local dev's `main()` loop below, or a dedicated always-on bot
+    service) -- a bot must stay attached to its browser page for the whole
+    meeting, unlike every other sweep here which finishes in seconds. This
+    is fundamentally incompatible with the scale-to-zero Cloud Run pipeline
+    worker (`run_bounded_pass`); production deployment needs the bot
+    dispatcher running as its own always-on service, not the bounded-pass
+    endpoint -- see Settings.bot_dispatch_enabled, off by default for
+    exactly this reason. Concurrency is capped at `bot_max_concurrent` per
+    process -- each in-flight bot holds an open headless-Chromium page for
+    the meeting's duration, a real resource ceiling, not just a rate limit.
+
+    Wrapped in its own try/except, same resilience convention as every
+    other sweep in this registry (_run_retention_sweep etc.) -- an
+    unexpected error here (a bad row, a transient DB hiccup) must not abort
+    run_due_sweeps partway through and skip every sweep still queued behind
+    it."""
+    if not get_settings().bot_dispatch_enabled:
+        return
+
+    from sqlalchemy import select
+
+    from app.bot.runner import run_bot_session
+    from app.db.models import BotSession, BotStatus
+
+    settings = get_settings()
+    _bot_tasks.difference_update({t for t in _bot_tasks if t.done()})
+    slots = settings.bot_max_concurrent - len(_bot_tasks)
+    if slots <= 0:
+        return
+
+    try:
+        cutoff = datetime.now(UTC) + timedelta(seconds=settings.bot_dispatch_lookahead_s)
+        due = (
+            db.execute(
+                select(BotSession)
+                .where(
+                    BotSession.status == BotStatus.SCHEDULED, BotSession.scheduled_start <= cutoff
+                )
+                .order_by(BotSession.scheduled_start)
+                .limit(slots)
+            )
+            .scalars()
+            .all()
+        )
+        for bot in due:
+            bot.status = BotStatus.JOINING  # claim immediately -- avoid double-dispatch next sweep
+            db.flush()
+            task = asyncio.create_task(run_bot_session(bot.id))
+            _bot_tasks.add(task)
+            log.info("bot_dispatch.launched", bot_session=bot.id, platform=bot.platform)
+        if due:
+            db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.warning("bot_dispatch.failed", error=str(exc))
+
+
 async def _run_longitudinal_sweep(db: object) -> None:
     from datetime import timedelta
 
@@ -433,10 +496,16 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
         select(AudioTrack.id).where(AudioTrack.capture_session_id == session.id).limit(1)
     ).scalar_one_or_none()
 
-    if session.mode == "D":
+    if session.mode in ("D", "B"):
+        # Mode D: audio landed at upload time (api/upload.py). Mode B: audio
+        # landed when app/bot/runner.py's _finalize_capture persisted it
+        # after the bot left the meeting -- both are already-complete
+        # CaptureArtifacts by the time this stage runs, so acquire's only
+        # job is confirming that, same as Mode D.
         if has_track is None:
             raise RuntimeError(
-                "mode D session has no audio_track — upload endpoint should have written one"
+                f"mode {session.mode} session has no audio_track — "
+                "the capture step should have written one before enqueueing this stage"
             )
         return
 
@@ -1069,6 +1138,7 @@ def _sweep_registry(settings) -> list[tuple[str, float, Callable[[object], Await
         ("action_triggers", settings.action_trigger_interval_s, _run_action_triggers),
         ("lifecycle_sweep", settings.lifecycle_sweep_interval_s, _run_lifecycle_sweep),
         ("work_tracking", settings.work_tracking_interval_s, _run_work_tracking_sweep),
+        ("bot_dispatch", settings.bot_dispatch_interval_s, _run_bot_dispatch_sweep),
     ]
     if settings.longitudinal_analysis_enabled:
         sweeps.append(

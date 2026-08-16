@@ -54,6 +54,9 @@ storage = [
     "botocore>=1.35",  # SigV4 signing only, not the full boto3 SDK -- see adapters/blobstore_s3.py
     "google-cloud-secret-manager>=2.20",  # see adapters/secretstore_gcp.py
 ]
+bot = [
+    "playwright>=1.47",  # Mode B guest-bot join (app/bot/, app/adapters/bot_*.py)
+]
 
 [build-system]
 requires = ["setuptools>=68"]

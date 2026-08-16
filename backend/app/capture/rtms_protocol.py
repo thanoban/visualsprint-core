@@ -140,3 +140,26 @@ def compute_webhook_validation_response(plain_token: str, webhook_secret_token: 
         webhook_secret_token.encode(), plain_token.encode(), sha256
     ).hexdigest()
     return {"plainToken": plain_token, "encryptedToken": encrypted_token}
+
+
+def compute_webhook_signature(raw_body: bytes, timestamp: str, webhook_secret_token: str) -> str:
+    """Zoom's documented scheme for every webhook event AFTER the initial
+    endpoint.url_validation handshake: v0=HMAC-SHA256("v0:{timestamp}:{raw_body}").
+    Uses raw_body verbatim (not a re-serialized json.dumps) -- Zoom signs the
+    exact bytes it sent, and re-serializing could reorder keys/whitespace and
+    silently break every signature check."""
+    message = f"v0:{timestamp}:{raw_body.decode('utf-8')}"
+    digest = hmac.new(webhook_secret_token.encode(), message.encode(), sha256).hexdigest()
+    return f"v0={digest}"
+
+
+def verify_webhook_signature(
+    raw_body: bytes, timestamp: str | None, signature: str | None, webhook_secret_token: str
+) -> bool:
+    """Rejects a forged webhook: without this, anyone who discovers the
+    endpoint URL could POST a fake meeting.rtms_started and we'd start
+    streaming/persisting a session that was never authorized by Zoom."""
+    if not timestamp or not signature:
+        return False
+    expected = compute_webhook_signature(raw_body, timestamp, webhook_secret_token)
+    return hmac.compare_digest(expected, signature)

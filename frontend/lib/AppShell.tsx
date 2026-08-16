@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { AppSidebar } from "./AppSidebar";
 
-const NO_SIDEBAR_PATHS = new Set(["/login", "/welcome"]);
+const NO_SIDEBAR_PATHS = new Set(["/login", "/welcome", "/privacy", "/terms", "/support"]);
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

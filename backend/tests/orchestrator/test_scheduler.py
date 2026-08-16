@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
-from app.db.models import CalendarConnection, CaptureSession, Meeting, Org, PipelineJob
+from app.db.models import BotSession, BotStatus, CalendarConnection, CaptureSession, Meeting, Org, PipelineJob
 from app.interfaces.calendar import CalendarEvent
 from app.orchestrator.scheduler import sync_calendar_connection
 
@@ -168,6 +168,50 @@ async def test_sync_is_idempotent_on_repeated_calls(db):
     assert db.query(Meeting).count() == 1
     assert db.query(CaptureSession).count() == 1
     assert db.query(PipelineJob).count() == 1
+
+
+async def test_meet_event_also_schedules_a_bot_session(db):
+    """Meet is Mode B primary (no recording permission needed) alongside the
+    A2 session -- docs/03-capture.md's architecture pivot for orgs that
+    can't/won't grant platform recording access."""
+    org, connection = _seed_org(db)
+    adapter = FakeCalendarAdapter(
+        [_event("evt-meet", conferencing_text="https://meet.google.com/abc-defg-hij")]
+    )
+
+    await sync_calendar_connection(db, connection, adapter)
+
+    bot = db.query(BotSession).one()
+    meeting = db.query(Meeting).one()
+    assert bot.meeting_id == meeting.id
+    assert bot.platform == "meet"
+    assert bot.join_url == "https://meet.google.com/abc-defg-hij"
+    assert bot.status == BotStatus.SCHEDULED
+    assert bot.scheduled_start.replace(tzinfo=None) == meeting.scheduled_start.replace(tzinfo=None)
+
+
+async def test_teams_event_also_schedules_a_bot_session_with_the_full_join_url(db):
+    org, connection = _seed_org(db)
+    join_url = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0"
+    adapter = FakeCalendarAdapter([_event("evt-teams", conferencing_text=join_url)])
+
+    await sync_calendar_connection(db, connection, adapter)
+
+    bot = db.query(BotSession).one()
+    assert bot.platform == "teams"
+    assert bot.join_url == join_url
+
+
+async def test_zoom_event_does_not_schedule_a_bot_session(db):
+    """Zoom's primary live path is RTMS (Mode A1, dispatched via the webhook,
+    not the scheduler) -- a web bot is a fallback that must be requested
+    explicitly, not launched for every Zoom calendar event."""
+    org, connection = _seed_org(db)
+    adapter = FakeCalendarAdapter([_event("evt-zoom")])  # default conferencing_text is a zoom link
+
+    await sync_calendar_connection(db, connection, adapter)
+
+    assert db.query(BotSession).count() == 0
 
 
 async def test_raises_clearly_when_org_not_found(db):

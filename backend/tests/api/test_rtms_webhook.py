@@ -3,10 +3,12 @@ fake WebSocketConnector injected, no real network."""
 
 import asyncio
 import json
+import time
 
 import pytest
 
 from app.api import rtms_webhook
+from app.capture.rtms_protocol import compute_webhook_signature
 from app.config import get_settings
 from app.db.models import (
     AudioTrack,
@@ -19,6 +21,25 @@ from app.db.models import (
     PipelineJob,
     PlatformSpeakerLabel,
 )
+
+
+def _signed_post(client, event: str, payload: dict):
+    """Every real Zoom webhook event (other than the initial url_validation
+    handshake) must be signed -- see rtms_protocol.verify_webhook_signature.
+    Signs the exact bytes sent, matching what the server verifies against."""
+    body = json.dumps({"event": event, "payload": payload}).encode()
+    timestamp = str(int(time.time() * 1000))
+    settings = get_settings()
+    signature = compute_webhook_signature(body, timestamp, settings.zoom_webhook_secret_token)
+    return client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-zm-request-timestamp": timestamp,
+            "x-zm-signature": signature,
+        },
+    )
 
 
 class FakeWsConn:
@@ -100,16 +121,14 @@ def test_url_validation_challenge(client):
 
 
 async def test_rtms_started_then_stopped_finalizes_capture_session(client, db_session):
-    started_resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_started",
-            "payload": {
-                "meeting_uuid": "muid-1",
-                "operator_id": "op-1",
-                "rtms_stream_id": "stream-1",
-                "server_urls": "ws://fake-signaling",
-            },
+    started_resp = _signed_post(
+        client,
+        "meeting.rtms_started",
+        {
+            "meeting_uuid": "muid-1",
+            "operator_id": "op-1",
+            "rtms_stream_id": "stream-1",
+            "server_urls": "ws://fake-signaling",
         },
     )
     assert started_resp.status_code == 200
@@ -119,15 +138,13 @@ async def test_rtms_started_then_stopped_finalizes_capture_session(client, db_se
     session = db_session.query(CaptureSession).filter(CaptureSession.meeting_id == meeting.id).one()
     assert session.mode == "A1"
 
-    stopped_resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_stopped",
-            "payload": {
-                "meeting_uuid": "muid-1",
-                "rtms_stream_id": "stream-1",
-                "stop_reason": 6,
-            },
+    stopped_resp = _signed_post(
+        client,
+        "meeting.rtms_stopped",
+        {
+            "meeting_uuid": "muid-1",
+            "rtms_stream_id": "stream-1",
+            "stop_reason": 6,
         },
     )
 
@@ -226,16 +243,14 @@ async def test_rtms_stopped_persists_roster_and_speaker_labels(client, db_sessio
     )
     rtms_webhook.set_websocket_connector(FakeConnector(signaling_conn, media_conn))
 
-    started_resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_started",
-            "payload": {
-                "meeting_uuid": "muid-roster",
-                "operator_id": "op-1",
-                "rtms_stream_id": "stream-roster",
-                "server_urls": "ws://fake-signaling",
-            },
+    started_resp = _signed_post(
+        client,
+        "meeting.rtms_started",
+        {
+            "meeting_uuid": "muid-roster",
+            "operator_id": "op-1",
+            "rtms_stream_id": "stream-roster",
+            "server_urls": "ws://fake-signaling",
         },
     )
     assert started_resp.status_code == 200
@@ -243,15 +258,13 @@ async def test_rtms_stopped_persists_roster_and_speaker_labels(client, db_sessio
     meeting = db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-roster").one()
     session = db_session.query(CaptureSession).filter(CaptureSession.meeting_id == meeting.id).one()
 
-    stopped_resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_stopped",
-            "payload": {
-                "meeting_uuid": "muid-roster",
-                "rtms_stream_id": "stream-roster",
-                "stop_reason": 6,
-            },
+    stopped_resp = _signed_post(
+        client,
+        "meeting.rtms_stopped",
+        {
+            "meeting_uuid": "muid-roster",
+            "rtms_stream_id": "stream-roster",
+            "stop_reason": 6,
         },
     )
     assert stopped_resp.status_code == 200
@@ -274,23 +287,59 @@ async def test_rtms_stopped_persists_roster_and_speaker_labels(client, db_sessio
 
 
 def test_rtms_stopped_unknown_stream_404s(client):
-    resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_stopped",
-            "payload": {"meeting_uuid": "muid-x", "rtms_stream_id": "unknown", "stop_reason": 1},
-        },
+    resp = _signed_post(
+        client,
+        "meeting.rtms_stopped",
+        {"meeting_uuid": "muid-x", "rtms_stream_id": "unknown", "stop_reason": 1},
     )
 
     assert resp.status_code == 404
 
 
 def test_unhandled_event_400s(client):
-    resp = client.post(
-        "/api/v1/webhooks/zoom/rtms", json={"event": "something.else", "payload": {}}
-    )
+    resp = _signed_post(client, "something.else", {})
 
     assert resp.status_code == 400
+
+
+def test_missing_signature_is_rejected(client):
+    resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        json={
+            "event": "meeting.rtms_started",
+            "payload": {
+                "meeting_uuid": "muid-forged",
+                "rtms_stream_id": "stream-forged",
+                "server_urls": "ws://fake-signaling",
+            },
+        },
+    )
+
+    assert resp.status_code == 401
+
+
+def test_wrong_signature_is_rejected(client):
+    body = json.dumps(
+        {
+            "event": "meeting.rtms_started",
+            "payload": {
+                "meeting_uuid": "muid-forged",
+                "rtms_stream_id": "stream-forged",
+                "server_urls": "ws://fake-signaling",
+            },
+        }
+    ).encode()
+    resp = client.post(
+        "/api/v1/webhooks/zoom/rtms",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-zm-request-timestamp": "12345",
+            "x-zm-signature": "v0=not-the-right-signature",
+        },
+    )
+
+    assert resp.status_code == 401
 
 
 def test_resolve_org_for_zoom_account_falls_back_to_default_when_account_id_is_none(db_session):
@@ -340,16 +389,14 @@ async def test_rtms_started_routes_to_the_connected_org_not_default(client, db_s
     )
     db_session.commit()
 
-    resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_started",
-            "payload": {
-                "account_id": "zoom-account-abc",
-                "meeting_uuid": "muid-acme",
-                "rtms_stream_id": "stream-acme",
-                "server_urls": "ws://fake-signaling",
-            },
+    resp = _signed_post(
+        client,
+        "meeting.rtms_started",
+        {
+            "account_id": "zoom-account-abc",
+            "meeting_uuid": "muid-acme",
+            "rtms_stream_id": "stream-acme",
+            "server_urls": "ws://fake-signaling",
         },
     )
     assert resp.status_code == 200
@@ -359,16 +406,14 @@ async def test_rtms_started_routes_to_the_connected_org_not_default(client, db_s
 
 
 async def test_rtms_started_with_unrecognized_account_id_falls_back_to_default(client, db_session):
-    resp = client.post(
-        "/api/v1/webhooks/zoom/rtms",
-        json={
-            "event": "meeting.rtms_started",
-            "payload": {
-                "account_id": "never-connected",
-                "meeting_uuid": "muid-fallback",
-                "rtms_stream_id": "stream-fallback",
-                "server_urls": "ws://fake-signaling",
-            },
+    resp = _signed_post(
+        client,
+        "meeting.rtms_started",
+        {
+            "account_id": "never-connected",
+            "meeting_uuid": "muid-fallback",
+            "rtms_stream_id": "stream-fallback",
+            "server_urls": "ws://fake-signaling",
         },
     )
     assert resp.status_code == 200

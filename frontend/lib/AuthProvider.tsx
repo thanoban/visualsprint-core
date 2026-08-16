@@ -35,7 +35,7 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-const PUBLIC_PATHS = new Set(["/login", "/welcome"]);
+const PUBLIC_PATHS = new Set(["/login", "/welcome", "/privacy", "/terms", "/support"]);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);

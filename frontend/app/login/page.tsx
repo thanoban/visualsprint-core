@@ -413,8 +413,15 @@ export default function LoginPage() {
         </div>
 
         <p style={{ fontSize: 11.5, color: LIGHT.textFaint, lineHeight: 1.6, maxWidth: 400, margin: "0 auto" }}>
-          By continuing you agree to our Terms and Privacy Policy. VisualSprint stores meeting audio and
-          transcripts under per-org data residency — see{" "}
+          By continuing you agree to our{" "}
+          <a href="/terms" style={{ color: LIGHT.textFaint, textDecoration: "underline" }}>
+            Terms
+          </a>{" "}
+          and{" "}
+          <a href="/privacy" style={{ color: LIGHT.textFaint, textDecoration: "underline" }}>
+            Privacy Policy
+          </a>
+          . VisualSprint stores meeting audio and transcripts under per-org data residency — see{" "}
           <a href="/data-rights" style={{ color: LIGHT.textFaint, textDecoration: "underline" }}>
             data rights
           </a>

@@ -235,6 +235,59 @@ class CaptureSession(TimestampMixin, Base):
     meeting: Mapped[Meeting] = relationship()
 
 
+class BotStatus(enum.StrEnum):
+    """Lifecycle of one Mode B (bot-join) attempt (docs/03-capture.md Mode B).
+
+    Distinct from CaptureState: a BotSession tracks the *join/record* half of
+    capture (did the bot get into the room and record audio); CaptureState
+    tracks the *pipeline* half (acquire -> ... -> report) that starts once
+    the bot's recording lands in blob storage. One BotSession feeds at most
+    one CaptureSession.
+    """
+
+    SCHEDULED = "scheduled"
+    JOINING = "joining"
+    IN_LOBBY = "in_lobby"
+    LIVE = "live"
+    ENDED = "ended"
+    FAILED = "failed"
+    LOBBY_TIMEOUT = "lobby_timeout"
+
+
+class BotSession(TimestampMixin, Base):
+    """One dispatched meeting-bot attempt (app/bot/runner.py). Created by the
+    scheduler for calendar-discovered Meet/Teams meetings, or on-demand for
+    an instant "capture now" request; a worker sweep launches it around
+    `scheduled_start` and updates `status` as the join progresses. Getting
+    stuck in the lobby and never admitted is a first-class outcome
+    (LOBBY_TIMEOUT), not a hang -- see docs/03-capture.md's note on Teams's
+    "Unverified" guest-bot gate."""
+
+    __tablename__ = "bot_session"
+    __table_args__ = (
+        Index("ix_botsession_org_status", "org_id", "status"),
+        Index("ix_botsession_scheduled_start", "scheduled_start"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    meeting_id: Mapped[str | None] = mapped_column(ForeignKey("meeting.id"), default=None)
+    platform: Mapped[str] = mapped_column(String(32))  # meet | teams | zoom -- matches Meeting.platform
+    join_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[BotStatus] = mapped_column(
+        Enum(BotStatus, native_enum=False, length=32), default=BotStatus.SCHEDULED
+    )
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    lobby_timeout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    audio_blob_uri: Mapped[str | None] = mapped_column(String(1000), default=None)
+    capture_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("capture_session.id"), default=None
+    )
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
 class AudioTrack(TimestampMixin, Base):
     """One acquired audio track for a capture session — mirrors
     interfaces.platform.AudioTrack. Mode D writes this directly at upload time;

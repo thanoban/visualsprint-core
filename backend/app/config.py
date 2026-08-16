@@ -143,6 +143,33 @@ class Settings(BaseSettings):
     action_trigger_interval_s: float = 300.0
     lifecycle_sweep_interval_s: float = 300.0
     work_tracking_interval_s: float = 900.0
+    # How often the worker checks for BotSession rows due to join
+    # (app/bot/runner.py, Mode B). Deliberately tighter than calendar sync --
+    # a bot that dispatches even a minute or two late can miss the start of
+    # a short meeting, whereas calendar events themselves rarely change
+    # minute-to-minute.
+    bot_dispatch_interval_s: float = 60.0
+    # A BotSession becomes eligible this far ahead of its scheduled_start so
+    # the join has time to complete before the meeting actually begins.
+    bot_dispatch_lookahead_s: float = 120.0
+    # Caps concurrently-live bot joins per worker process -- each one holds
+    # an open headless-Chromium page for the duration of a meeting, so this
+    # is a real resource ceiling, not just a rate limit.
+    bot_max_concurrent: int = 3
+    # Off by default -- a live bot must stay attached to its browser page
+    # for the whole meeting (up to MAX_MEETING_S in app/bot/runner.py),
+    # which the scale-to-zero `visualsprint-agents` Cloud Run service
+    # (--cpu-throttling, --min-instances=0, invoked briefly by Cloud
+    # Scheduler) cannot provide: the container is starved/recycled the
+    # moment the triggering HTTP request completes, so a bot join would get
+    # silently cut off mid-meeting rather than fail loudly. Flip this to
+    # true only once Mode B has its own always-on host (a Cloud Run service
+    # with --min-instances=1 --no-cpu-throttling, or an equivalent VM) --
+    # that is a real recurring cost (~$60+/month, see .github/workflows/
+    # deploy.yml's cost notes), not something to switch on implicitly.
+    # calendar sync still creates BotSession rows when this is off; they
+    # simply sit SCHEDULED, un-dispatched, until enabled.
+    bot_dispatch_enabled: bool = False
     # Person-level analysis can multiply LLM spend through the high-stakes
     # ensemble. It is fully wired but opt-in so local/test deployments and
     # budget-constrained projects never incur surprise vendor calls.

@@ -19,13 +19,32 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.adapters.calendar_common import detect_conferencing
-from app.db.models import CalendarConnection, CaptureSession, Meeting, Org
+from app.db.models import BotSession, BotStatus, CalendarConnection, CaptureSession, Meeting, Org
 from app.interfaces.calendar import CalendarAdapter
 from app.orchestrator.queue import enqueue_pipeline
 
 log = structlog.get_logger()
 
 DEFAULT_SYNC_WINDOW = timedelta(hours=24)
+
+# Bot join URLs reconstructed from detect_conferencing's platform_meeting_id
+# (app/adapters/calendar_common.py). Meet/Teams get a bot dispatched
+# *alongside* the Mode A2 session below -- Mode B is the primary live-
+# capture path for those two platforms (no recording permission needed);
+# A2 stays wired as a secondary path for orgs where recording artifacts
+# happen to be available too. Zoom is excluded here: RTMS (Mode A1, wired
+# through the webhook, not the scheduler) is Zoom's primary path, and a web
+# bot is only dispatched as an explicit fallback -- not automatically for
+# every calendar event -- see docs/03-capture.md.
+_BOT_ELIGIBLE_PLATFORMS = {"meet", "teams"}
+
+
+def _bot_join_url(platform: str, platform_meeting_id: str) -> str | None:
+    if platform == "meet":
+        return f"https://meet.google.com/{platform_meeting_id}"
+    if platform == "teams":
+        return platform_meeting_id  # already the full meetup-join URL
+    return None
 # Grace period after a meeting ends before Mode A2's `acquire` stage first
 # tries to fetch the recording/transcript -- the platform needs time to
 # finish processing it. Retried automatically on failure regardless
@@ -114,6 +133,27 @@ async def sync_calendar_connection(
             platform=platform,
             run_at=(event.end_at + processing_delay).isoformat(),
         )
+
+        if platform in _BOT_ELIGIBLE_PLATFORMS:
+            join_url = _bot_join_url(platform, platform_meeting_id)
+            if join_url:
+                db.add(
+                    BotSession(
+                        org_id=org.id,
+                        meeting_id=meeting.id,
+                        platform=platform,
+                        join_url=join_url,
+                        status=BotStatus.SCHEDULED,
+                        scheduled_start=event.start_at,
+                    )
+                )
+                log.info(
+                    "scheduler.bot_scheduled",
+                    org=org.id,
+                    meeting=meeting.id,
+                    platform=platform,
+                    scheduled_start=event.start_at.isoformat(),
+                )
 
     db.commit()
     return created_session_ids
