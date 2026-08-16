@@ -25,6 +25,8 @@ because no second account had ever connected).
 """
 
 import asyncio
+import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -34,7 +36,10 @@ from app.capture.blob_ingest import pcm_to_flac_blob
 from app.capture.consent import record_disclosure
 from app.capture.persist import persist_capture_artifacts
 from app.capture.rtms_client import RtmsResult, RtmsSession, WebSocketConnector
-from app.capture.rtms_protocol import compute_webhook_validation_response
+from app.capture.rtms_protocol import (
+    compute_webhook_validation_response,
+    verify_webhook_signature,
+)
 from app.config import get_settings
 from app.db.base import get_db
 from app.db.models import CaptureSession, Meeting, Org, OrgConnection
@@ -43,6 +48,7 @@ from app.orchestrator.pipeline import FIRST_STAGE, next_stage
 from app.orchestrator.queue import enqueue_stage
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["rtms"])
+logger = logging.getLogger(__name__)
 
 # capture_session_id keyed by rtms_stream_id -- lets the rtms_stopped
 # webhook find the session started by the earlier rtms_started webhook.
@@ -117,17 +123,30 @@ async def _run_stream(
 
 @router.post("/zoom/rtms")
 async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> dict:
-    body = await request.json()
+    raw_body = await request.body()
+    body = json.loads(raw_body)
     event = body.get("event")
     payload = body.get("payload", {})
 
+    settings = get_settings()
+    if not settings.zoom_webhook_secret_token:
+        raise HTTPException(500, "zoom_webhook_secret_token not configured")
+
     if event == "endpoint.url_validation":
-        settings = get_settings()
-        if not settings.zoom_webhook_secret_token:
-            raise HTTPException(500, "zoom_webhook_secret_token not configured")
+        # The very first handshake, before Zoom has a verified endpoint --
+        # Zoom does not sign this one with x-zm-signature (nothing to sign
+        # with yet), so it's the one legitimate exception to the check below.
         return compute_webhook_validation_response(
             payload["plainToken"], settings.zoom_webhook_secret_token
         )
+
+    if not verify_webhook_signature(
+        raw_body,
+        request.headers.get("x-zm-request-timestamp"),
+        request.headers.get("x-zm-signature"),
+        settings.zoom_webhook_secret_token,
+    ):
+        raise HTTPException(401, "invalid or missing Zoom webhook signature")
 
     if event == "meeting.rtms_started":
         meeting_uuid = payload["meeting_uuid"]
@@ -221,4 +240,5 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         db.commit()
         return {"status": "finalized", "capture_session_id": session.id}
 
+    logger.warning("unhandled zoom webhook event %r, payload keys=%s", event, list(payload.keys()))
     raise HTTPException(400, f"unhandled event {event!r}")
