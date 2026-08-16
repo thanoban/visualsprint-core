@@ -175,9 +175,18 @@ def microsoft_config(settings: Settings) -> OAuthProviderConfig:
         # offline_access -> refresh_token issued (Graph tokens are short-lived
         # by design, unlike Google's). User.Read resolves the connected
         # account's email at connect time; Calendars.Read backs
-        # calendar_microsoft.py; OnlineMeetings.Read.All backs
-        # teams_adapter.py's Mode A2 capture.
-        scope="offline_access User.Read Calendars.Read OnlineMeetings.Read.All",
+        # calendar_microsoft.py.
+        #
+        # OnlineMeetings.Read.All (would back teams_adapter.py's Mode A2
+        # capture) is deliberately NOT requested here -- it's a Microsoft
+        # 365-for-business-only Graph permission that doesn't exist for
+        # personal/consumer Microsoft accounts, so requesting it up front
+        # makes Microsoft reject the *entire* grant with invalid_scope for
+        # any personal account, not just degrade that one capability.
+        # Teams Mode A2 capture is unavailable until this is requested via a
+        # separate incremental-consent step scoped to work/school accounts
+        # only -- not yet built.
+        scope="offline_access User.Read Calendars.Read",
     )
 
 
