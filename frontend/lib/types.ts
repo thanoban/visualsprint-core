@@ -55,6 +55,14 @@ export interface CaptureSessionStatus {
   error: string | null;
 }
 
+export interface InstantCaptureResponse {
+  platform: string;
+  dispatched: boolean;
+  meeting_id: string | null;
+  bot_session_id: string | null;
+  note: string;
+}
+
 // ---------------------------------------------------------------------------
 // Types for the report page. The endpoint that serves these does NOT exist
 // yet (other agents are building the pipeline that produces report data).

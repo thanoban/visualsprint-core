@@ -13,7 +13,12 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE_URL } from "@/lib/config";
 import { useAuth } from "@/lib/AuthProvider";
-import type { CaptureSessionState, CaptureSessionStatus, UploadResponse } from "@/lib/types";
+import type {
+  CaptureSessionState,
+  CaptureSessionStatus,
+  InstantCaptureResponse,
+  UploadResponse,
+} from "@/lib/types";
 
 const POLL_INTERVAL_MS = 2000;
 const sans = "'IBM Plex Sans', sans-serif";
@@ -46,6 +51,11 @@ export default function UploadPage() {
   const [pollError, setPollError] = useState<string | null>(null);
   const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [instantUrl, setInstantUrl] = useState("");
+  const [instantSubmitting, setInstantSubmitting] = useState(false);
+  const [instantError, setInstantError] = useState<string | null>(null);
+  const [instantResult, setInstantResult] = useState<InstantCaptureResponse | null>(null);
 
   useEffect(() => {
     return () => {
@@ -126,6 +136,45 @@ export default function UploadPage() {
     }
   }
 
+  async function handleInstantCapture(e: React.FormEvent) {
+    e.preventDefault();
+    if (!instantUrl.trim()) {
+      setInstantError("Paste a Zoom, Google Meet, or Teams link first.");
+      return;
+    }
+    if (!me) {
+      setInstantError("Still loading your account — try again in a moment.");
+      return;
+    }
+    setInstantSubmitting(true);
+    setInstantError(null);
+    setInstantResult(null);
+    try {
+      const res = await authedFetch(`/api/v1/orgs/${me.org.id}/capture/instant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: instantUrl.trim() }),
+      });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+          const body = await res.json();
+          if (body?.detail) detail = body.detail;
+        } catch {
+          // non-JSON error body
+        }
+        throw new Error(detail);
+      }
+      const data = (await res.json()) as InstantCaptureResponse;
+      setInstantResult(data);
+      setInstantUrl("");
+    } catch (err) {
+      setInstantError(err instanceof Error ? err.message : "Unknown error starting capture.");
+    } finally {
+      setInstantSubmitting(false);
+    }
+  }
+
   const currentStageIndex = stageIndexFor(status?.state);
   const failed = status?.state === "failed";
 
@@ -139,6 +188,63 @@ export default function UploadPage() {
       </header>
 
       <main style={{ padding: "28px 32px 64px", maxWidth: 840, display: "flex", flexDirection: "column", gap: 22 }}>
+        <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
+          <p style={{ fontSize: 14.5, fontWeight: 600, color: "var(--text)", margin: 0 }}>Capture a meeting happening right now</p>
+          <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "5px 0 16px" }}>
+            No calendar entry needed. Zoom meetings on a connected host account capture automatically —
+            for Google Meet or Teams, paste the meeting link to join now.
+          </p>
+          <form onSubmit={handleInstantCapture} style={{ display: "flex", gap: 10 }}>
+            <input
+              type="url"
+              value={instantUrl}
+              onChange={(e) => setInstantUrl(e.target.value)}
+              placeholder="https://meet.google.com/xxx-xxxx-xxx or a Teams/Zoom link"
+              style={{ flex: 1, fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--bg)", border: "1px solid var(--border-strong)", borderRadius: 8, padding: "10px 13px" }}
+            />
+            <button
+              type="submit"
+              disabled={instantSubmitting}
+              style={{
+                fontFamily: sans,
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: "#fff",
+                background: "var(--accent-strong)",
+                padding: "10px 20px",
+                borderRadius: 7,
+                border: "none",
+                cursor: instantSubmitting ? "default" : "pointer",
+                opacity: instantSubmitting ? 0.6 : 1,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {instantSubmitting ? "Starting…" : "Capture now"}
+            </button>
+          </form>
+
+          {instantError && (
+            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+              {instantError}
+            </p>
+          )}
+          {instantResult && (
+            <p
+              style={{
+                marginTop: 12,
+                borderRadius: 6,
+                padding: "8px 12px",
+                fontSize: 13,
+                background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-bg)" : "var(--evidence-bg)",
+                color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-strong)" : "var(--evidence)",
+                border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent)" : "var(--evidence)"}`,
+              }}
+            >
+              {instantResult.note}
+            </p>
+          )}
+        </section>
+
         <form onSubmit={handleSubmit}>
           <div
             style={{

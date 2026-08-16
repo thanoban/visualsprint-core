@@ -1,0 +1,116 @@
+"""Instant-meeting capture -- join a meeting that was never on a calendar.
+
+Calendar sync (app/orchestrator/scheduler.py) only ever sees meetings that
+exist as calendar events ahead of time. A meeting started ad hoc ("hop on a
+call now") has no such event, so it needs its own trigger. Zoom doesn't need
+one at all: RTMS (Mode A1, app/api/rtms_webhook.py) is tied to the host's
+Zoom account, not a calendar entry, so it already fires for every meeting
+that account starts, scheduled or not. Meet/Teams have no equivalent
+account-level hook, so this is the paste-a-link path the plan calls
+"Capture now" -- it creates the same BotSession row the scheduler would have
+created from a calendar event, just with scheduled_start=now instead of a
+future time.
+"""
+
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.adapters.calendar_common import BOT_ELIGIBLE_PLATFORMS, bot_join_url, detect_conferencing
+from app.auth.dependency import require_org_member
+from app.config import get_settings
+from app.db.base import get_db
+from app.db.models import BotSession, BotStatus, Meeting
+
+router = APIRouter(prefix="/api/v1/orgs/{org_id}/capture", tags=["capture"])
+
+
+class InstantCaptureRequest(BaseModel):
+    url: str
+    title: str = ""
+
+
+class InstantCaptureResponse(BaseModel):
+    platform: str
+    dispatched: bool
+    meeting_id: str | None = None
+    bot_session_id: str | None = None
+    note: str
+
+
+@router.post("/instant", response_model=InstantCaptureResponse)
+async def start_instant_capture(
+    org_id: str,
+    body: InstantCaptureRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> InstantCaptureResponse:
+    conferencing = detect_conferencing(body.url)
+    if conferencing is None:
+        raise HTTPException(
+            422, "couldn't recognize a Zoom, Google Meet, or Microsoft Teams link in that URL"
+        )
+    platform, platform_meeting_id = conferencing
+
+    if platform == "zoom":
+        # No BotSession to create: RTMS is tied to the host's Zoom account
+        # (app/api/rtms_webhook.py), not to this endpoint or a calendar
+        # entry, so it already captures this meeting automatically once it
+        # starts -- provided the org has connected Zoom and RTMS is enabled
+        # on the account. Nothing for this endpoint to dispatch.
+        return InstantCaptureResponse(
+            platform=platform,
+            dispatched=False,
+            note=(
+                "Zoom meetings are captured automatically via RTMS as soon as they start "
+                "on a connected host account -- no manual join needed."
+            ),
+        )
+
+    if platform not in BOT_ELIGIBLE_PLATFORMS:
+        raise HTTPException(422, f"instant capture isn't supported for platform {platform!r}")
+
+    join_url = bot_join_url(platform, platform_meeting_id)
+    if join_url is None:
+        raise HTTPException(422, f"couldn't build a join URL for platform {platform!r}")
+
+    now = datetime.now(UTC)
+    meeting = Meeting(
+        org_id=org_id,
+        title=body.title or "Instant meeting",
+        platform=platform,
+        platform_meeting_id=platform_meeting_id,
+        scheduled_start=now,
+    )
+    db.add(meeting)
+    db.flush()
+
+    bot = BotSession(
+        org_id=org_id,
+        meeting_id=meeting.id,
+        platform=platform,
+        join_url=join_url,
+        status=BotStatus.SCHEDULED,
+        scheduled_start=now,
+    )
+    db.add(bot)
+    db.commit()
+
+    settings = get_settings()
+    note = (
+        f"Bot is joining now as “VisualSprint Notetaker.”"
+        if settings.bot_dispatch_enabled
+        else (
+            "Bot capture is queued but not yet dispatched -- live bot join isn't turned on "
+            "for this deployment yet."
+        )
+    )
+    return InstantCaptureResponse(
+        platform=platform,
+        dispatched=settings.bot_dispatch_enabled,
+        meeting_id=meeting.id,
+        bot_session_id=bot.id,
+        note=note,
+    )

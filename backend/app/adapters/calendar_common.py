@@ -29,12 +29,24 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("teams", TEAMS_RE),
 ]
 
+# Platforms a Mode B bot can join (app/bot/runner.py). Zoom is deliberately
+# excluded: RTMS (Mode A1) is its primary path, tied to the host's Zoom
+# account rather than any calendar entry or manual trigger, so a web bot is
+# only ever an explicit fallback for Zoom, never dispatched automatically.
+# Shared by app/orchestrator/scheduler.py (calendar-driven) and
+# app/api/capture.py (instant/no-calendar) so both dispatch paths agree on
+# which platforms get a bot without duplicating the set.
+BOT_ELIGIBLE_PLATFORMS = {"meet", "teams"}
+
 
 def detect_conferencing(text: str) -> tuple[str, str] | None:
     """Returns (platform, platform_meeting_id) for the first recognized
     conferencing link in `text`, or None if none found. Checked in a fixed
     order so text mentioning multiple platforms (e.g. a forwarded invite)
-    resolves deterministically rather than depending on match order luck."""
+    resolves deterministically rather than depending on match order luck.
+    Works equally well on a raw pasted URL (app/api/capture.py's instant-
+    capture endpoint) since this is a plain regex search, not something
+    that requires calendar-event structure."""
     if not text:
         return None
     for platform, pattern in _PATTERNS:
@@ -42,4 +54,19 @@ def detect_conferencing(text: str) -> tuple[str, str] | None:
         if match:
             meeting_id = match.group(1) if pattern.groups else match.group(0)
             return platform, meeting_id
+    return None
+
+
+def bot_join_url(platform: str, platform_meeting_id: str) -> str | None:
+    """Reconstructs the URL a Mode B bot (app/bot/runner.py) actually
+    navigates to, from detect_conferencing's platform_meeting_id -- shared
+    by the calendar scheduler (app/orchestrator/scheduler.py) and the
+    instant-capture endpoint (app/api/capture.py) so both dispatch paths
+    build the same join URL the same way. Zoom is excluded: RTMS (Mode A1)
+    is Zoom's primary path and a web bot is only an explicit fallback, not
+    something either caller dispatches automatically -- see docs/03-capture.md."""
+    if platform == "meet":
+        return f"https://meet.google.com/{platform_meeting_id}"
+    if platform == "teams":
+        return platform_meeting_id  # already the full meetup-join URL
     return None
