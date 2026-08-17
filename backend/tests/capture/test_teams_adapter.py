@@ -129,6 +129,59 @@ async def test_teams_adapter_raises_named_error_when_tenant_gates_transcript_acc
     assert exc_info.value.meeting_id == MEETING_ID
 
 
+JOIN_URL = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0"
+
+
+@pytest.mark.asyncio
+async def test_teams_adapter_acquire_resolves_join_url_to_user_and_meeting_id():
+    """When capture_session_id is a raw join URL (the format detect_conferencing
+    stores), the adapter resolves it to user_id:meeting_id via the Graph filter
+    endpoint before fetching recordings and transcripts."""
+    blob_store = InMemoryBlobStore()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        # Resolution step: $filter by joinWebUrl
+        if "onlineMeetings" in url and "%24filter" in url or "$filter" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": MEETING_ID,
+                            "participants": {
+                                "organizer": {
+                                    "identity": {"user": {"id": USER_ID}}
+                                }
+                            },
+                        }
+                    ]
+                },
+            )
+        # After resolution, falls through to the same Graph calls as the composite ID path
+        if url == f"{BASE}/recordings":
+            return httpx.Response(200, json=RECORDINGS)
+        if url == f"{BASE}/recordings/r1/content":
+            return httpx.Response(200, content=FAKE_MP4_BYTES)
+        if url == f"{BASE}/transcripts":
+            return httpx.Response(200, json=TRANSCRIPTS)
+        if url == f"{BASE}/transcripts/t1/content":
+            return httpx.Response(200, text=SAMPLE_VTT)
+        raise AssertionError(f"unexpected request: {request.method} {url}")
+
+    adapter = TeamsAdapter(
+        token_provider=StaticTokenProvider("test-token"),
+        blob_store=blob_store,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    artifacts = await adapter.acquire(JOIN_URL)
+
+    assert artifacts.mode == CaptureMode.OFFICIAL_ARTIFACTS
+    assert len(artifacts.audio_tracks) == 1
+    assert {r.display_name for r in artifacts.roster} == {"Alice Chen", "Bob Fernando"}
+
+
 @pytest.mark.asyncio
 async def test_teams_adapter_no_recordings_or_transcripts_yields_empty_artifacts():
     def handler(request: httpx.Request) -> httpx.Response:

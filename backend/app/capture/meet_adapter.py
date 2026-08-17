@@ -61,8 +61,12 @@ class MeetAdapter:
         self._client = http_client or httpx.AsyncClient()
 
     async def acquire(self, capture_session_id: str) -> CaptureArtifacts:
-        conference_record_id = capture_session_id
+        # capture_session_id is the Meet room code (e.g. "abc-defg-hij") stored
+        # by detect_conferencing. The conferenceRecord ID is a separate concept --
+        # one room can host many meetings over time, each producing a different
+        # conferenceRecord. Resolve the most recent record for this room first.
         headers = await self._auth_headers()
+        conference_record_id = await self._resolve_conference_record_id(capture_session_id, headers)
 
         conference_record = await self._get_conference_record(conference_record_id, headers)
         conference_start = _parse_rfc3339(conference_record["startTime"])
@@ -100,6 +104,28 @@ class MeetAdapter:
             speaker_labels=speaker_labels,
             platform_transcript_uri=platform_transcript_uri,
         )
+
+    async def _resolve_conference_record_id(self, room_code: str, headers: dict[str, str]) -> str:
+        """Converts a Meet room code (e.g. "abc-defg-hij") to the most recent
+        conferenceRecord ID. The Meet conferenceRecords.list API supports
+        filtering by space.meeting_code (AIP-160 filter syntax)."""
+        params = {"filter": f'space.meeting_code = "{room_code}"', "pageSize": "10"}
+        resp = await self._client.get(
+            f"{MEET_API_BASE}/conferenceRecords", headers=headers, params=params
+        )
+        resp.raise_for_status()
+        records = resp.json().get("conferenceRecords", [])
+        if not records:
+            raise RuntimeError(
+                f"no conferenceRecord found for Meet room code {room_code!r} -- "
+                "the meeting may not have started yet, or recording may be unavailable "
+                "for this workspace plan (requires Business Standard+)"
+            )
+        def _sort_key(r: dict) -> str:
+            return r.get("endTime") or r.get("startTime") or ""
+        latest = max(records, key=_sort_key)
+        name = latest["name"]  # "conferenceRecords/{id}"
+        return name.rsplit("/", 1)[-1]
 
     async def _auth_headers(self) -> dict[str, str]:
         token = await self._tokens.get_token()

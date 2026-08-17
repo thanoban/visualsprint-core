@@ -126,12 +126,19 @@ class TeamsAdapter:
         self._client = http_client or httpx.AsyncClient()
 
     async def acquire(self, capture_session_id: str) -> CaptureArtifacts:
-        user_id, _, meeting_id = capture_session_id.partition(":")
-        if not meeting_id:
-            raise ValueError(
-                f"capture_session_id {capture_session_id!r} must be 'user_id:meeting_id' for Teams"
-            )
         headers = await self._auth_headers()
+        if capture_session_id.startswith("https://"):
+            # capture_session_id is the raw join URL stored by detect_conferencing
+            # (the full meetup-join or /meet/ URL). Resolve it to the Graph
+            # onlineMeeting id via $filter before proceeding.
+            user_id, meeting_id = await self._resolve_from_join_url(capture_session_id, headers)
+        else:
+            user_id, _, meeting_id = capture_session_id.partition(":")
+            if not meeting_id:
+                raise ValueError(
+                    f"capture_session_id {capture_session_id!r} must be a Teams join URL "
+                    "or 'user_id:meeting_id' for Mode A2 Teams capture"
+                )
 
         recordings = await self._list_recordings(user_id, meeting_id, headers)
         audio_tracks = await self._fetch_audio_tracks(user_id, meeting_id, recordings, headers)
@@ -152,6 +159,41 @@ class TeamsAdapter:
             roster=roster,
             speaker_labels=speaker_labels,
         )
+
+    async def _resolve_from_join_url(self, join_url: str, headers: dict[str, str]) -> tuple[str, str]:
+        """Converts a Teams join URL (meetup-join or /meet/ format) to the
+        (user_id, meeting_id) pair the Graph recordings/transcripts APIs require.
+        Uses GET /me/onlineMeetings?$filter=joinWebUrl eq '{url}' -- works when
+        the authenticated user is the meeting organizer. Non-organizers will get
+        an empty result; the RuntimeError surfaces clearly rather than silently
+        returning no tracks."""
+        resp = await self._client.get(
+            f"{GRAPH_API_BASE}/me/onlineMeetings",
+            headers=headers,
+            params={"$filter": f"joinWebUrl eq '{join_url}'"},
+        )
+        resp.raise_for_status()
+        meetings = resp.json().get("value", [])
+        if not meetings:
+            raise RuntimeError(
+                f"no onlineMeeting found for Teams join URL {join_url!r} -- "
+                "the authenticated user must be the meeting organizer for Mode A2 "
+                "Teams capture; attendees cannot access recordings via this API"
+            )
+        meeting = meetings[0]
+        meeting_id = meeting["id"]
+        organizer_user = (
+            meeting.get("participants", {})
+            .get("organizer", {})
+            .get("identity", {})
+            .get("user", {})
+        )
+        user_id = organizer_user.get("id")
+        if not user_id:
+            resp_me = await self._client.get(f"{GRAPH_API_BASE}/me", headers=headers)
+            resp_me.raise_for_status()
+            user_id = resp_me.json()["id"]
+        return user_id, meeting_id
 
     async def _auth_headers(self) -> dict[str, str]:
         token = await self._tokens.get_token()

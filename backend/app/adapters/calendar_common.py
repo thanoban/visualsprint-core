@@ -16,17 +16,34 @@ ZOOM_RE = re.compile(r"https?://[\w.-]*zoom\.us/j/(\d{9,11})(?:\?\S*)?", re.IGNO
 # Google Meet: the standard 3-4-3 lowercase-letter room code.
 MEET_RE = re.compile(r"https?://meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", re.IGNORECASE)
 
-# Teams: unlike Zoom/Meet, the opaque thread id embedded in a meetup-join URL
-# is NOT the same as the Graph onlineMeeting id. The correct real-world
-# resolution path is GET /me/onlineMeetings?$filter=JoinWebUrl eq '<url>' --
-# so the whole join URL is what our Teams adapter actually needs, and is
-# what's stored as platform_meeting_id, not a substring parsed out of it.
+# Teams classic meetup-join URL: the opaque thread id embedded here is NOT
+# the Graph onlineMeeting id -- the whole URL is stored as platform_meeting_id
+# and resolved to the meeting id later via GET /me/onlineMeetings?$filter=...
 TEAMS_RE = re.compile(r"https?://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s\"'<>]+", re.IGNORECASE)
+
+# Teams new-style short meeting links (introduced ~2024):
+#   https://teams.microsoft.com/meet/<code>?p=<password>
+# Same bot-join semantics -- the full URL is what the joiner navigates to.
+TEAMS_SHORT_RE = re.compile(
+    r"https?://teams\.(?:microsoft|live)\.com/meet/[a-zA-Z0-9]+(?:\?[^\s\"'<>]*)?",
+    re.IGNORECASE,
+)
+
+# Google Meet shortlinks (g.co/meet/<code> redirects to meet.google.com/<code>).
+# The room code embedded in both URL forms is identical, so we extract and
+# store the code the same way MEET_RE does -- bot_join_url() reconstructs the
+# canonical meet.google.com URL from it.
+MEET_SHORT_RE = re.compile(
+    r"https?://g\.co/meet/([a-z]{3}-[a-z]{4}-[a-z]{3})",
+    re.IGNORECASE,
+)
 
 _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("zoom", ZOOM_RE),
     ("meet", MEET_RE),
+    ("meet", MEET_SHORT_RE),
     ("teams", TEAMS_RE),
+    ("teams", TEAMS_SHORT_RE),
 ]
 
 # Platforms a Mode B bot can join (app/bot/runner.py). Zoom is deliberately

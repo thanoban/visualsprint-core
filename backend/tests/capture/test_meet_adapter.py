@@ -75,9 +75,16 @@ TRANSCRIPT_ENTRIES = {
 FAKE_AUDIO_BYTES = b"FAKE-MP4-BYTES"
 
 
+ROOM_CODE = "abc-defg-hij"  # room code passed to acquire(), separate from CONFERENCE_ID
+
+
 def make_meet_transport() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
+        # Resolution step: list conferenceRecords filtered by room code
+        if url.startswith("https://meet.googleapis.com/v2/conferenceRecords") and "filter" in url:
+            assert ROOM_CODE.replace("-", "%2D") in url or ROOM_CODE in url
+            return httpx.Response(200, json={"conferenceRecords": [CONFERENCE_RECORD]})
         if url == f"https://meet.googleapis.com/v2/conferenceRecords/{CONFERENCE_ID}":
             return httpx.Response(200, json=CONFERENCE_RECORD)
         if url == f"https://meet.googleapis.com/v2/conferenceRecords/{CONFERENCE_ID}/participants":
@@ -106,7 +113,7 @@ async def test_meet_adapter_acquire_builds_correct_artifacts():
         http_client=client,
     )
 
-    artifacts = await adapter.acquire(CONFERENCE_ID)
+    artifacts = await adapter.acquire(ROOM_CODE)
 
     assert artifacts.mode == CaptureMode.OFFICIAL_ARTIFACTS
 
@@ -134,6 +141,8 @@ async def test_meet_adapter_skips_recordings_without_drive_export():
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
+        if url.startswith("https://meet.googleapis.com/v2/conferenceRecords") and "filter" in url:
+            return httpx.Response(200, json={"conferenceRecords": [CONFERENCE_RECORD]})
         if url == f"https://meet.googleapis.com/v2/conferenceRecords/{CONFERENCE_ID}":
             return httpx.Response(200, json=CONFERENCE_RECORD)
         if url == f"https://meet.googleapis.com/v2/conferenceRecords/{CONFERENCE_ID}/participants":
@@ -158,7 +167,7 @@ async def test_meet_adapter_skips_recordings_without_drive_export():
         http_client=client,
     )
 
-    artifacts = await adapter.acquire(CONFERENCE_ID)
+    artifacts = await adapter.acquire(ROOM_CODE)
 
     assert artifacts.audio_tracks == []
     assert artifacts.roster == []
