@@ -35,6 +35,29 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
 
+      # --- GCS bucket (shared blob store for all services) ---
+      # gsutil mb is idempotent: exits 0 if the bucket already exists.
+      # The -l flag pins the bucket to the same region as our Cloud Run services.
+      - name: Create GCS blob bucket
+        run: |
+          gsutil mb -p "${PROJECT_ID}" -l "${REGION}" -b on \
+            "gs://visualsprint-blobs" 2>/dev/null || true
+
+      - name: Grant runtime SA blob access
+        run: |
+          # storage.objectAdmin: agents + bot read/write recordings and screenshots.
+          gsutil iam ch \
+            "serviceAccount:visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com:roles/storage.objectAdmin" \
+            "gs://visualsprint-blobs"
+          # serviceAccountTokenCreator on itself: required for GCS V4 signed
+          # URLs without a local key file (the SignBlob IAM API signs via ADC).
+          gcloud iam service-accounts add-iam-policy-binding \
+            "visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --member="serviceAccount:visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/iam.serviceAccountTokenCreator" \
+            --project="${PROJECT_ID}" \
+            --quiet
+
       # --- API: lean image, no ASR/agents/screen extras (docs at the top of
       # backend/Dockerfile explain why) ---
       - name: Build and push api image
@@ -68,7 +91,7 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-secrets="$API_SECRETS" \
-            --set-env-vars='VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=["https://visualsprint-web-5ieahiycsa-uw.a.run.app"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app' \
+            --set-env-vars='VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=["https://visualsprint-web-5ieahiycsa-uw.a.run.app"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs' \
             --allow-unauthenticated \
             --quiet
 
@@ -138,7 +161,7 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="$AGENTS_SECRETS" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION}" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs,VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION}" \
             --timeout=600 \
             --min-instances=0 --max-instances=2 \
             --cpu-throttling \
@@ -163,7 +186,7 @@ jobs:
           BOT_SECRETS="${BOT_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
-          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp"
+          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs"
           BOT_ARGS="--image=${REGISTRY}/bot:${{ github.sha }}"
           BOT_ARGS="${BOT_ARGS} --region=${REGION} --project=${PROJECT_ID}"
           BOT_ARGS="${BOT_ARGS} --service-account=visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com"

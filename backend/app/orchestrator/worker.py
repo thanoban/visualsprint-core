@@ -440,12 +440,37 @@ async def _run_bot_dispatch_sweep(db: object) -> None:
         return
 
     try:
-        cutoff = datetime.now(UTC) + timedelta(seconds=settings.bot_dispatch_lookahead_s)
+        now = datetime.now(UTC)
+        cutoff = now + timedelta(seconds=settings.bot_dispatch_lookahead_s)
+        # Don't dispatch sessions whose scheduled_start is more than the lobby
+        # timeout in the past -- the meeting would have started without the bot
+        # and a late-arriving join attempt would just sit in an empty lobby.
+        # Sessions older than this are expired to MISSED instead.
+        stale_cutoff = now - timedelta(seconds=settings.bot_dispatch_lookahead_s + 900)
+
+        # Expire stale SCHEDULED sessions first (e.g. accumulated before
+        # bot_dispatch_enabled was turned on, or while the service was down).
+        stale = (
+            db.execute(
+                select(BotSession).where(
+                    BotSession.status == BotStatus.SCHEDULED,
+                    BotSession.scheduled_start < stale_cutoff,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for bot in stale:
+            bot.status = BotStatus.MISSED
+            log.info("bot_dispatch.expired", bot_session=bot.id, scheduled_start=bot.scheduled_start)
+
         due = (
             db.execute(
                 select(BotSession)
                 .where(
-                    BotSession.status == BotStatus.SCHEDULED, BotSession.scheduled_start <= cutoff
+                    BotSession.status == BotStatus.SCHEDULED,
+                    BotSession.scheduled_start <= cutoff,
+                    BotSession.scheduled_start >= stale_cutoff,
                 )
                 .order_by(BotSession.scheduled_start)
                 .limit(slots)
@@ -458,7 +483,7 @@ async def _run_bot_dispatch_sweep(db: object) -> None:
             db.flush()
             await dispatcher.dispatch(bot.id)
             log.info("bot_dispatch.launched", bot_session=bot.id, platform=bot.platform)
-        if due:
+        if stale or due:
             db.commit()
     except Exception as exc:
         db.rollback()

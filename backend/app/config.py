@@ -23,12 +23,14 @@ class Settings(BaseSettings):
     )
 
     # --- Blob storage (S3-compatible; R2 in prod, local dir in dev) ---
-    blob_backend: str = "local"  # "local" | "s3"
+    blob_backend: str = "local"  # "local" | "s3" | "gcs"
     blob_local_dir: str = ".blobstore"
     s3_endpoint_url: str | None = None  # R2: https://<account>.r2.cloudflarestorage.com
     s3_bucket: str = "visualsprint"
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    # GCS backend (recommended for GCP deployments -- uses ADC, no key file needed)
+    gcs_bucket: str = "visualsprint-blobs"
 
     # --- Zoom RTMS (Mode A1 real-time capture; see backend/app/capture/rtms_*.py) ---
     zoom_client_id: str | None = None

@@ -250,6 +250,7 @@ class BotStatus(enum.StrEnum):
     IN_LOBBY = "in_lobby"
     LIVE = "live"
     ENDED = "ended"
+    MISSED = "missed"  # scheduled_start too far past to attempt join; session expired by the sweep
     FAILED = "failed"
     LOBBY_TIMEOUT = "lobby_timeout"
 

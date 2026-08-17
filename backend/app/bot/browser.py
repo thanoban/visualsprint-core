@@ -29,6 +29,16 @@ class PlaywrightSession:
         self.browser = await self._playwright.chromium.launch(
             headless=True,
             args=[
+                # Required in Docker/Cloud Run: Chrome cannot create a sandbox
+                # when running as root (the default in Cloud Run containers).
+                # Without --no-sandbox Chrome exits immediately with SIGILL/
+                # signal 31 before the page even loads.
+                "--no-sandbox",
+                # Cloud Run allocates only 64 MB of /dev/shm by default; Chrome
+                # uses it heavily for shared memory between renderer processes.
+                # --disable-dev-shm-usage tells it to use /tmp instead, which
+                # has no such limit.
+                "--disable-dev-shm-usage",
                 # Auto-accept the mic/camera permission prompt and hand back
                 # a synthetic (silent) device -- the bot must never transmit
                 # its own audio/video into the meeting, only receive.

@@ -39,6 +39,7 @@ agents = [
     "anthropic[vertex]>=0.40",  # Claude LlmClient (app/adapters/llm_vertex.py) -- not the default provider, kept available
     "google-cloud-aiplatform>=1.70",  # Embedder swap point (app/adapters/embedder_vertex.py)
     "google-genai>=1.0",  # Default Gemini LlmClient (app/adapters/llm_gemini_vertex.py) -- imported directly, not just transitively via google-cloud-aiplatform
+    "google-cloud-storage>=2.18",  # GCS BlobStore (app/adapters/blobstore_gcs.py) -- shared blob store for prod
 ]
 screen = [
     "opencv-python>=4.10",
@@ -56,6 +57,8 @@ storage = [
 ]
 bot = [
     "playwright>=1.47",  # Mode B guest-bot join (app/bot/, app/adapters/bot_*.py)
+    "google-cloud-storage>=2.18",  # GCS BlobStore -- bot stores recordings to shared GCS bucket
+    "google-auth>=2.35",  # ADC credential refresh for GCS signed URLs
 ]
 
 [build-system]

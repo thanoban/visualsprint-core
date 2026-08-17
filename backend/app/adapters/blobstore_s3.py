@@ -125,9 +125,13 @@ class S3BlobStore:
 
 def get_blobstore():
     """Factory honouring settings.blob_backend."""
-    from app.adapters.blobstore_local import LocalBlobStore
-
     s = get_settings()
     if s.blob_backend == "s3":
         return S3BlobStore()
+    if s.blob_backend == "gcs":
+        from app.adapters.blobstore_gcs import GCSBlobStore
+
+        return GCSBlobStore(bucket_name=s.gcs_bucket)
+    from app.adapters.blobstore_local import LocalBlobStore
+
     return LocalBlobStore()
