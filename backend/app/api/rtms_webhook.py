@@ -149,14 +149,31 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         raise HTTPException(401, "invalid or missing Zoom webhook signature")
 
     if event == "meeting.rtms_started":
-        meeting_uuid = payload["meeting_uuid"]
-        rtms_stream_id = payload["rtms_stream_id"]
-        server_urls = payload["server_urls"]
+        # Zoom nests meeting data under payload["object"]; account_id sits
+        # one level up at payload["account_id"]. Verified against Zoom's own
+        # webhook payload documentation and live event structure.
+        obj = payload.get("object", {})
+        # "uuid" is the stable identifier for one occurrence; "id" is the
+        # numeric meeting ID. The RTMS handshake uses uuid.
+        meeting_uuid = obj.get("uuid") or obj.get("meeting_uuid") or payload.get("meeting_uuid")
+        rtms_stream_id = obj.get("rtms_stream_id") or payload.get("rtms_stream_id")
+        if not meeting_uuid or not rtms_stream_id:
+            logger.warning(
+                "rtms_started: missing meeting_uuid or rtms_stream_id, payload=%r", payload
+            )
+            raise HTTPException(400, "meeting_uuid or rtms_stream_id missing from payload")
+        # server_urls can be a plain string (the signaling URL) or a dict
+        # with platform-specific keys. Use "all" or the first value when it's
+        # a dict, to remain compatible if Zoom changes the format.
+        raw_urls = obj.get("server_urls") or payload.get("server_urls", "")
+        if isinstance(raw_urls, dict):
+            signaling_url = raw_urls.get("all") or next(iter(raw_urls.values()), "")
+        else:
+            signaling_url = raw_urls
+        if not signaling_url:
+            logger.warning("rtms_started: no usable server_urls, payload=%r", payload)
+            raise HTTPException(400, "server_urls missing from payload")
 
-        # account_id's presence/exact position in this specific payload is
-        # unverified (see _resolve_org_for_zoom_account) -- .get(), never
-        # [], so a wrong assumption here degrades to the old single-org
-        # behavior instead of a 500 on every webhook.
         org = _resolve_org_for_zoom_account(db, payload.get("account_id"))
         meeting = (
             db.query(Meeting)
@@ -174,14 +191,15 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
 
         task = asyncio.create_task(
             _run_stream(
-                meeting_uuid=meeting_uuid, rtms_stream_id=rtms_stream_id, signaling_url=server_urls
+                meeting_uuid=meeting_uuid, rtms_stream_id=rtms_stream_id, signaling_url=signaling_url
             )
         )
         _active_streams[rtms_stream_id] = (org.id, session.id, task)
         return {"status": "accepted"}
 
     if event == "meeting.rtms_stopped":
-        rtms_stream_id = payload["rtms_stream_id"]
+        obj = payload.get("object", {})
+        rtms_stream_id = obj.get("rtms_stream_id") or payload.get("rtms_stream_id")
         entry = _active_streams.pop(rtms_stream_id, None)
         if entry is None:
             raise HTTPException(404, f"no active RTMS stream for {rtms_stream_id!r}")

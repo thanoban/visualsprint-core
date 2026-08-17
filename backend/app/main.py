@@ -1,5 +1,7 @@
 """VisualSprint API entrypoint."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,11 +15,26 @@ from app.api.me import router as me_router
 from app.api.oauth import router as oauth_router
 from app.api.people import router as people_router
 from app.api.report import router as report_router
-from app.api.rtms_webhook import router as rtms_webhook_router
+from app.api.rtms_webhook import router as rtms_webhook_router, set_websocket_connector
 from app.api.upload import router as upload_router
 from app.config import get_settings
 
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    from app.api.rtms_webhook import _connector
+    from app.capture.rtms_ws_connector import WebsocketsConnector
+
+    installed = _connector is None
+    if installed:
+        set_websocket_connector(WebsocketsConnector())
+    yield
+    if installed:
+        set_websocket_connector(None)
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="VisualSprint",
     version=__version__,
     description="Multilingual meeting intelligence — capture, understand, verify, remember, act.",
