@@ -170,6 +170,19 @@ class Settings(BaseSettings):
     # calendar sync still creates BotSession rows when this is off; they
     # simply sit SCHEDULED, un-dispatched, until enabled.
     bot_dispatch_enabled: bool = False
+    # "local" uses asyncio.create_task inside the worker process (dev/test
+    # only -- the process must stay alive for the whole meeting).
+    # "cloud_run_job" invokes the Cloud Run Jobs API to start an independent
+    # job execution per BotSession (production -- pay per second, no always-on
+    # cost, no process longevity requirement on the agents service).
+    bot_dispatch_mode: str = "local"  # "local" | "cloud_run_job"
+    # Cloud Run Job target. Only read when bot_dispatch_mode="cloud_run_job".
+    bot_cloud_run_job_name: str = "visualsprint-bot"
+    # GCP project and region for the bot job. Must be set explicitly --
+    # the metadata server project/region are not consulted during Settings
+    # parsing, only at runtime inside the adapter.
+    bot_cloud_run_project: str | None = None
+    bot_cloud_run_region: str | None = None
     # Person-level analysis can multiply LLM spend through the high-stakes
     # ensemble. It is fully wired but opt-in so local/test deployments and
     # budget-constrained projects never incur surprise vendor calls.

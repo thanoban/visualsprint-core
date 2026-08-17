@@ -138,10 +138,60 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="$AGENTS_SECRETS" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION}" \
             --timeout=600 \
             --min-instances=0 --max-instances=2 \
             --cpu-throttling \
+            --quiet
+
+      # --- Bot: lean image -- just Playwright + core deps, no ML/torch/paddleocr.
+      # One Cloud Run Job execution = one meeting. The job reads VS_BOT_SESSION_ID
+      # from its container environment (set per-execution by the agents service).
+      - name: Build and push bot image
+        run: |
+          docker build backend \
+            --build-arg INSTALL_EXTRAS=bot \
+            -t "${REGISTRY}/bot:${{ github.sha }}" \
+            -t "${REGISTRY}/bot:latest"
+          docker push "${REGISTRY}/bot:${{ github.sha }}"
+          docker push "${REGISTRY}/bot:latest"
+
+      - name: Create or update bot Cloud Run Job
+        run: |
+          BOT_SECRETS="VS_DATABASE_URL=visualsprint-database-url:latest"
+          BOT_SECRETS="${BOT_SECRETS},VS_GOOGLE_OAUTH_CLIENT_ID=visualsprint-google-oauth-client-id:latest"
+          BOT_SECRETS="${BOT_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
+          BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
+          BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
+          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp"
+          BOT_ARGS="--image=${REGISTRY}/bot:${{ github.sha }}"
+          BOT_ARGS="${BOT_ARGS} --region=${REGION} --project=${PROJECT_ID}"
+          BOT_ARGS="${BOT_ARGS} --service-account=visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com"
+          BOT_ARGS="${BOT_ARGS} --command=python --args=-m,app.bot.job"
+          BOT_ARGS="${BOT_ARGS} --set-secrets=${BOT_SECRETS}"
+          BOT_ARGS="${BOT_ARGS} --set-env-vars=${BOT_ENV}"
+          BOT_ARGS="${BOT_ARGS} --max-retries=0"
+          BOT_ARGS="${BOT_ARGS} --task-timeout=14400"
+          BOT_ARGS="${BOT_ARGS} --memory=1Gi"
+          BOT_ARGS="${BOT_ARGS} --quiet"
+          if gcloud run jobs describe visualsprint-bot \
+               --region="${REGION}" --project="${PROJECT_ID}" 2>/dev/null; then
+            # shellcheck disable=SC2086
+            gcloud run jobs update visualsprint-bot ${BOT_ARGS}
+          else
+            # shellcheck disable=SC2086
+            gcloud run jobs create visualsprint-bot ${BOT_ARGS}
+          fi
+
+      # Grant the agents runtime SA permission to invoke the bot job.
+      # Idempotent -- add-iam-policy-binding is a union operation, so
+      # re-running on every deploy is safe and cheaper than checking first.
+      - name: Grant agents SA permission to invoke bot job
+        run: |
+          gcloud run jobs add-iam-policy-binding visualsprint-bot \
+            --region="${REGION}" --project="${PROJECT_ID}" \
+            --member="serviceAccount:visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/run.developer" \
             --quiet
 
       # --- Web: needs the api's live URL baked in at build time (Next.js

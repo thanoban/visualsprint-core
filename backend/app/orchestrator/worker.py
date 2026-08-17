@@ -377,39 +377,65 @@ async def _run_work_tracking_sweep(db: object) -> None:
             log.warning("work_tracking.failed", org=org.id, error=str(exc))
 
 
-_bot_tasks: set[asyncio.Task] = set()
+_job_dispatcher = None
+
+
+def _get_job_dispatcher():
+    """Lazy singleton for the bot dispatch backend.
+
+    "local"         → asyncio tasks inside this process (dev/test only).
+    "cloud_run_job" → Cloud Run Jobs API execution per BotSession (prod).
+    """
+    global _job_dispatcher
+    if _job_dispatcher is None:
+        settings = get_settings()
+        if settings.bot_dispatch_mode == "cloud_run_job":
+            from app.adapters.job_dispatcher_cloud_run import CloudRunJobDispatcher
+
+            project = settings.bot_cloud_run_project
+            region = settings.bot_cloud_run_region
+            if not project or not region:
+                raise RuntimeError(
+                    "VS_BOT_CLOUD_RUN_PROJECT and VS_BOT_CLOUD_RUN_REGION must be set "
+                    "when VS_BOT_DISPATCH_MODE=cloud_run_job"
+                )
+            _job_dispatcher = CloudRunJobDispatcher(
+                project=project,
+                region=region,
+                job_name=settings.bot_cloud_run_job_name,
+            )
+        else:
+            from app.adapters.job_dispatcher_local import LocalJobDispatcher
+
+            _job_dispatcher = LocalJobDispatcher()
+    return _job_dispatcher
 
 
 async def _run_bot_dispatch_sweep(db: object) -> None:
-    """Launches due BotSession rows as background asyncio tasks
-    (app/bot/runner.py, Mode B). Only meaningful in a long-running worker
-    process (local dev's `main()` loop below, or a dedicated always-on bot
-    service) -- a bot must stay attached to its browser page for the whole
-    meeting, unlike every other sweep here which finishes in seconds. This
-    is fundamentally incompatible with the scale-to-zero Cloud Run pipeline
-    worker (`run_bounded_pass`); production deployment needs the bot
-    dispatcher running as its own always-on service, not the bounded-pass
-    endpoint -- see Settings.bot_dispatch_enabled, off by default for
-    exactly this reason. Concurrency is capped at `bot_max_concurrent` per
-    process -- each in-flight bot holds an open headless-Chromium page for
-    the meeting's duration, a real resource ceiling, not just a rate limit.
+    """Dispatches due BotSession rows via the configured JobDispatcher.
 
-    Wrapped in its own try/except, same resilience convention as every
-    other sweep in this registry (_run_retention_sweep etc.) -- an
-    unexpected error here (a bad row, a transient DB hiccup) must not abort
-    run_due_sweeps partway through and skip every sweep still queued behind
-    it."""
+    In "local" mode (dev): asyncio tasks in this process — the process must
+    stay alive for the whole meeting, so only run locally, not on the
+    scale-to-zero agents service.
+
+    In "cloud_run_job" mode (prod): each BotSession becomes an independent
+    Cloud Run Job execution (up to 24 h, billed per second of use). The
+    agents service marks the session JOINING and creates the job; the job
+    image (INSTALL_EXTRAS=bot) takes over from there, updating status to
+    ACTIVE/DONE without needing the agents process to stay alive.
+
+    Wrapped in its own try/except, same resilience convention as every other
+    sweep — an unexpected error must not abort run_due_sweeps mid-pass."""
     if not get_settings().bot_dispatch_enabled:
         return
 
     from sqlalchemy import select
 
-    from app.bot.runner import run_bot_session
     from app.db.models import BotSession, BotStatus
 
     settings = get_settings()
-    _bot_tasks.difference_update({t for t in _bot_tasks if t.done()})
-    slots = settings.bot_max_concurrent - len(_bot_tasks)
+    dispatcher = _get_job_dispatcher()
+    slots = settings.bot_max_concurrent - dispatcher.in_flight_count()
     if slots <= 0:
         return
 
@@ -428,10 +454,9 @@ async def _run_bot_dispatch_sweep(db: object) -> None:
             .all()
         )
         for bot in due:
-            bot.status = BotStatus.JOINING  # claim immediately -- avoid double-dispatch next sweep
+            bot.status = BotStatus.JOINING  # claim immediately — avoid double-dispatch next sweep
             db.flush()
-            task = asyncio.create_task(run_bot_session(bot.id))
-            _bot_tasks.add(task)
+            await dispatcher.dispatch(bot.id)
             log.info("bot_dispatch.launched", bot_session=bot.id, platform=bot.platform)
         if due:
             db.commit()

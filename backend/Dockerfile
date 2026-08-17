@@ -29,6 +29,13 @@ RUN if [ -n "$INSTALL_EXTRAS" ]; then \
         pip install --no-cache-dir -e .; \
     fi
 
+# Install Chromium browser binaries when the `bot` extra is included.
+# playwright install puts binaries under ~/.cache/ms-playwright; --with-deps
+# also installs the OS-level shared libraries Chromium needs in the container.
+RUN if echo ",${INSTALL_EXTRAS}," | grep -q ",bot,"; then \
+        playwright install chromium --with-deps; \
+    fi
+
 # Default target: the API. infra/docker-compose.yml overrides `command` for
 # the worker service to run the pipeline loop instead.
 #
