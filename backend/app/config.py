@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     s3_bucket: str = "visualsprint"
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
-    # GCS backend (recommended for GCP deployments -- uses ADC, no key file needed)
+    # GCS backend (recommended for GCP deployments -- uses ADC, no key file needed).
+    # Production sets this to "visualsprint-blobs-${PROJECT_ID}" via VS_GCS_BUCKET
+    # in deploy.yml (GCS bucket names are globally unique -- a generic name is
+    # almost certainly taken by another GCP project).
     gcs_bucket: str = "visualsprint-blobs"
 
     # --- Zoom RTMS (Mode A1 real-time capture; see backend/app/capture/rtms_*.py) ---
