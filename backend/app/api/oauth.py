@@ -24,6 +24,8 @@ Zoom account_id) -- it never touches the stream handshake, which stays
 authenticated as VisualSprint's own S2S app regardless of customer.
 """
 
+import logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
@@ -48,6 +50,7 @@ from app.oauth.flow import (
 from app.oauth.providers import OAuthNotConfiguredError, get_provider_config
 
 router = APIRouter(tags=["oauth"])
+logger = logging.getLogger(__name__)
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 GITHUB_USER_URL = "https://api.github.com/user"
@@ -170,48 +173,68 @@ async def start_oauth(
 @router.get("/api/v1/oauth/{provider}/callback")
 async def oauth_callback(
     provider: str,
-    code: str,
     state: str,
+    code: str | None = None,
+    error: str | None = None,
     db: Session = Depends(get_db),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> RedirectResponse:
+    settings = get_settings()
+    error_redirect = RedirectResponse(
+        f"{settings.frontend_base_url}/settings/connections?oauth_error={provider}"
+    )
+
+    # User cancelled or the vendor rejected the grant. Redirect gracefully
+    # so the UI can show a retry prompt instead of a raw error page.
+    if error or not code:
+        logger.warning("oauth callback %r: vendor returned error=%r, no code", provider, error)
+        return error_redirect
+
     try:
         org_id = verify_state(state, provider=provider, secret=_require_state_secret())
     except OAuthStateError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        logger.warning("oauth callback %r: state validation failed: %s", provider, exc)
+        return error_redirect
 
     if db.get(Org, org_id) is None:
-        raise HTTPException(404, "org not found")
+        logger.error("oauth callback %r: org %r not found", provider, org_id)
+        return error_redirect
 
-    settings = get_settings()
     try:
         config = get_provider_config(provider, settings)
     except (ValueError, OAuthNotConfiguredError) as exc:
-        raise HTTPException(400, str(exc)) from exc
+        logger.error("oauth callback %r: provider not configured: %s", provider, exc)
+        return error_redirect
 
     try:
         token_set = await exchange_code_for_token(
             config, code=code, redirect_uri=_callback_redirect_uri(provider), http_client=http_client
         )
     except (httpx.HTTPStatusError, OAuthTokenExchangeError) as exc:
-        raise HTTPException(502, f"{provider} rejected the authorization code: {exc}") from exc
+        logger.error("oauth callback %r: token exchange failed: %s", provider, exc)
+        return error_redirect
 
-    if provider == "google":
-        await _finish_google_connection(db, org_id, token_set, http_client)
-    elif provider == "github":
-        await _finish_github_connection(db, org_id, token_set, http_client)
-    elif provider == "linear":
-        await _finish_linear_connection(db, org_id, token_set, http_client)
-    elif provider == "slack":
-        await _finish_slack_connection(db, org_id, token_set)
-    elif provider == "jira":
-        await _finish_jira_connection(db, org_id, token_set, http_client)
-    elif provider == "zoom":
-        await _finish_zoom_connection(db, org_id, token_set, http_client)
-    elif provider == "microsoft":
-        await _finish_microsoft_connection(db, org_id, token_set, http_client)
-    else:
-        raise HTTPException(400, f"connecting {provider!r} is not wired up yet")
+    try:
+        if provider == "google":
+            await _finish_google_connection(db, org_id, token_set, http_client)
+        elif provider == "github":
+            await _finish_github_connection(db, org_id, token_set, http_client)
+        elif provider == "linear":
+            await _finish_linear_connection(db, org_id, token_set, http_client)
+        elif provider == "slack":
+            await _finish_slack_connection(db, org_id, token_set)
+        elif provider == "jira":
+            await _finish_jira_connection(db, org_id, token_set, http_client)
+        elif provider == "zoom":
+            await _finish_zoom_connection(db, org_id, token_set, http_client)
+        elif provider == "microsoft":
+            await _finish_microsoft_connection(db, org_id, token_set, http_client)
+        else:
+            logger.error("oauth callback: no finish handler for %r", provider)
+            return error_redirect
+    except Exception as exc:
+        logger.error("oauth callback %r: failed to finalize connection: %s", provider, exc, exc_info=True)
+        return error_redirect
 
     return RedirectResponse(f"{settings.frontend_base_url}/settings/connections?connected={provider}")
 

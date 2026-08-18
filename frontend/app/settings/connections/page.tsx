@@ -52,6 +52,7 @@ export default function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [justConnected, setJustConnected] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -100,15 +101,28 @@ export default function ConnectionsPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get("connected");
+    const oauthError = params.get("oauth_error");
     if (connected) {
-      // Reads the OAuth callback's redirect query param into React state on
-      // mount -- not a redundant re-derivation of existing state, this is
-      // the one-time bridge from the URL (an external system) into React.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setJustConnected(connected);
-      // Drop the query param so a refresh doesn't re-show the banner.
       window.history.replaceState({}, "", window.location.pathname);
     }
+    if (oauthError) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConnectError(`Failed to connect ${oauthError}. Please try again.`);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  // Reset connecting state on bfcache restore (browser Back after OAuth
+  // redirect). Without this, "Redirecting…" stays stuck on the button
+  // because browser Back restores the previous React state intact.
+  useEffect(() => {
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setConnecting(null);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
   }, []);
 
   useEffect(() => {
@@ -165,6 +179,21 @@ export default function ConnectionsPage() {
             }}
           >
             Connected {justConnected}.
+          </div>
+        )}
+        {connectError && (
+          <div
+            style={{
+              background: "var(--gap-bg)",
+              border: "1px solid var(--gap)",
+              color: "var(--gap)",
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 13,
+              marginBottom: 16,
+            }}
+          >
+            {connectError}
           </div>
         )}
         {disconnectError && (

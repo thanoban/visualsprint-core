@@ -74,7 +74,7 @@ jobs:
       - name: Build and push api image
         run: |
           docker build backend \
-            --build-arg INSTALL_EXTRAS= \
+            --build-arg INSTALL_EXTRAS=storage \
             -t "${REGISTRY}/api:${{ github.sha }}" \
             -t "${REGISTRY}/api:latest"
           docker push "${REGISTRY}/api:${{ github.sha }}"
@@ -128,7 +128,7 @@ jobs:
       - name: Build and push agents image
         run: |
           docker build backend \
-            --build-arg INSTALL_EXTRAS=asr,agents,screen \
+            --build-arg INSTALL_EXTRAS=asr,agents,screen,storage \
             -t "${REGISTRY}/agents:${{ github.sha }}" \
             -t "${REGISTRY}/agents:latest"
           docker push "${REGISTRY}/agents:${{ github.sha }}"
