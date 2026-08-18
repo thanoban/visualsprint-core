@@ -296,10 +296,14 @@ def test_rtms_stopped_unknown_stream_404s(client):
     assert resp.status_code == 404
 
 
-def test_unhandled_event_400s(client):
+def test_unhandled_event_returns_200_ignored(client):
+    # Zoom sends many non-RTMS meeting events to any registered webhook.
+    # Returning 400 causes Zoom to mark the endpoint unhealthy and throttle
+    # delivery. We return 200 with status=ignored so the channel stays open.
     resp = _signed_post(client, "something.else", {})
 
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
 
 
 def test_missing_signature_is_rejected(client):

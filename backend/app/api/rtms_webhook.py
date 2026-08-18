@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -103,6 +104,55 @@ def _resolve_org_for_zoom_account(db: Session, account_id: str | None) -> Org:
     return _get_org_by_default(db)
 
 
+async def _get_s2s_token() -> str:
+    """Fetch a Server-to-Server OAuth access token from Zoom.
+
+    The S2S token is scoped to the account-level app and is valid for 1 hour.
+    We don't cache it here -- this endpoint is called at most once per meeting
+    (when meeting.started fires), so the overhead is negligible compared to
+    having stale-token bugs on a cache that outlives a deployment.
+    """
+    settings = get_settings()
+    if not settings.zoom_client_id or not settings.zoom_client_secret:
+        raise RuntimeError("zoom_client_id / zoom_client_secret not configured")
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            "https://zoom.us/oauth/token",
+            params={"grant_type": "account_credentials", "account_id": "me"},
+            auth=(settings.zoom_client_id, settings.zoom_client_secret),
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
+
+
+async def _enable_rtms_for_meeting(meeting_id: str) -> None:
+    """Call Zoom's REST API to enable RTMS for a running meeting.
+
+    Zoom only fires meeting.rtms_started if the S2S RTMS app explicitly
+    enables streaming for the meeting -- it doesn't auto-start even with
+    the right scopes. This call is what triggers that webhook.
+    Without it, Zoom sends meeting.started but never meeting.rtms_started.
+    """
+    try:
+        token = await _get_s2s_token()
+    except Exception as exc:
+        logger.error("failed to get S2S token for RTMS activation: %s", exc)
+        return
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.patch(
+            f"https://api.zoom.us/v2/meetings/{meeting_id}/rtms",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"status": "active"},
+        )
+        if resp.status_code in (200, 204):
+            logger.info("RTMS enabled for meeting %s", meeting_id)
+        else:
+            logger.warning(
+                "RTMS activation returned %s for meeting %s: %s",
+                resp.status_code, meeting_id, resp.text,
+            )
+
+
 async def _run_stream(
     *, meeting_uuid: str, rtms_stream_id: str, signaling_url: str
 ) -> RtmsResult:
@@ -147,6 +197,17 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         settings.zoom_webhook_secret_token,
     ):
         raise HTTPException(401, "invalid or missing Zoom webhook signature")
+
+    if event == "meeting.started":
+        # Zoom only fires meeting.rtms_started when the S2S app explicitly
+        # enables RTMS for the meeting via its REST API -- it does NOT
+        # auto-start even with the correct scopes. We call the API here,
+        # which triggers Zoom to fire meeting.rtms_started back to us.
+        obj = payload.get("object", {})
+        meeting_id = obj.get("id") or payload.get("id")
+        if meeting_id:
+            asyncio.create_task(_enable_rtms_for_meeting(str(meeting_id)))
+        return {"status": "rtms_activation_requested"}
 
     if event == "meeting.rtms_started":
         # Zoom nests meeting data under payload["object"]; account_id sits
@@ -258,5 +319,11 @@ async def zoom_rtms_webhook(request: Request, db: Session = Depends(get_db)) -> 
         db.commit()
         return {"status": "finalized", "capture_session_id": session.id}
 
-    logger.warning("unhandled zoom webhook event %r, payload keys=%s", event, list(payload.keys()))
-    raise HTTPException(400, f"unhandled event {event!r}")
+    # Zoom sends many meeting lifecycle events (meeting.started,
+    # meeting.participant_joined, meeting.ended, etc.) to any registered
+    # webhook endpoint -- not just the RTMS-specific ones we care about.
+    # Returning 400 causes Zoom to mark the endpoint as unhealthy and
+    # eventually throttle or suspend delivery. Return 200 and log so we
+    # can see what Zoom is actually sending without breaking the channel.
+    logger.info("zoom webhook event %r ignored (not an RTMS event), keys=%s", event, list(payload.keys()))
+    return {"status": "ignored", "event": event}
