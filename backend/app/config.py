@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     zoom_client_id: str | None = None
     zoom_client_secret: str | None = None
     zoom_webhook_secret_token: str | None = None
+    # Server-to-Server OAuth's account_credentials grant requires the real
+    # Zoom account ID -- the literal string "me" is rejected. Found on the
+    # app's "App Credentials" page (labeled "Account ID").
+    zoom_account_id: str | None = None
 
     # --- SecretStore (OAuth token storage; "local" dev writes plaintext to
     # disk, "gcp" prod uses Secret Manager -- app/interfaces/secretstore.py) ---

@@ -1,6 +1,9 @@
 # Roadmap
 
-Solo-dev week estimates.
+Solo-dev week estimates. **This file describes what's built.** For what's actually
+working in the live `visualsprint-agent` deployment right now — including the
+2026-08-18 incident where every capture path was found to have zero meetings ever
+captured — see [docs/14-production-status.md](14-production-status.md).
 
 | Phase | Weeks | Deliverable |
 |---|---|---|

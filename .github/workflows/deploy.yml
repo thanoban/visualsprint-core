@@ -80,6 +80,18 @@ jobs:
           docker push "${REGISTRY}/api:${{ github.sha }}"
           docker push "${REGISTRY}/api:latest"
 
+      # --no-cpu-throttling --max-instances=1 is an INTERIM measure, not the
+      # steady state -- Zoom RTMS's live WebSocket session currently runs as
+      # a background asyncio task inside this service (app/api/rtms_webhook.py
+      #'s _active_streams dict). Default Cloud Run CPU-throttles a container
+      # between HTTP requests, starving that background task and silently
+      # dropping audio; default autoscaling could also route rtms_stopped to
+      # a different instance than the one holding the stream, losing the
+      # whole capture with a 404. Pinning to one always-warm instance makes
+      # RTMS reliable for now. Remove both flags once RTMS streaming moves to
+      # its own Cloud Run Job (tracked in docs/14-production-status.md,
+      # Phase 2) -- same reasoning as why the bot got its own Job instead of
+      # living in this service.
       - name: Deploy api to Cloud Run
         run: |
           API_SECRETS="VS_DATABASE_URL=visualsprint-database-url:latest"
@@ -91,6 +103,7 @@ jobs:
           API_SECRETS="${API_SECRETS},VS_ZOOM_CLIENT_ID=visualsprint-zoom-client-id:latest"
           API_SECRETS="${API_SECRETS},VS_ZOOM_CLIENT_SECRET=visualsprint-zoom-client-secret:latest"
           API_SECRETS="${API_SECRETS},VS_ZOOM_WEBHOOK_SECRET_TOKEN=visualsprint-zoom-webhook-secret-token:latest"
+          API_SECRETS="${API_SECRETS},VS_ZOOM_ACCOUNT_ID=visualsprint-zoom-account-id:latest"
           API_SECRETS="${API_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
           API_SECRETS="${API_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
           API_SECRETS="${API_SECRETS},VS_JIRA_OAUTH_CLIENT_ID=visualsprint-jira-oauth-client-id:latest"
@@ -102,8 +115,9 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-secrets="$API_SECRETS" \
-            --set-env-vars="VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=[\"https://visualsprint-web-5ieahiycsa-uw.a.run.app\"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID}" \
+            --set-env-vars="VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=[\"https://visualsprint-web-5ieahiycsa-uw.a.run.app\"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_SECRETSTORE_BACKEND=gcp" \
             --allow-unauthenticated \
+            --no-cpu-throttling --max-instances=1 \
             --quiet
 
       # --- Agents/worker: full image, runs pipeline stages, needs every
@@ -152,6 +166,20 @@ jobs:
           # without these -- silently degrading every connection to
           # "calendar_sync.unknown_provider" even though the OAuth grant
           # itself succeeded and the CalendarConnection row is real.
+          #
+          # VS_SECRETSTORE_BACKEND=gcp (set below, in --set-env-vars) closes a
+          # related, worse gap found live 2026-08-18: this flag was previously
+          # set on the bot Cloud Run Job only, so this service (and `api`)
+          # silently used the default "local" SecretStore, which writes OAuth
+          # tokens to the container's own ephemeral disk -- gone on next
+          # deploy, and never visible to this service in the first place
+          # (each service is a separate container). Every calendar sync since
+          # has failed with "secret not found: 'oauth/<provider>/<uuid>'" --
+          # zero meetings, zero bot sessions ever created. See
+          # docs/14-production-status.md. Also requires
+          # roles/secretmanager.admin on visualsprint-backend-service-a
+          # (granted once, not per-deploy -- see the setup notes at the
+          # bottom of this file).
           # Google/Microsoft: calendar sync + Meet/Teams artifact pulling.
           # Zoom (OAuth app, not the S2S/RTMS one): cloud-recording
           # artifact pulling (Mode A2). Jira: work-tracking status sweep.
@@ -172,7 +200,7 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="$AGENTS_SECRETS" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION}" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION},VS_SECRETSTORE_BACKEND=gcp" \
             --timeout=600 \
             --min-instances=0 --max-instances=2 \
             --cpu-throttling \
@@ -268,6 +296,24 @@ jobs:
 #     --role="roles/storage.admin"
 # Without this, gsutil mb silently fails (the || true was hiding this),
 # and the next IAM step errors with "bucket does not exist".
+#
+# Grant the runtime SA permission to read/write OAuth tokens in Secret
+# Manager (run once -- app/adapters/secretstore_gcp.py needs create_secret,
+# add_secret_version, access_secret_version, delete_secret):
+#   gcloud projects add-iam-policy-binding visualsprint-agent \
+#     --member="serviceAccount:visualsprint-backend-service-a@visualsprint-agent.iam.gserviceaccount.com" \
+#     --role="roles/secretmanager.admin"
+# Without this, VS_SECRETSTORE_BACKEND=gcp (set on api + agents below) fails
+# closed -- every OAuth connection appears to succeed in the UI but the
+# calendar/RTMS/action-connector code that reads the token back later 403s
+# or KeyErrors, degrading silently to "not connected" behavior. This is
+# exactly the failure mode diagnosed in docs/14-production-status.md.
+#
+# Zoom S2S account ID (one-time, from the RTMS app's "App Credentials" page,
+# NOT the same as VS_ZOOM_CLIENT_ID -- account_credentials token requests
+# reject the literal string "me"):
+#   printf '<account-id>' | gcloud secrets versions add \
+#     visualsprint-zoom-account-id --project=visualsprint-agent --data-file=-
 #
 # Repo variables (Settings -> Secrets and variables -> Actions -> Variables
 # tab -- these are non-secret identifiers, WIF needs no secret credential):

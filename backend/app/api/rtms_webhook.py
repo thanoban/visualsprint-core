@@ -115,10 +115,12 @@ async def _get_s2s_token() -> str:
     settings = get_settings()
     if not settings.zoom_client_id or not settings.zoom_client_secret:
         raise RuntimeError("zoom_client_id / zoom_client_secret not configured")
+    if not settings.zoom_account_id:
+        raise RuntimeError("zoom_account_id not configured")
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             "https://zoom.us/oauth/token",
-            params={"grant_type": "account_credentials", "account_id": "me"},
+            params={"grant_type": "account_credentials", "account_id": settings.zoom_account_id},
             auth=(settings.zoom_client_id, settings.zoom_client_secret),
         )
         resp.raise_for_status()
