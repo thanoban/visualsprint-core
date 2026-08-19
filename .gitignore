@@ -40,3 +40,7 @@ backend/gold/reports/
 .claude/
 Thumbs.db
 .DS_Store
+
+# Bot Google session (credential — lives in GCP Secret Manager, never commit)
+backend/bot_google_session.json
+backend/app/bot/.bot_edge_profile/
