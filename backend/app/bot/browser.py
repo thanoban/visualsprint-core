@@ -44,10 +44,17 @@ class PlaywrightSession:
                 # its own audio/video into the meeting, only receive.
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
+                # Force an English UI. Every Meet/Teams joiner selector is
+                # text/aria-label based ("Your name", "Join now", "Ask to
+                # join"); a container whose default locale isn't English would
+                # render those labels translated and break every selector,
+                # which is indistinguishable from a "DOM changed" failure.
+                "--lang=en-US",
             ],
         )
         self.context = await self.browser.new_context(
             permissions=["microphone", "camera"],
+            locale="en-US",
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"

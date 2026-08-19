@@ -215,6 +215,20 @@ def _get_calendar_adapter_for_connection(db: object, connection):
     return None
 
 
+def _is_missing_secret(exc: BaseException) -> bool:
+    """True when an exception (or anything in its cause/context chain) is the
+    secretstore's 'secret not found' KeyError (app/adapters/secretstore_*.py).
+    That is a permanent condition -- the OAuth token was never stored or was
+    lost -- and must be handled differently from a transient API/network
+    error, which should keep retrying rather than prune the connection."""
+    seen: BaseException | None = exc
+    while seen is not None:
+        if "secret not found" in str(seen):
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False
+
+
 async def _sync_all_calendars(db: object) -> None:
     """One pass over every CalendarConnection -- the periodic caller
     app/orchestrator/scheduler.py's sync_calendar_connection describes
@@ -252,6 +266,27 @@ async def _sync_all_calendars(db: object) -> None:
                 )
         except Exception as exc:
             db.rollback()
+            if _is_missing_secret(exc):
+                # The stored OAuth token is gone -- e.g. the connection was
+                # made before VS_SECRETSTORE_BACKEND=gcp, so its token went to
+                # the old ephemeral local secretstore and was lost on the next
+                # deploy (the exact failure class in docs/14-production-
+                # status.md). The row is now permanently unusable and would
+                # otherwise re-raise this every single sync forever. Prune it
+                # so it stops being retried and the UI shows "not connected",
+                # prompting a fresh reconnect that writes a real secret --
+                # self-heal, not a silent drop (logged as a distinct event).
+                fresh = db.get(CalendarConnection, connection.id)
+                if fresh is not None:
+                    db.delete(fresh)
+                    db.commit()
+                log.warning(
+                    "calendar_sync.connection_pruned",
+                    connection=connection.id,
+                    provider=connection.provider,
+                    reason="oauth token missing from secret store — reconnect required",
+                )
+                continue
             log.warning("calendar_sync.failed", connection=connection.id, error=str(exc))
 
 
