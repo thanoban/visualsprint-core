@@ -68,7 +68,17 @@ class GoogleMeetJoiner:
         self, join_url: str, *, display_name: str = "VisualSprint Notetaker"
     ) -> JoinOutcome:
         self._display_name = display_name
-        await self._session.launch(display_name=display_name)
+        # Join as the configured signed-in Google account when a session is
+        # available -- required for meetings hosted by personal @gmail
+        # accounts, which refuse anonymous users outright (the "You can't join
+        # this video call" screen). Falls back to anonymous guest-join when
+        # unset (works only for Workspace-hosted meetings that allow guests).
+        from app.config import get_settings
+
+        await self._session.launch(
+            display_name=display_name,
+            storage_state_path=get_settings().bot_google_storage_state_path,
+        )
         page = self._session.page
         try:
             await page.goto(join_url, timeout=_GOTO_TIMEOUT_MS, wait_until="load")

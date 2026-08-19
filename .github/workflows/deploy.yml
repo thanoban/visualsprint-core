@@ -226,6 +226,21 @@ jobs:
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
           BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID}"
+          # Signed-in Google session for the Meet bot (personal-@gmail-hosted
+          # meetings refuse ANONYMOUS users -- see app/bot/browser.py). Mounted
+          # as a file ONLY if the secret exists, so this deploy succeeds before
+          # a session is ever captured. To enable: run
+          # `python -m app.bot.capture_google_session` on a machine with a
+          # display, then
+          #   gcloud secrets create visualsprint-bot-google-session \
+          #     --project=visualsprint-agent --data-file=bot_google_session.json
+          # and redeploy. Refresh with `gcloud secrets versions add ...` when
+          # Google expires the session.
+          if gcloud secrets describe visualsprint-bot-google-session \
+               --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            BOT_SECRETS="${BOT_SECRETS},/secrets/bot-google-session.json=visualsprint-bot-google-session:latest"
+            BOT_ENV="${BOT_ENV},VS_BOT_GOOGLE_STORAGE_STATE_PATH=/secrets/bot-google-session.json"
+          fi
           BOT_ARGS="--image=${REGISTRY}/bot:${{ github.sha }}"
           BOT_ARGS="${BOT_ARGS} --region=${REGION} --project=${PROJECT_ID}"
           BOT_ARGS="${BOT_ARGS} --service-account=visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com"

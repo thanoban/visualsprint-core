@@ -22,7 +22,19 @@ class PlaywrightSession:
         self.context = None
         self.page = None
 
-    async def launch(self, *, display_name: str) -> None:
+    async def launch(self, *, display_name: str, storage_state_path: str | None = None) -> None:
+        """Launch a headless Chromium and open a page.
+
+        `storage_state_path`, when given and present on disk, is a Playwright
+        storage_state JSON (cookies + localStorage) for a signed-in account --
+        the Meet joiner passes the bot's Google session here so it joins as a
+        real logged-in user (app/adapters/bot_google_meet.py). A missing or
+        unreadable file is not fatal: the context launches anonymous and the
+        joiner degrades to guest-join, so a lost/expired session never stops
+        the bot from starting -- it just fails the join honestly (with a
+        screenshot) if the meeting forbids anonymous users."""
+        import os
+
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
@@ -52,7 +64,7 @@ class PlaywrightSession:
                 "--lang=en-US",
             ],
         )
-        self.context = await self.browser.new_context(
+        context_kwargs = dict(
             permissions=["microphone", "camera"],
             locale="en-US",
             user_agent=(
@@ -60,8 +72,29 @@ class PlaywrightSession:
                 "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
             ),
         )
+        signed_in = False
+        if storage_state_path and os.path.exists(storage_state_path):
+            context_kwargs["storage_state"] = storage_state_path
+            signed_in = True
+        elif storage_state_path:
+            log.warning("bot.browser.storage_state_missing", path=storage_state_path)
+
+        try:
+            self.context = await self.browser.new_context(**context_kwargs)
+        except Exception as exc:
+            # A corrupt/placeholder storage_state (e.g. before a real session
+            # is captured) must never stop the bot from starting -- drop it and
+            # launch anonymous, which still joins Workspace-hosted meetings and
+            # fails others honestly (with a screenshot) rather than crashing.
+            if signed_in:
+                log.warning("bot.browser.storage_state_invalid", error=str(exc))
+                context_kwargs.pop("storage_state", None)
+                signed_in = False
+                self.context = await self.browser.new_context(**context_kwargs)
+            else:
+                raise
         self.page = await self.context.new_page()
-        log.info("bot.browser.launched", display_name=display_name)
+        log.info("bot.browser.launched", display_name=display_name, signed_in=signed_in)
 
     async def close(self) -> None:
         try:

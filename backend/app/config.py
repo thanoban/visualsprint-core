@@ -192,6 +192,15 @@ class Settings(BaseSettings):
     # parsing, only at runtime inside the adapter.
     bot_cloud_run_project: str | None = None
     bot_cloud_run_region: str | None = None
+    # Path to a Playwright storage_state JSON (cookies) for a signed-in
+    # Google account the Meet bot joins as. Google refuses ANONYMOUS (not
+    # signed-in) users on meetings hosted by personal @gmail accounts, so a
+    # real logged-in session is the only way the Meet bot can join those --
+    # see app/bot/browser.py and app/bot/capture_google_session.py (the
+    # helper that produces this file). Unset => anonymous join (works only
+    # for Workspace-hosted meetings that allow guests); the bot degrades
+    # honestly rather than failing to start.
+    bot_google_storage_state_path: str | None = None
     # Person-level analysis can multiply LLM spend through the high-stakes
     # ensemble. It is fully wired but opt-in so local/test deployments and
     # budget-constrained projects never incur surprise vendor calls.
