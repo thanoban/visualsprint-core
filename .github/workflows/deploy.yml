@@ -115,7 +115,7 @@ jobs:
             --region "$REGION" --project "$PROJECT_ID" \
             --service-account="visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
             --set-secrets="$API_SECRETS" \
-            --set-env-vars="VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=[\"https://visualsprint-web-5ieahiycsa-uw.a.run.app\"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_SECRETSTORE_BACKEND=gcp" \
+            --set-env-vars="VS_SUPABASE_URL=https://uktfgmvmtijqpzqnivvi.supabase.co,VS_CORS_ALLOWED_ORIGINS=[\"https://visualsprint-web-5ieahiycsa-uw.a.run.app\"],VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app,VS_FRONTEND_BASE_URL=https://visualsprint-web-5ieahiycsa-uw.a.run.app,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_SECRETSTORE_BACKEND=gcp,VS_BOT_DISPATCH_ENABLED=true" \
             --allow-unauthenticated \
             --no-cpu-throttling --max-instances=1 \
             --quiet
