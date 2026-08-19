@@ -272,25 +272,65 @@ class GoogleMeetJoiner:
         except Exception as exc:
             log.warning("bot.meet.announce_failed", error=str(exc))
 
+    async def _is_in_meeting(self, page) -> bool:
+        """Strong 'the bot is now inside the live meeting' signals. The red
+        hang-up control is the most reliable -- it exists only in an active
+        call and never on the lobby 'asking to be let in' screen -- with the
+        People/Chat controls as backups across Meet UI variants. This is the
+        gate the whole capture hangs on: the previous single `People` label
+        check silently failed to detect admission, so the bot sat in the
+        lobby state (capturing nothing) even after the host let it in."""
+        candidates = (
+            page.get_by_role("button", name=re.compile(r"Leave call", re.I)),
+            page.get_by_label(re.compile(r"Leave call", re.I)),
+            page.get_by_role("button", name=re.compile(r"^(People|Show everyone)$", re.I)),
+            page.get_by_label(re.compile(r"^(People|Show everyone)$", re.I)),
+            page.get_by_label("Chat with everyone"),
+        )
+        for loc in candidates:
+            try:
+                if await loc.count() > 0:
+                    return True
+            except Exception:
+                pass
+        return False
+
     async def poll_status(self) -> JoinOutcome:
         page = self._session.page
         if page is None or page.is_closed():
             return JoinOutcome.FAILED
         try:
             if self._state == JoinOutcome.IN_LOBBY:
-                people_btn = page.get_by_label("People")
-                if await people_btn.count() > 0:
+                if await self._is_in_meeting(page):
                     self._state = JoinOutcome.LIVE
+                    log.info("bot.meet.join_outcome", outcome="live")
                     await self._announce(page)
                     return self._state
-                removed = page.get_by_text("removed you", exact=False)
-                denied = page.get_by_text("wasn't approved", exact=False)
-                if await removed.count() > 0 or await denied.count() > 0:
-                    self._state = JoinOutcome.DENIED
-                    return self._state
+                for txt in ("removed you", "wasn't approved", "denied your request", "can't join"):
+                    try:
+                        if await page.get_by_text(txt, exact=False).count() > 0:
+                            self._state = JoinOutcome.DENIED
+                            return self._state
+                    except Exception:
+                        pass
             elif self._state == JoinOutcome.LIVE:
-                ended = page.get_by_text("You left the meeting", exact=False)
-                if await ended.count() > 0:
+                # End of meeting: a positive end message, or the in-call
+                # controls all gone (host ended / bot removed). Checked in
+                # that order so a matched end-screen wins; the control-absence
+                # fallback covers Meet end screens whose exact wording we don't
+                # match, so finalize still fires instead of the bot capturing
+                # silence until the 4h safety cap.
+                for txt in (
+                    "You left the meeting", "You've been removed", "call ended",
+                    "Return to home screen", "meeting has ended", "You were removed",
+                ):
+                    try:
+                        if await page.get_by_text(txt, exact=False).count() > 0:
+                            self._state = JoinOutcome.ENDED
+                            return self._state
+                    except Exception:
+                        pass
+                if not await self._is_in_meeting(page):
                     self._state = JoinOutcome.ENDED
             return self._state
         except Exception as exc:
@@ -302,9 +342,16 @@ class GoogleMeetJoiner:
         if page is None:
             return []
         try:
-            people_btn = page.get_by_label("People")
-            if await people_btn.count() > 0:
-                await people_btn.first.click(timeout=2000)
+            for label in (
+                page.get_by_role("button", name=re.compile(r"^(People|Show everyone)$", re.I)),
+                page.get_by_label(re.compile(r"^(People|Show everyone)$", re.I)),
+            ):
+                try:
+                    if await label.count() > 0:
+                        await label.first.click(timeout=2000)
+                        break
+                except Exception:
+                    pass
             names = await page.locator("[data-participant-id]").all_inner_texts()
             return [BotRosterEntry(display_name=n.strip()) for n in names if n.strip()]
         except Exception as exc:
