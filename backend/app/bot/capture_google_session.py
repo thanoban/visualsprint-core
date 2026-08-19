@@ -43,12 +43,20 @@ async def _capture(out_path: str) -> None:
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
-        try:
-            browser = await p.chromium.launch(channel="chrome", headless=False)
-        except Exception:
-            # No real Chrome installed -- fall back to bundled Chromium. More
-            # likely to be flagged by Google, but better than nothing.
-            print("(real Chrome not found; falling back to bundled Chromium)")
+        # Prefer a real, Google-trusted browser channel (Chrome, then Edge --
+        # both Chromium, both far less likely to hit "this browser may not be
+        # secure" than Playwright's bundled Chromium). Fall back to bundled
+        # Chromium only if neither is installed.
+        browser = None
+        for channel in ("chrome", "msedge"):
+            try:
+                browser = await p.chromium.launch(channel=channel, headless=False)
+                print(f"(using installed {channel})")
+                break
+            except Exception:
+                continue
+        if browser is None:
+            print("(no Chrome/Edge channel found; falling back to bundled Chromium)")
             browser = await p.chromium.launch(headless=False)
 
         context = await browser.new_context(locale="en-US")
