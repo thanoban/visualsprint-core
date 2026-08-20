@@ -12,21 +12,18 @@
 // unintentional.
 //
 // CTAs that in the source design point at placeholder anchors are mapped to
-// real destinations: anything framed as "start/sign in/book a demo" goes to
-// the actual working signup at /login; anything framed as "talk to
-// us/collaborate/request an account" goes to /support (a real contact
-// surface) rather than a fabricated waitlist or sales-contact flow that
-// doesn't exist in this codebase.
+// real destinations: "Sign in" goes to the actual working signup at /login.
+// "Book a demo" and "Collaborate with us" open the LeadModal below, which
+// POSTs to /api/v1/leads (app/api/leads.py, backend) -- a real, unauthenticated
+// endpoint backed by the landing_lead table, not a fabricated waitlist.
 //
-// Three of the four screenshot slots in the source design (.dc.html
-// image-slot elements) had real images attached -- extracted from the
-// design project's .image-slots.state.json and saved to
-// public/landing/vs-shot-*.webp. The fourth (vs-shot-evidence, the small
-// keyframe tile inside the evidence card) had an unrelated screenshot (an
-// IEEE Xplore webpage) attached, clearly a wrong upload -- left as an
-// explicit placeholder here rather than shipping a nonsensical image.
+// Screenshot slots: four of the five (.dc.html image-slot elements, plus one
+// added beyond the source design) have real product screenshots at
+// public/landing/vs-shot-*.webp -- see that directory's provenance in the
+// commit history if the images ever need re-cropping from source.
 
 import { useState } from "react";
+import { API_BASE_URL } from "@/lib/config";
 
 const LIGHT = {
   bg: "#f7f6f2",
@@ -247,8 +244,176 @@ function Dot({ color }: { color: string }) {
   return <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block", flexShrink: 0 }} />;
 }
 
+type LeadKind = "demo" | "collaborate";
+
+const LEAD_COPY: Record<LeadKind, { title: string; sub: string; cta: string }> = {
+  demo: {
+    title: "Book a demo",
+    sub: "Tell us a bit about your team and we'll get back to you to set up a walkthrough.",
+    cta: "Request a demo",
+  },
+  collaborate: {
+    title: "Collaborate with us",
+    sub: "Partnerships, pilots, or just want to talk to a human -- tell us what you have in mind.",
+    cta: "Send",
+  },
+};
+
+function LeadModal({ kind, t, onClose }: { kind: LeadKind; t: typeof LIGHT; onClose: () => void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [company, setCompany] = useState("");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const copy = LEAD_COPY[kind];
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/leads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          name,
+          email,
+          company: company || undefined,
+          message: message || undefined,
+        }),
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      setDone(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send that -- try again in a moment.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    fontFamily: sans,
+    fontSize: 14,
+    color: t.text,
+    background: t.surface2,
+    border: `1px solid ${t.border}`,
+    borderRadius: 8,
+    padding: "10px 12px",
+    outline: "none",
+    boxSizing: "border-box",
+  };
+  const labelStyle: React.CSSProperties = {
+    fontFamily: mono,
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: ".05em",
+    textTransform: "uppercase",
+    color: t.faint,
+    marginBottom: 6,
+    display: "block",
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={copy.title}
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(10,11,15,.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: "100%", maxWidth: 440, background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 28, boxShadow: `0 40px 80px -30px ${t.shadow}` }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, marginBottom: 6 }}>
+          <h3 style={{ fontFamily: serif, fontSize: 22, fontWeight: 600, margin: 0, color: t.text }}>{copy.title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            style={{ fontFamily: sans, fontSize: 18, lineHeight: 1, color: t.faint, background: "transparent", border: "none", cursor: "pointer", padding: 4 }}
+          >
+            &#10005;
+          </button>
+        </div>
+
+        {done ? (
+          <div style={{ padding: "20px 0 4px" }}>
+            <p style={{ fontSize: 14.5, lineHeight: 1.6, color: t.text, margin: "0 0 4px" }}>
+              Got it &mdash; thanks, {name.split(" ")[0] || "there"}.
+            </p>
+            <p style={{ fontSize: 13.5, lineHeight: 1.6, color: t.muted, margin: 0 }}>We&apos;ll reach out at {email}.</p>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{ marginTop: 20, fontSize: 14, fontWeight: 600, color: t.btnFg, background: t.btnBg, border: "none", borderRadius: 8, padding: "10px 18px", cursor: "pointer" }}
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <>
+            <p style={{ fontSize: 13.5, lineHeight: 1.55, color: t.muted, margin: "0 0 20px" }}>{copy.sub}</p>
+            <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label style={labelStyle} htmlFor="lead-name">Name</label>
+                <input id="lead-name" style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} required />
+              </div>
+              <div>
+                <label style={labelStyle} htmlFor="lead-email">Work email</label>
+                <input id="lead-email" type="email" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </div>
+              <div>
+                <label style={labelStyle} htmlFor="lead-company">Company (optional)</label>
+                <input id="lead-company" style={inputStyle} value={company} onChange={(e) => setCompany(e.target.value)} />
+              </div>
+              <div>
+                <label style={labelStyle} htmlFor="lead-message">
+                  {kind === "demo" ? "What would you like to see? (optional)" : "What did you have in mind? (optional)"}
+                </label>
+                <textarea
+                  id="lead-message"
+                  style={{ ...inputStyle, minHeight: 80, resize: "vertical", fontFamily: sans }}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                />
+              </div>
+              {error && (
+                <p style={{ fontSize: 12.5, color: t.gap, margin: 0 }}>{error}</p>
+              )}
+              <button
+                type="submit"
+                disabled={submitting}
+                style={{
+                  marginTop: 4,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  color: t.btnFg,
+                  background: t.btnBg,
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "12px 18px",
+                  cursor: submitting ? "default" : "pointer",
+                  opacity: submitting ? 0.7 : 1,
+                }}
+              >
+                {submitting ? "Sending…" : copy.cta}
+              </button>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function WelcomePage() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [leadKind, setLeadKind] = useState<LeadKind | null>(null);
   const t = theme === "dark" ? DARK : LIGHT;
   const wrap: React.CSSProperties = { maxWidth: 1200, margin: "0 auto", padding: "0 clamp(20px,4vw,40px)" };
 
@@ -275,7 +440,7 @@ export default function WelcomePage() {
             <span>VisualSprint</span>
             <span style={{ color: t.accentText }}>]</span>
           </a>
-          <nav style={{ display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap" }}>
+          <nav className="vs-header-nav" style={{ alignItems: "center", gap: 22, flexWrap: "wrap" }}>
             <a href="#pipeline" style={{ fontSize: 13.5, fontWeight: 500, color: t.muted }}>Pipeline</a>
             <a href="#proof" style={{ fontSize: 13.5, fontWeight: 500, color: t.muted }}>Product</a>
             <a href="#evidence" style={{ fontSize: 13.5, fontWeight: 500, color: t.muted }}>Evidence</a>
@@ -291,15 +456,15 @@ export default function WelcomePage() {
             >
               {theme === "dark" ? "Light mode" : "Dark mode"}
             </button>
-            <a href="/login" style={{ fontSize: 13.5, fontWeight: 600, color: t.text, border: `1px solid ${t.borderStrong}`, borderRadius: 8, padding: "9px 15px", whiteSpace: "nowrap" }}>
+            <a href="/login" className="vs-hide-mobile" style={{ fontSize: 13.5, fontWeight: 600, color: t.text, border: `1px solid ${t.borderStrong}`, borderRadius: 8, padding: "9px 15px", whiteSpace: "nowrap" }}>
               Sign in
             </a>
-            <a href="/support" style={{ fontSize: 13.5, fontWeight: 600, color: t.accentText, background: t.accentSoft, border: `1px solid ${t.accent}`, borderRadius: 8, padding: "9px 15px", whiteSpace: "nowrap" }}>
+            <button type="button" className="vs-hide-mobile" onClick={() => setLeadKind("collaborate")} style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 600, color: t.accentText, background: t.accentSoft, border: `1px solid ${t.accent}`, borderRadius: 8, padding: "9px 15px", whiteSpace: "nowrap", cursor: "pointer" }}>
               Collaborate with us
-            </a>
-            <a href="/login" style={{ fontSize: 13.5, fontWeight: 600, color: t.btnFg, background: t.btnBg, borderRadius: 8, padding: "10px 16px", whiteSpace: "nowrap" }}>
+            </button>
+            <button type="button" onClick={() => setLeadKind("demo")} style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 600, color: t.btnFg, background: t.btnBg, border: "none", borderRadius: 8, padding: "10px 16px", whiteSpace: "nowrap", cursor: "pointer" }}>
               Book a demo
-            </a>
+            </button>
           </div>
         </div>
       </header>
@@ -319,9 +484,9 @@ export default function WelcomePage() {
             Capture Zoom, Meet, Teams or uploads and get organizational memory where every decision links to a speaker, a quote, and the screen that was on display at that moment.
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-            <a href="#proof" style={{ fontSize: 15, fontWeight: 600, color: t.btnFg, background: t.btnBg, borderRadius: 9, padding: "14px 24px" }}>Book a demo</a>
+            <button type="button" onClick={() => setLeadKind("demo")} style={{ fontFamily: sans, fontSize: 15, fontWeight: 600, color: t.btnFg, background: t.btnBg, border: "none", borderRadius: 9, padding: "14px 24px", cursor: "pointer" }}>Book a demo</button>
             <a href="/login" style={{ fontSize: 15, fontWeight: 600, color: t.text, background: "transparent", border: `1px solid ${t.borderStrong}`, borderRadius: 9, padding: "14px 22px" }}>Sign in</a>
-            <a href="/support" style={{ fontSize: 15, fontWeight: 600, color: t.accentText, background: t.accentSoft, border: `1px solid ${t.accent}`, borderRadius: 9, padding: "14px 22px" }}>Collaborate with us</a>
+            <button type="button" onClick={() => setLeadKind("collaborate")} style={{ fontFamily: sans, fontSize: 15, fontWeight: 600, color: t.accentText, background: t.accentSoft, border: `1px solid ${t.accent}`, borderRadius: 9, padding: "14px 22px", cursor: "pointer" }}>Collaborate with us</button>
             <a href="#evidence" style={{ fontSize: 15, fontWeight: 600, color: t.muted, padding: "14px 8px", display: "inline-flex", alignItems: "center", gap: 8 }}>
               See how it works <span style={{ fontFamily: mono }}>&#8595;</span>
             </a>
@@ -391,8 +556,8 @@ export default function WelcomePage() {
 
           <div style={{ display: "flex", flexDirection: "column", gap: "clamp(40px,5vw,72px)" }}>
             {PROOF_SCREENS.map((p) => (
-              <div key={p.title} style={{ display: "grid", gridTemplateColumns: "minmax(280px,1fr) minmax(420px,2fr)", gap: "clamp(24px,3vw,44px)", alignItems: "start" }}>
-                <div style={{ position: "sticky", top: 96 }}>
+              <div key={p.title} className="vs-proof-grid" style={{ display: "grid", alignItems: "start" }}>
+                <div className="vs-proof-sticky" style={{ position: "sticky", top: 96 }}>
                   <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: t.evidence, background: t.evidenceBg, padding: "5px 9px", borderRadius: 4 }}>
                     {p.tag}
                   </span>
@@ -436,7 +601,7 @@ export default function WelcomePage() {
       {/* Evidence anatomy */}
       <section id="evidence" style={{ background: t.surface2, borderTop: `1px solid ${t.border}`, borderBottom: `1px solid ${t.border}`, padding: "clamp(64px,7vw,100px) 0" }}>
         <div style={wrap}>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,1fr) minmax(440px,1.45fr)", gap: "clamp(28px,4vw,56px)", alignItems: "start" }}>
+          <div className="vs-evidence-grid" style={{ display: "grid", alignItems: "start" }}>
             <div>
               <p style={{ fontFamily: mono, fontSize: 11.5, fontWeight: 600, letterSpacing: ".07em", textTransform: "uppercase", color: t.accentText, margin: "0 0 14px" }}>Anatomy of a claim</p>
               <h2 style={{ fontFamily: serif, fontSize: "clamp(26px,3.2vw,38px)", lineHeight: 1.14, fontWeight: 600, letterSpacing: "-.02em", margin: "0 0 18px" }}>
@@ -673,8 +838,8 @@ export default function WelcomePage() {
             Connect a calendar and your next meeting arrives as a sourced report.
           </p>
           <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <a href="/login" style={{ fontSize: 15, fontWeight: 600, color: "#15171b", background: t.accent, borderRadius: 9, padding: "14px 24px" }}>Book a demo</a>
-            <a href="/support" style={{ fontSize: 15, fontWeight: 600, color: t.bandText, background: t.bandSurface, border: `1px solid ${t.accent}`, borderRadius: 9, padding: "14px 22px" }}>Collaborate with us</a>
+            <button type="button" onClick={() => setLeadKind("demo")} style={{ fontFamily: sans, fontSize: 15, fontWeight: 600, color: "#15171b", background: t.accent, border: "none", borderRadius: 9, padding: "14px 24px", cursor: "pointer" }}>Book a demo</button>
+            <button type="button" onClick={() => setLeadKind("collaborate")} style={{ fontFamily: sans, fontSize: 15, fontWeight: 600, color: t.bandText, background: t.bandSurface, border: `1px solid ${t.accent}`, borderRadius: 9, padding: "14px 22px", cursor: "pointer" }}>Collaborate with us</button>
             <a href="#proof" style={{ fontSize: 15, fontWeight: 600, color: t.bandText, border: `1px solid ${t.bandBorder}`, borderRadius: 9, padding: "14px 22px" }}>View the screens</a>
           </div>
         </div>
@@ -697,6 +862,8 @@ export default function WelcomePage() {
           <p style={{ fontFamily: mono, fontSize: 11.5, color: t.faint, margin: 0 }}>&#169; 2026 &middot; evidence-grounded meeting intelligence</p>
         </div>
       </footer>
+
+      {leadKind && <LeadModal kind={leadKind} t={t} onClose={() => setLeadKind(null)} />}
     </div>
   );
 }

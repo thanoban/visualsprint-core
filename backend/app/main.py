@@ -11,6 +11,7 @@ from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
 from app.api.corrections import router as corrections_router
 from app.api.data_rights import router as data_rights_router
+from app.api.leads import router as leads_router
 from app.api.me import router as me_router
 from app.api.oauth import router as oauth_router
 from app.api.people import router as people_router
@@ -62,6 +63,7 @@ app.include_router(rtms_webhook_router)
 app.include_router(oauth_router)
 app.include_router(me_router)
 app.include_router(people_router)
+app.include_router(leads_router)
 
 
 @app.get("/healthz", tags=["ops"])

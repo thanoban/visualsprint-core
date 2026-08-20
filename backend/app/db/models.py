@@ -879,3 +879,32 @@ class PipelineJob(TimestampMixin, Base):
     locked_by: Mapped[str | None] = mapped_column(String(64), default=None)
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+# --------------------------------------------------------------------------- #
+# Public landing-page lead capture
+# --------------------------------------------------------------------------- #
+
+
+class LeadKind(enum.StrEnum):
+    DEMO = "demo"
+    COLLABORATE = "collaborate"
+
+
+class LandingLead(TimestampMixin, Base):
+    """Book a demo / Collaborate with us form submissions from the public
+    marketing site (frontend/app/welcome). No org_id -- these come from
+    anonymous visitors before any org exists. Lives in the same Postgres
+    database as everything else (Supabase-hosted in production, per
+    VS_DATABASE_URL), so submissions are visible directly in the Supabase
+    Table Editor with no extra retrieval UI needed."""
+
+    __tablename__ = "landing_lead"
+    __table_args__ = (Index("ix_landing_lead_kind_created", "kind", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    kind: Mapped[LeadKind] = mapped_column(Enum(LeadKind, native_enum=False, length=16))
+    name: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(255))
+    company: Mapped[str | None] = mapped_column(String(255), default=None)
+    message: Mapped[str | None] = mapped_column(Text, default=None)

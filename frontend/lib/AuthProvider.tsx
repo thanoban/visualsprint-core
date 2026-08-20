@@ -81,10 +81,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [session]);
 
   useEffect(() => {
-    if (loading) return;
-    if (!session && !PUBLIC_PATHS.has(pathname)) {
-      router.replace("/login");
-    }
+    if (loading || session || PUBLIC_PATHS.has(pathname)) return;
+    // Bare "/" gets the marketing page, not the login form -- every other
+    // protected route still sends an unauthenticated visitor to /login,
+    // since that's the page that actually explains what to do next.
+    router.replace(pathname === "/" ? "/welcome" : "/login");
   }, [loading, session, pathname, router]);
 
   const authedFetch = useCallback(
