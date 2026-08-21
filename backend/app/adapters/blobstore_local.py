@@ -1,6 +1,7 @@
 """Local-filesystem BlobStore for dev. Prod uses the S3/R2 implementation."""
 
 from pathlib import Path
+from typing import AsyncIterator
 
 from app.config import get_settings
 
@@ -28,6 +29,20 @@ class LocalBlobStore:
         p = self._path(uri)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
+        return uri
+
+    async def put_stream(
+        self,
+        key: str,
+        stream: AsyncIterator[bytes],
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        uri = f"{SCHEME}{key}"
+        p = self._path(uri)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("wb") as f:
+            async for chunk in stream:
+                f.write(chunk)
         return uri
 
     async def get(self, uri: str) -> bytes:

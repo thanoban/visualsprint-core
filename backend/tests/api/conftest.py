@@ -1,17 +1,21 @@
-"""Shared fixtures for backend/tests/api — isolated in-memory SQLite DB per test.
+"""Shared fixtures for backend/tests/api.
 
-Production runs on Postgres + pgvector; SQLite can't faithfully represent the
-pgvector `Vector` column on `KnowledgeItem.embedding` (see backend/app/db/models.py),
-so `test_chat.py` marks the vector-similarity-specific path clearly and skips
-executing it against real data — the FTS retrieval path (the working path today)
-is fully exercised here, against the same code the postgres branch shares.
+Default: in-memory SQLite (fast, zero-setup). Set VS_TEST_DATABASE_URL to a
+real Postgres URL to run the full suite against Postgres instead — this is
+what CI does, and it catches dialect-specific bugs (pgvector, HNSW, FTS) that
+SQLite silently masks.
+
+SQLite can't represent the pgvector `Vector` column on `KnowledgeItem.embedding`,
+so `test_chat.py` marks the vector-similarity path and skips it when on SQLite.
 """
+
+import os
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.auth import dependency as auth_dep
 from app.db.base import Base, get_db
@@ -20,22 +24,39 @@ from app.main import app
 
 FAKE_USER = User(id="test-user-0000-0000-0000-000000000000", email="test@example.com")
 
+_PG_URL = os.environ.get("VS_TEST_DATABASE_URL")
+
 
 @pytest.fixture
 def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session_local = sessionmaker(bind=engine, expire_on_commit=False)
-    session = session_local()
-    try:
-        yield session
-    finally:
-        session.close()
-        engine.dispose()
+    if _PG_URL:
+        # Postgres: real schema, real dialect — catches pgvector/FTS/HNSW issues.
+        # NullPool so each test gets a fresh connection, never a stale one.
+        engine = create_engine(_PG_URL, poolclass=NullPool)
+        Base.metadata.create_all(engine)
+        session_local = sessionmaker(bind=engine, expire_on_commit=False)
+        session = session_local()
+        try:
+            yield session
+        finally:
+            session.rollback()
+            session.close()
+            Base.metadata.drop_all(engine)
+            engine.dispose()
+    else:
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_local = sessionmaker(bind=engine, expire_on_commit=False)
+        session = session_local()
+        try:
+            yield session
+        finally:
+            session.close()
+            engine.dispose()
 
 
 @pytest.fixture

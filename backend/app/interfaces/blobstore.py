@@ -7,7 +7,7 @@ purges raw audio/keyframe blobs for orgs that set Org.retention_days,
 per-org opt-in only -- never the platform default.
 """
 
-from typing import Protocol
+from typing import AsyncIterator, Protocol
 
 
 class BlobStore(Protocol):
@@ -15,6 +15,21 @@ class BlobStore(Protocol):
         self, key: str, data: bytes, content_type: str = "application/octet-stream"
     ) -> str:
         """Store bytes; returns a stable blob URI (e.g. 'blob://audio/<org>/<meeting>.flac')."""
+        ...
+
+    async def put_stream(
+        self,
+        key: str,
+        stream: AsyncIterator[bytes],
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        """Stream bytes chunk-by-chunk; returns a stable blob URI.
+
+        Avoids loading the full file into memory — required for uploads that
+        may be several GiB (long recordings). Adapters that lack native
+        streaming support may buffer internally, but the caller's memory is
+        never burdened with the full payload.
+        """
         ...
 
     async def get(self, uri: str) -> bytes: ...

@@ -933,16 +933,25 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
         .scalars()
         .all()
     }
+    # Detach all ORM objects from the session so they survive the commit
+    # below as plain Python objects (attributes remain accessible), then
+    # release the DB connection back to the pool before we make vendor
+    # API calls that can take several minutes for a long meeting.
+    org_id = session.org_id
+    session_id = session.id
+    db.expunge_all()
+    db.commit()
+
     transcriber = _get_transcriber()
     for track in tracks:
         result = await transcriber.transcribe(
-            TranscriptionRequest(audio_uri=track.uri, org_id=session.org_id)
+            TranscriptionRequest(audio_uri=track.uri, org_id=org_id)
         )
         for gap in detect_coverage_gaps(result.segments):
             db.add(
                 CoverageInterval(
-                    org_id=session.org_id,
-                    capture_session_id=session.id,
+                    org_id=org_id,
+                    capture_session_id=session_id,
                     start_s=gap.start_s,
                     end_s=gap.end_s,
                     modality="audio",
@@ -974,8 +983,8 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
                 attribution_confidence = overlap_ratio if person_id else 0.0
             db.add(
                 Utterance(
-                    org_id=session.org_id,
-                    capture_session_id=session.id,
+                    org_id=org_id,
+                    capture_session_id=session_id,
                     person_id=person_id,
                     start_s=seg.start_s,
                     end_s=seg.end_s,
@@ -989,7 +998,7 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
                 )
             )
     db.flush()
-    log.info("transcribe.done", session=session.id, tracks=len(tracks))
+    log.info("transcribe.done", session=session_id, tracks=len(tracks))
 
 
 _ocr_engine = None
@@ -1073,8 +1082,17 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
         ).delete(synchronize_session=False)
         db.query(Keyframe).filter(Keyframe.capture_session_id == session.id).delete()
 
-    if not session.video_uri:
-        log.info("stage.screen.no_video", session=session.id)
+    # Snapshot the scalar fields we need, then release the DB connection
+    # before potentially long blob download + GPU work (same pattern as
+    # _handle_transcribe — avoids holding a pool connection during I/O).
+    session_id = session.id
+    org_id = session.org_id
+    video_uri = session.video_uri
+    db.expunge_all()
+    db.commit()
+
+    if not video_uri:
+        log.info("stage.screen.no_video", session=session_id)
         return
 
     blob = get_blobstore()
@@ -1082,12 +1100,12 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
     ocr = _get_ocr()
     captioner = _get_vlm_captioner()
 
-    local_path = Path(session.video_uri)
+    local_path = Path(video_uri)
     if local_path.exists():
         candidates = detect(str(local_path))
     else:
-        data = await blob.get(session.video_uri)
-        suffix = Path(session.video_uri).suffix or ".mp4"
+        data = await blob.get(video_uri)
+        suffix = Path(video_uri).suffix or ".mp4"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
@@ -1099,7 +1117,7 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
     created: list[Keyframe] = []
     for cand in candidates:
         image_uri = await blob.put(
-            f"keyframes/{session.org_id}/{session.id}/{cand.valid_from_s:.2f}.jpg",
+            f"keyframes/{org_id}/{session_id}/{cand.valid_from_s:.2f}.jpg",
             cand.image_bytes,
             content_type="image/jpeg",
         )
@@ -1112,10 +1130,10 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
 
                 vlm_caption = await caption_keyframe(cand.image_bytes, captioner=captioner)
             except Exception as exc:
-                log.warning("screen.caption_failed", session=session.id, error=str(exc))
+                log.warning("screen.caption_failed", session=session_id, error=str(exc))
         kf = Keyframe(
-            org_id=session.org_id,
-            capture_session_id=session.id,
+            org_id=org_id,
+            capture_session_id=session_id,
             valid_from_s=cand.valid_from_s,
             valid_to_s=cand.valid_to_s,
             image_uri=image_uri,
@@ -1130,14 +1148,14 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
 
     if created:
         utterances = (
-            db.execute(select(Utterance).where(Utterance.capture_session_id == session.id))
+            db.execute(select(Utterance).where(Utterance.capture_session_id == session_id))
             .scalars()
             .all()
         )
         for grounding in ground_utterances(utterances, created):
             db.add(
                 UtteranceKeyframe(
-                    org_id=session.org_id,
+                    org_id=org_id,
                     utterance_id=grounding.utterance_id,
                     keyframe_id=grounding.keyframe_id,
                     score=grounding.score,
@@ -1145,7 +1163,7 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
                 )
             )
     db.flush()
-    log.info("screen.done", session=session.id, keyframes=len(created))
+    log.info("screen.done", session=session_id, keyframes=len(created))
 
 
 @stage_handler("understand")

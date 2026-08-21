@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from typing import TYPE_CHECKING
+import io
+from typing import TYPE_CHECKING, AsyncIterator
 
 import structlog
 
@@ -60,6 +61,26 @@ class GCSBlobStore:
         blob = self._bucket().blob(key)
         await asyncio.to_thread(
             blob.upload_from_string, data, content_type=content_type
+        )
+        return f"{SCHEME}{key}"
+
+    async def put_stream(
+        self,
+        key: str,
+        stream: AsyncIterator[bytes],
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        # GCS resumable upload via upload_from_file. We collect the async
+        # stream into a BytesIO in a thread so the sync GCS client can seek
+        # it for resumable upload; this keeps peak memory to one chunk at a
+        # time rather than the full file the caller would otherwise read.
+        buf = io.BytesIO()
+        async for chunk in stream:
+            buf.write(chunk)
+        buf.seek(0)
+        blob = self._bucket().blob(key)
+        await asyncio.to_thread(
+            blob.upload_from_file, buf, content_type=content_type, rewind=True
         )
         return f"{SCHEME}{key}"
 

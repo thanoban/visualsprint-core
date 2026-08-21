@@ -5,6 +5,8 @@ audio stored in blob store → pipeline enqueued. Proves the entire spine
 before any platform API exists.
 """
 
+from typing import AsyncIterator
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -22,6 +24,20 @@ router = APIRouter(prefix="/api/v1/meetings", tags=["meetings"])
 ALLOWED_SUFFIXES = {".flac", ".wav", ".mp3", ".m4a", ".mp4", ".webm", ".ogg"}
 VIDEO_SUFFIXES = {".mp4", ".webm"}  # doubles as the screen-capture source (docs/03-capture.md)
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+CHUNK_SIZE = 1024 * 1024  # 1 MiB — keeps memory per upload bounded
+
+
+async def _checked_stream(file: UploadFile) -> AsyncIterator[bytes]:
+    """Yield file chunks, raising 413 if the total exceeds MAX_UPLOAD_BYTES."""
+    total = 0
+    while True:
+        chunk = await file.read(CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "file too large")
+        yield chunk
 
 
 class UploadResponse(BaseModel):
@@ -57,10 +73,9 @@ async def upload_meeting(
             415, f"unsupported file type '{suffix}'; allowed: {sorted(ALLOWED_SUFFIXES)}"
         )
 
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "file too large")
-    if not data:
+    # Peek at first chunk to reject empty files before creating DB rows.
+    first_chunk = await file.read(CHUNK_SIZE)
+    if not first_chunk:
         raise HTTPException(400, "empty file")
 
     meeting = Meeting(
@@ -74,9 +89,15 @@ async def upload_meeting(
     db.flush()
 
     blob = get_blobstore()
-    audio_uri = await blob.put(
+
+    async def _reassembled() -> AsyncIterator[bytes]:
+        yield first_chunk
+        async for chunk in _checked_stream(file):
+            yield chunk
+
+    audio_uri = await blob.put_stream(
         f"audio/{org_id}/{session.id}{suffix}",
-        data,
+        _reassembled(),
         file.content_type or "application/octet-stream",
     )
 

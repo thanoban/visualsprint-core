@@ -13,7 +13,8 @@ this file is fully testable without botocore installed.
 """
 
 import asyncio
-from typing import Any, Protocol
+import io
+from typing import Any, AsyncIterator, Protocol
 
 from app.config import get_settings
 
@@ -80,6 +81,30 @@ class S3BlobStore:
         client = self._ensure_client()
         await asyncio.to_thread(
             client.put_object, Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
+        )
+        return f"{SCHEME}{key}"
+
+    async def put_stream(
+        self,
+        key: str,
+        stream: AsyncIterator[bytes],
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        # botocore's put_object accepts a file-like object as Body, which it
+        # reads in one shot. Collect the async stream into BytesIO so the
+        # caller's memory is bounded to the actual stream buffer rather than
+        # requiring the whole file upfront as a bytes literal.
+        buf = io.BytesIO()
+        async for chunk in stream:
+            buf.write(chunk)
+        buf.seek(0)
+        client = self._ensure_client()
+        await asyncio.to_thread(
+            client.put_object,
+            Bucket=self._bucket,
+            Key=key,
+            Body=buf,
+            ContentType=content_type,
         )
         return f"{SCHEME}{key}"
 
