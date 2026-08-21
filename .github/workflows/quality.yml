@@ -1,7 +1,18 @@
 name: Quality
 
+# Runs on PRs, on every push to main, and as a reusable workflow that
+# deploy.yml calls before it ships anything.
+#
+# The main-branch trigger is the important one: this gate used to fire on
+# `pull_request` only while deploy.yml fired on `push: main`, so a commit
+# pushed straight to main -- which is how this repo is actually worked --
+# deployed without lint, tests, or the agent-eval regression gate ever
+# running against it.
 on:
   pull_request: {}
+  push:
+    branches: [main]
+  workflow_call: {}
   workflow_dispatch: {}
 
 jobs:
@@ -10,14 +21,53 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The suite is not sqlite-only: the walking-skeleton test
+    # (tests/test_upload_pipeline.py), the worker bounded-pass tests and the
+    # queue failure-path tests all drive the real FSM against Postgres. There
+    # was no service container here, so those tests could only ever have
+    # errored at fixture setup.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: visualsprint
+          POSTGRES_PASSWORD: visualsprint_dev
+          POSTGRES_DB: visualsprint
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U visualsprint"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      VS_DATABASE_URL: postgresql+psycopg://visualsprint:visualsprint_dev@localhost:5433/visualsprint
+      # Runs the API suite against Postgres too, instead of the sqlite
+      # stand-in -- so pgvector columns, FOR UPDATE SKIP LOCKED and the CHECK
+      # constraints (ck_action_requires_approval, i.e. rule 5's whole
+      # enforcement) are exercised the way production has them.
+      VS_TEST_DATABASE_URL: postgresql+psycopg://visualsprint:visualsprint_dev@localhost:5433/visualsprint_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+          cache: pip
+      - run: pip install -e ".[dev,test]"
+
+      - name: Create the API suite's test database
+        run: PGPASSWORD=visualsprint_dev createdb -h localhost -p 5433 -U visualsprint visualsprint_test
+
+      - name: Apply migrations
+        run: python -m alembic upgrade head
+
       - run: python -m ruff check app tests
-      - run: python -m pytest tests -q --deselect tests/test_vector_search_postgres.py
+
+      - name: Type gate (strict on rule-enforcement modules, ratchet elsewhere)
+        run: python scripts/mypy_gate.py
+
+      - run: python -m pytest tests -q
+
       - name: Frozen agent-evaluation regression gate
         run: >-
           python -m app.evaluation.agent_eval

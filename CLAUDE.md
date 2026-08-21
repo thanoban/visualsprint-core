@@ -35,8 +35,14 @@ Multilingual (Sinhala/Tamil/English) meeting-intelligence platform. Full plan: [
 
 ## Current state
 
-Phase 0 done and **runtime-verified end-to-end**: schema (incl. `audio_track`), six interfaces, FSM orchestrator, blob store, Mode D upload → `acquire` → `transcribe` stage handlers, first Alembic migration applied against the docker-compose Postgres. `tests/test_upload_pipeline.py` proves upload→utterance rows with a fake Transcriber (no live vendor credentials needed to run it).
+**Architecture review complete (2026-08-21).** Full findings and remediation record: [ARCHITECTURE.md](ARCHITECTURE.md). 17 bugs found and fixed: 4 critical (infinite retry loop, 3 unauthenticated endpoints, RTMS in-memory state, default-org data mixing), 5 high (long transactions, CI not on deploy path, broken CI job, unrun mypy, no LLM cost accounting), 8 medium + 1 discovered during remediation (FTS north-star query returned zero results). Test suite: 587 passing, 0 failing.
 
-The full ASR cascade (`backend/app/asr/` — Silero VAD → VoxLingua107 LID → Google/Azure/Groq routing with auto-failover, `backend/app/adapters/asr_*.py`) and all five agents (`backend/app/agents/`) plus action connectors (`backend/app/connectors/`) are implemented but not yet wired into a live end-to-end run — they need real vendor/Vertex credentials, which aren't configured in dev yet. `understand`/`verify`/`remember`/`propose`/`report` stage handlers exist in `worker.py` and call into the agents, but haven't been runtime-verified past `transcribe`.
+New docs: [docs/08](docs/08-speaker-identity.md) through [docs/15](docs/15-local-dev.md) — speaker identity, participant intelligence, longitudinal intelligence, agent architecture, production status, local dev setup.
 
-Check `docs/06-roadmap.md` for phase status before assuming something is built.
+**Production incident (2026-08-18):** zero meetings ever captured. Root cause: OAuth tokens written to container ephemeral disk instead of Secret Manager. Fix: set `VS_SECRETSTORE_BACKEND=gcp` on `api` and `agents` Cloud Run services. See [docs/14-production-status.md](docs/14-production-status.md) for full diagnosis and fix status.
+
+**Landing-page lead capture live in production** (`POST /api/v1/leads`, `landing_lead` table, Alembic migration `c1a2f6e8b3d4` applied).
+
+Five session-scoped agents plus four new person-scoped agents (`pattern`, `progress`, `decision_trajectory`, `participant_narrator`) implemented. Longitudinal FSM (`backend/app/longitudinal/`) and person-level API (`backend/app/api/people.py`) in place. Nothing downstream of `transcribe` has run against real audio — blocked on production capture fix above.
+
+Check [docs/06-roadmap.md](docs/06-roadmap.md) for phase status before assuming something is built.

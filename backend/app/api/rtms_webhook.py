@@ -67,30 +67,13 @@ def set_websocket_connector(connector: WebSocketConnector | None) -> None:
     _connector = connector
 
 
-def _get_org_by_default(db: Session) -> Org:
-    org = db.query(Org).filter(Org.name == "default").one_or_none()
-    if org is None:
-        org = Org(name="default")
-        db.add(org)
-        db.flush()
-    return org
-
-
 def _resolve_org_for_zoom_account(db: Session, account_id: str | None) -> Org:
-    """Maps an incoming webhook to the org that connected this Zoom
-    account (app/api/oauth.py's Zoom callback stores the account_id as
-    OrgConnection.external_id at connect time) -- one webhook endpoint is
-    shared across every account that's authorized the app, with no other
-    field to tell them apart.
+    """Maps an incoming webhook to the org that connected this Zoom account.
 
-    Falls back to the single "default" org when account_id is missing or
-    doesn't match a connection: RTMS's exact webhook payload shape for
-    account_id is not live-verified against a real Zoom webhook (no app
-    is registered yet, same maturity level as every other vendor
-    integration in this codebase, and public documentation on this
-    specific field was inconsistent when checked) -- if that assumption
-    turns out wrong, this must degrade to today's single-account behavior
-    rather than silently misroute or crash a real capture."""
+    Raises 404 when the account_id is missing or doesn't match any connected
+    org -- there is no correct default tenant. Routing to a "default" org
+    would mix unrelated tenants' meeting data, which is a data breach.
+    """
     if account_id:
         connection = (
             db.query(OrgConnection)
@@ -101,7 +84,11 @@ def _resolve_org_for_zoom_account(db: Session, account_id: str | None) -> Org:
             org = db.get(Org, connection.org_id)
             if org is not None:
                 return org
-    return _get_org_by_default(db)
+    raise HTTPException(
+        404,
+        f"No org has connected Zoom account {account_id!r}. "
+        "Connect it via Settings → Integrations → Zoom.",
+    )
 
 
 async def _get_s2s_token() -> str:

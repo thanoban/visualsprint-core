@@ -14,11 +14,20 @@ from app.api.data_rights import router as data_rights_router
 from app.api.leads import router as leads_router
 from app.api.me import router as me_router
 from app.api.oauth import router as oauth_router
+from app.api.ops import router as ops_router
 from app.api.people import router as people_router
 from app.api.report import router as report_router
-from app.api.rtms_webhook import router as rtms_webhook_router, set_websocket_connector
+from app.api.rtms_webhook import router as rtms_webhook_router
+from app.api.rtms_webhook import set_websocket_connector
 from app.api.upload import router as upload_router
 from app.config import get_settings
+from app.observability import (
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    configure_logging,
+)
+
+configure_logging()
 
 
 @asynccontextmanager
@@ -52,6 +61,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Middleware runs in reverse registration order, so the rate limiter is
+# registered after the context middleware so a rejected request is still
+# logged with its request id.
+if get_settings().rate_limit_enabled:
+    app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestContextMiddleware)
+
 app.include_router(upload_router)
 app.include_router(capture_router)
 app.include_router(report_router)
@@ -63,6 +79,7 @@ app.include_router(rtms_webhook_router)
 app.include_router(oauth_router)
 app.include_router(me_router)
 app.include_router(people_router)
+app.include_router(ops_router)
 app.include_router(leads_router)
 
 

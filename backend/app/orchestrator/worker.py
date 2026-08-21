@@ -1185,28 +1185,54 @@ async def _handle_report(db: object, job: PipelineJob) -> None:
 
 
 async def run_once() -> bool:
-    """Claim and run one job. Returns True if a job was processed."""
+    """Claim and run one job. Returns True if a job was processed.
+
+    Three transactions, deliberately, not one:
+
+    1. Claim, then commit. `claim_next_job` increments `attempts`. If that
+       increment is still uncommitted when the handler raises, the rollback
+       below reverts it and `fail_job` -- reading from a fresh session -- sees
+       `attempts == 0`. `attempts >= max_attempts` is then never true:
+       `JobStatus.FAILED` and `CaptureState.FAILED` are unreachable, backoff
+       is pinned at its first 5s step, and a deterministically-failing stage
+       calls a paid vendor every 5 seconds forever. Committing the claim is
+       what makes retry limits, exponential backoff, and reap_stuck_jobs work.
+       A hard crash (OOM in torch/paddleocr) now leaves a durable RUNNING row
+       for the reaper instead of vanishing.
+    2. Run the handler against its own session.
+    3. Fail in a fresh session, because the handler's session is poisoned.
+    """
     Session = get_sessionmaker()
+
+    # --- transaction 1: claim and commit ---
     with Session() as db:
         job = q.claim_next_job(db)
         if job is None:
             db.commit()
             return False
-        handler = _HANDLERS.get(job.stage, _noop)
+        job_id, stage, session_id = job.id, job.stage, job.capture_session_id
+        db.commit()
+
+    # --- transaction 2: run the handler ---
+    with Session() as db:
+        job = db.get(PipelineJob, job_id)
+        handler = _HANDLERS.get(stage, _noop)
         try:
             await handler(db, job)
             q.complete_job(db, job)
             db.commit()
-            log.info("stage.done", stage=job.stage, session=job.capture_session_id)
+            log.info("stage.done", stage=stage, session=session_id)
         except Exception as exc:
             db.rollback()
+            # --- transaction 3: record failure in a clean session ---
+            error = f"{exc}\n{traceback.format_exc(limit=5)}"
             with Session() as db2:
-                job2 = db2.get(PipelineJob, job.id)
+                job2 = db2.get(PipelineJob, job_id)
                 if job2 is not None:
-                    q.fail_job(db2, job2, f"{exc}\n{traceback.format_exc(limit=5)}")
+                    q.fail_job(db2, job2, error)
                     db2.commit()
-            log.error("stage.failed", stage=job.stage, error=str(exc))
-        return True
+            log.error("stage.failed", stage=stage, error=str(exc))
+    return True
 
 
 def _sweep_registry(settings) -> list[tuple[str, float, Callable[[object], Awaitable[None]]]]:

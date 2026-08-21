@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.verify import AuthError, verify_jwt
 from app.db.base import get_db
-from app.db.models import Org, OrgMember, User
+from app.db.models import CaptureSession, Org, OrgMember, User
 
 
 def _extract_bearer_token(authorization: str) -> str:
@@ -73,3 +73,24 @@ def require_org_member(
     directly inside the handler once the body/form has been parsed."""
     if not is_org_member(db, org_id, user):
         raise HTTPException(403, "not a member of this org")
+
+
+def require_session_member(
+    capture_session_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CaptureSession:
+    """Resolve a capture session and prove the caller belongs to its org.
+
+    Single enforcement point for every per-session read -- three routes
+    (meeting report, raw utterance list, session-state poll) each took only
+    a capture_session_id and checked nothing, so any caller holding a UUID
+    could read another tenant's full meeting content. Returns the resolved
+    CaptureSession so handlers cannot accidentally re-fetch it unchecked.
+    """
+    session = db.get(CaptureSession, capture_session_id)
+    if session is None:
+        raise HTTPException(404, "capture session not found")
+    if not is_org_member(db, session.org_id, user):
+        raise HTTPException(403, "not a member of this org")
+    return session

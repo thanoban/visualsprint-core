@@ -44,3 +44,6 @@ Thumbs.db
 # Bot Google session (credential — lives in GCP Secret Manager, never commit)
 backend/bot_google_session.json
 backend/app/bot/.bot_edge_profile/
+
+# Mentor review copy — read-only reference, not part of the project
+visualsprint-mentors/

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
 from app.auth import dependency as auth_dep
-from app.auth.dependency import get_current_user
+from app.auth.dependency import get_current_user, require_session_member
 from app.capture.consent import record_disclosure
 from app.db.base import get_db
 from app.db.models import AudioTrack, CaptureSession, Meeting, User
@@ -112,11 +112,12 @@ async def upload_meeting(
     )
 
 
-@router.get("/sessions/{session_id}")
-async def get_session(session_id: str, db: Session = Depends(get_db)) -> dict:
-    session = db.get(CaptureSession, session_id)
-    if session is None:
-        raise HTTPException(404, "session not found")
+@router.get("/sessions/{capture_session_id}")
+async def get_session(
+    capture_session_id: str,
+    session: CaptureSession = Depends(require_session_member),
+) -> dict:
+    # session resolved and org-authorized by require_session_member
     return {
         "id": session.id,
         "meeting_id": session.meeting_id,

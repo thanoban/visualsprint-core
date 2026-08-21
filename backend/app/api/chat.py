@@ -15,7 +15,8 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import Text, func, or_
+from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
@@ -91,7 +92,17 @@ def _fts_candidates(
     dialect = db.bind.dialect.name if db.bind is not None else ""
     if dialect == "postgresql":
         tsvector = func.to_tsvector("english", KnowledgeItem.statement)
-        tsquery = func.plainto_tsquery("english", question)
+        # plainto_tsquery ANDs every lexeme, so a natural-language question
+        # only matches an item containing ALL of its content words. The
+        # project's own north-star query -- "why are we using MongoDB?" --
+        # becomes 'use' & 'mongodb' and matched NOTHING. Rewriting & to |
+        # matches any term and lets ts_rank discriminate, which is what
+        # ranking is for. The SQLite fallback below was already OR-based,
+        # so the two dialects silently disagreed until this was fixed.
+        tsquery = func.cast(
+            func.replace(func.cast(func.plainto_tsquery("english", question), Text), "&", "|"),
+            TSQUERY,
+        )
         q = q.filter(tsvector.op("@@")(tsquery)).order_by(func.ts_rank(tsvector, tsquery).desc())
     else:
         # Dev/test fallback (SQLite can't do to_tsvector): naive token ILIKE

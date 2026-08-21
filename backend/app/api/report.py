@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
+from app.auth.dependency import require_session_member
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
@@ -192,11 +193,11 @@ async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> Evidence
 
 @router.get("/{capture_session_id}/report", response_model=MeetingReport)
 async def get_meeting_report(
-    capture_session_id: str, db: Session = Depends(get_db)
+    capture_session_id: str,
+    db: Session = Depends(get_db),
+    session: CaptureSession = Depends(require_session_member),
 ) -> MeetingReport:
-    session = db.get(CaptureSession, capture_session_id)
-    if session is None:
-        raise HTTPException(404, "capture session not found")
+    # session resolved and org-authorized by require_session_member
     meeting = db.get(Meeting, session.meeting_id)
     if meeting is None:
         raise HTTPException(404, "meeting not found")

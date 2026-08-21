@@ -121,6 +121,9 @@ class Settings(BaseSettings):
 
     # --- Worker ---
     worker_poll_seconds: float = 2.0
+    # Max RUNNING jobs per org at once -- prevents one org bulk-uploading
+    # hundreds of recordings from starving every other tenant in a global FIFO.
+    worker_max_inflight_per_org: int = 2
     # Safety cap on one Cloud Scheduler-triggered pass (VS_WORKER_MODE=http)
     # -- keeps a single invocation from running indefinitely if the queue is
     # deep, so the container reliably returns and can scale back to zero.
@@ -213,6 +216,9 @@ class Settings(BaseSettings):
     action_trigger_reminder_window_hours: float = 24.0
 
     # --- API ---
+    # Per-IP rate limiter on upload and Zoom webhook routes (per-instance,
+    # not distributed -- a blunt guard, not a quota).
+    rate_limit_enabled: bool = True
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
     # VS_CORS_ALLOWED_ORIGINS=["https://app.example.com","https://staging.example.com"]
     cors_allowed_origins: list[str] = ["https://visualsprint-web-5ieahiycsa-uw.a.run.app"]

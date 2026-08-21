@@ -19,7 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import dependency as auth_dep
-from app.auth.dependency import get_current_user, require_org_member
+from app.auth.dependency import (
+    get_current_user,
+    require_org_member,
+    require_session_member,
+)
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
@@ -54,12 +58,11 @@ class UtteranceOut(BaseModel):
 
 @router.get("/meetings/{capture_session_id}/utterances", response_model=list[UtteranceOut])
 async def list_utterances(
-    capture_session_id: str, db: Session = Depends(get_db)
+    capture_session_id: str,
+    db: Session = Depends(get_db),
+    session: CaptureSession = Depends(require_session_member),
 ) -> list[UtteranceOut]:
-    session = db.get(CaptureSession, capture_session_id)
-    if session is None:
-        raise HTTPException(404, "capture session not found")
-
+    # Returns the meeting's entire raw transcript -- auth enforced by require_session_member.
     utterances = (
         db.query(Utterance)
         .filter(Utterance.capture_session_id == capture_session_id)

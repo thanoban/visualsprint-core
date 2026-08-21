@@ -10,6 +10,7 @@ Conventions:
 import enum
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -60,7 +61,12 @@ class Org(TimestampMixin, Base):
         String(32), default="all"
     )  # all | organized_only | never_private
     retention_days: Mapped[int | None] = mapped_column(Integer, default=None)  # None = keep
-    settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Monthly LLM token ceiling (input+output, see app/orchestrator/
+    # llm_accounting.py). None = unlimited, which is every org's default --
+    # this exists so a budget-constrained deploy can put a hard floor under
+    # runaway agent spend, not to meter normal use.
+    monthly_llm_token_budget: Mapped[int | None] = mapped_column(Integer, default=None)
+    settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Person(TimestampMixin, Base):
@@ -69,6 +75,15 @@ class Person(TimestampMixin, Base):
     __tablename__ = "person"
     __table_args__ = (
         Index("ix_person_org", "org_id"),
+        # Voiceprint matching (app/speakers/identity.py) currently scores in
+        # Python over the org's roster, which is small; the index is here so
+        # the query can move into Postgres without a schema change first.
+        Index(
+            "ix_person_voiceprint_hnsw",
+            "voiceprint",
+            postgresql_using="hnsw",
+            postgresql_ops={"voiceprint": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
         Index("ix_person_org_email", "org_id", "email"),
         Index("ix_person_org_user", "org_id", "user_id"),
     )
@@ -78,7 +93,7 @@ class Person(TimestampMixin, Base):
     user_id: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
     display_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str | None] = mapped_column(String(320), default=None)
-    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    aliases: Mapped[list[Any]] = mapped_column(JSON, default=list)
     # Enrolled voice centroid — what carries identity from one meeting to the
     # next (docs/08-speaker-identity.md Phase B). 512 dims read empirically
     # from pyannote/embedding's real output, not assumed from documentation.
@@ -214,16 +229,25 @@ class CaptureState(enum.StrEnum):
 
 class CaptureSession(TimestampMixin, Base):
     __tablename__ = "capture_session"
-    __table_args__ = (Index("ix_capsession_org_state", "org_id", "state"),)
+    __table_args__ = (
+        Index("ix_capsession_org_state", "org_id", "state"),
+        # Mode A1 only: lets a `meeting.rtms_stopped` webhook find its session
+        # from the DB rather than from a process-local dict. Zoom can deliver
+        # the stop event to a different API container than the one that took
+        # the start event, and the in-memory registry made that a silent 404
+        # with the whole capture lost. See app/api/rtms_webhook.py.
+        Index("ix_capsession_rtms_stream", "rtms_stream_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     meeting_id: Mapped[str] = mapped_column(ForeignKey("meeting.id"))
+    rtms_stream_id: Mapped[str | None] = mapped_column(String(128), default=None)
     mode: Mapped[str] = mapped_column(String(4))  # A1|A2|B|C|D
     state: Mapped[CaptureState] = mapped_column(
         Enum(CaptureState, native_enum=False, length=32), default=CaptureState.SCHEDULED
     )
-    disclosure_log: Mapped[list] = mapped_column(JSON, default=list)  # who/when/how disclosed
+    disclosure_log: Mapped[list[Any]] = mapped_column(JSON, default=list)  # who/when/how disclosed
     error: Mapped[str | None] = mapped_column(Text, default=None)
     # Screen-share/composited recording for keyframe extraction. Optional —
     # audio-only sessions (Mode D audio upload, or a platform with no screen
@@ -394,6 +418,12 @@ class SessionSpeaker(TimestampMixin, Base):
     __tablename__ = "session_speaker"
     __table_args__ = (
         Index("ix_sessionspeaker_session", "capture_session_id"),
+        Index(
+            "ix_sessionspeaker_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
         UniqueConstraint(
             "capture_session_id",
             "audio_track_id",
@@ -456,7 +486,7 @@ class Utterance(TimestampMixin, Base):
     start_s: Mapped[float] = mapped_column(Float)
     end_s: Mapped[float] = mapped_column(Float)
     text: Mapped[str] = mapped_column(Text)
-    lang_tags: Mapped[list] = mapped_column(JSON, default=list)  # ["si","en"] per plan
+    lang_tags: Mapped[list[Any]] = mapped_column(JSON, default=list)  # ["si","en"] per plan
     asr_confidence: Mapped[float] = mapped_column(Float, default=1.0)
     # Which diarized voice said this, when known. Distinct from person_id:
     # a cluster separates speakers without naming them, so a transcript can
@@ -483,7 +513,7 @@ class Keyframe(TimestampMixin, Base):
     phash: Mapped[str] = mapped_column(String(64), default="")
     ocr_text: Mapped[str] = mapped_column(Text, default="")
     vlm_caption: Mapped[str] = mapped_column(Text, default="")
-    detected_entities: Mapped[list] = mapped_column(JSON, default=list)  # ticket IDs, URLs…
+    detected_entities: Mapped[list[Any]] = mapped_column(JSON, default=list)  # ticket IDs, URLs…
 
 
 class UtteranceKeyframe(Base):
@@ -535,6 +565,17 @@ class KnowledgeItem(TimestampMixin, Base):
         Index("ix_ki_org_type_state", "org_id", "type", "lifecycle_state"),
         Index("ix_ki_org_owner_state", "org_id", "owner_person_id", "lifecycle_state"),
         Index("ix_ki_session", "capture_session_id"),
+        # ANN index for the hybrid-search vector leg (app/api/chat.py,
+        # app/agents/memory.py both ORDER BY embedding.cosine_distance).
+        # Without it every semantic query is a sequential scan over the
+        # org's whole knowledge base. `ddl_if` keeps it Postgres-only so the
+        # SQLite test metadata stays creatable.
+        Index(
+            "ix_ki_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -634,7 +675,7 @@ class ProposedAction(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     capture_session_id: Mapped[str] = mapped_column(ForeignKey("capture_session.id"))
     kind: Mapped[str] = mapped_column(String(32))  # ActionKind values
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     status: Mapped[ActionStatus] = mapped_column(
         Enum(ActionStatus, native_enum=False, length=24), default=ActionStatus.PENDING_APPROVAL
     )
@@ -677,7 +718,7 @@ class WorkEvidence(TimestampMixin, Base):
     )
     status_label: Mapped[str] = mapped_column(String(255), default="")
     external_url: Mapped[str | None] = mapped_column(String(1000), default=None)
-    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -732,8 +773,8 @@ class PersonAnalysisRun(TimestampMixin, Base):
         default=LongitudinalState.ASSEMBLING,
     )
     summary: Mapped[str] = mapped_column(Text, default="")
-    coverage_disclosure: Mapped[dict] = mapped_column(JSON, default=dict)
-    prompt_versions: Mapped[dict] = mapped_column(JSON, default=dict)
+    coverage_disclosure: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    prompt_versions: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error: Mapped[str | None] = mapped_column(Text, default=None)
 
 
@@ -757,9 +798,9 @@ class LongitudinalFinding(TimestampMixin, Base):
     confidence: Mapped[Confidence] = mapped_column(
         Enum(Confidence, native_enum=False, length=24), default=Confidence.AMBIGUOUS
     )
-    evidence_item_ids: Mapped[list] = mapped_column(JSON, default=list)
+    evidence_item_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
     sample_size: Mapped[int] = mapped_column(Integer, default=0)
-    finding_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    finding_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     audit_status: Mapped[FindingAuditStatus] = mapped_column(
         Enum(FindingAuditStatus, native_enum=False, length=24),
         default=FindingAuditStatus.PENDING,
@@ -826,7 +867,7 @@ class AuditLog(Base):
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     actor: Mapped[str] = mapped_column(String(255))  # person id or "system"
     event: Mapped[str] = mapped_column(String(64))
-    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -881,10 +922,46 @@ class PipelineJob(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text, default=None)
 
 
-# --------------------------------------------------------------------------- #
-# Public landing-page lead capture
-# --------------------------------------------------------------------------- #
+class LlmCall(TimestampMixin, Base):
+    """One row per LlmClient call — the cost-attribution ledger.
 
+    Written by app/orchestrator/llm_accounting.py's RecordingLlmClient in its
+    own committed transaction, deliberately independent of the stage that
+    made the call: tokens spent on an attempt that later rolled back are
+    still tokens spent, and under-reporting exactly when a job is failing and
+    retrying would hide the most expensive failure mode there is.
+
+    `ok=False` rows are kept for the same reason — a call that errored after
+    the model generated output still costs money, and a burst of failed calls
+    is itself the signal worth alarming on.
+    """
+
+    __tablename__ = "llm_call"
+    __table_args__ = (
+        Index("ix_llmcall_org_at", "org_id", "at"),
+        Index("ix_llmcall_session", "capture_session_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    # Nullable: not every call belongs to a capture session (org-memory chat
+    # answers a question that spans many meetings, or none).
+    capture_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("capture_session.id"), default=None
+    )
+    stage: Mapped[str] = mapped_column(String(32), default="")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+# ---------------------------------------------------------------------------
+# Landing-page lead capture (public, unauthenticated -- app/api/leads.py)
+# ---------------------------------------------------------------------------
 
 class LeadKind(enum.StrEnum):
     DEMO = "demo"
@@ -892,19 +969,16 @@ class LeadKind(enum.StrEnum):
 
 
 class LandingLead(TimestampMixin, Base):
-    """Book a demo / Collaborate with us form submissions from the public
-    marketing site (frontend/app/welcome). No org_id -- these come from
-    anonymous visitors before any org exists. Lives in the same Postgres
-    database as everything else (Supabase-hosted in production, per
-    VS_DATABASE_URL), so submissions are visible directly in the Supabase
-    Table Editor with no extra retrieval UI needed."""
+    """Submission from the /welcome page "Book a demo" or "Collaborate with us" form."""
 
     __tablename__ = "landing_lead"
     __table_args__ = (Index("ix_landing_lead_kind_created", "kind", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    kind: Mapped[LeadKind] = mapped_column(Enum(LeadKind, native_enum=False, length=16))
-    name: Mapped[str] = mapped_column(String(255))
-    email: Mapped[str] = mapped_column(String(255))
-    company: Mapped[str | None] = mapped_column(String(255), default=None)
-    message: Mapped[str | None] = mapped_column(Text, default=None)
+    kind: Mapped[str] = mapped_column(
+        Enum(LeadKind, native_enum=False, length=16), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
