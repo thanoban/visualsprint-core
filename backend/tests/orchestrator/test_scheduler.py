@@ -6,7 +6,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
-from app.db.models import BotSession, BotStatus, CalendarConnection, CaptureSession, Meeting, Org, PipelineJob
+from app.db.models import (
+    BotSession,
+    BotStatus,
+    CalendarConnection,
+    CaptureSession,
+    Meeting,
+    Org,
+    PipelineJob,
+)
 from app.interfaces.calendar import CalendarEvent
 from app.orchestrator.scheduler import sync_calendar_connection
 

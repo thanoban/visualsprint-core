@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import io
-from typing import TYPE_CHECKING, AsyncIterator
+from collections.abc import AsyncIterator
 
 import structlog
 

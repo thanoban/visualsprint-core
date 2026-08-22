@@ -100,7 +100,7 @@ async def start_instant_capture(
 
     settings = get_settings()
     note = (
-        f"Bot is joining now as “VisualSprint Notetaker.”"
+        "Bot is joining now as “VisualSprint Notetaker.”"
         if settings.bot_dispatch_enabled
         else (
             "Bot capture is queued but not yet dispatched -- live bot join isn't turned on "

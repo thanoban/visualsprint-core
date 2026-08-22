@@ -36,16 +36,16 @@ export default function TermsPage() {
 
       <Section title="Your responsibilities">
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
-          <li>You must have the right to record and process any meeting you connect or upload — this includes obtaining any consent required by your organization's policies or applicable law from other participants</li>
-          <li>You're responsible for keeping your account and any connected third-party credentials secure</li>
-          <li>You won't use the service to capture meetings you don't have authorization to record</li>
+          <li>You must have the right to record and process any meeting you connect or upload — this includes obtaining any consent required by your organization&apos;s policies or applicable law from other participants</li>
+          <li>You&apos;re responsible for keeping your account and any connected third-party credentials secure</li>
+          <li>You won&apos;t use the service to capture meetings you don&apos;t have authorization to record</li>
         </ul>
       </Section>
 
       <Section title="Third-party platforms">
         <p>
           Connecting Google, Microsoft, Zoom, Slack, Jira, GitHub, or Linear is optional and
-          governed by that vendor's own terms in addition to these. VisualSprint accesses only
+          governed by that vendor&apos;s own terms in addition to these. VisualSprint accesses only
           the scopes you explicitly authorize during that connection, and you can revoke access
           at any time — see the Privacy Policy for details.
         </p>
@@ -61,10 +61,10 @@ export default function TermsPage() {
 
       <Section title="Service availability">
         <p>
-          VisualSprint is an early-stage product operated by a single founder. It's provided
-          "as is," without uptime guarantees, while it's actively being built. Features
+          VisualSprint is an early-stage product operated by a single founder. It&apos;s provided
+          &ldquo;as is,&rdquo; without uptime guarantees, while it&apos;s actively being built. Features
           described in the product may be partially implemented — the Privacy Policy and
-          in-product disclosures aim to be honest about what's actually working at any given
+          in-product disclosures aim to be honest about what&apos;s actually working at any given
           time rather than overstating capability.
         </p>
       </Section>
@@ -86,7 +86,7 @@ export default function TermsPage() {
 
       <Section title="Changes to these terms">
         <p>
-          If these terms change materially, the "Last updated" date above will change and,
+          If these terms change materially, the &ldquo;Last updated&rdquo; date above will change and,
           where practical, connected organizations will be notified.
         </p>
       </Section>

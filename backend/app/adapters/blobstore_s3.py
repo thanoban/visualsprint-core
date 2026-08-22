@@ -14,7 +14,8 @@ this file is fully testable without botocore installed.
 
 import asyncio
 import io
-from typing import Any, AsyncIterator, Protocol
+from collections.abc import AsyncIterator
+from typing import Any, Protocol
 
 from app.config import get_settings
 

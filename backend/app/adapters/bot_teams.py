@@ -8,6 +8,8 @@ expected outcome when nobody clicks admit, not a bug to work around.
 
 from __future__ import annotations
 
+import contextlib
+
 import structlog
 
 from app.bot.browser import PlaywrightSession
@@ -55,10 +57,8 @@ class TeamsJoiner:
                 # the current label indicates they're on.
                 on_toggle = page.get_by_label(f"{label} on")
                 if await on_toggle.count() > 0:
-                    try:
+                    with contextlib.suppress(Exception):
                         await on_toggle.click(timeout=2000)
-                    except Exception:
-                        pass
                 elif await toggle.count() == 0:
                     pass
 

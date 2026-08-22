@@ -35,6 +35,7 @@ as finished.
 """
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -171,8 +172,11 @@ class _EventTracker:
             pass  # roster/labels stay -- a person who left still spoke earlier
 
     def _close_current_span(self, *, end_s: float) -> None:
-        if self._current_speaker is not None and self._current_speaker_start_s is not None:
-            if end_s > self._current_speaker_start_s:
+        if (
+            self._current_speaker is not None
+            and self._current_speaker_start_s is not None
+            and end_s > self._current_speaker_start_s
+        ):
                 self.speaker_labels.append(
                     SpeakerLabelSpan(
                         start_s=self._current_speaker_start_s,
@@ -299,10 +303,8 @@ class RtmsSession:
                         # needed for this audio-only, mixed-track slice.
                 finally:
                     event_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await event_task
-                    except asyncio.CancelledError:
-                        pass
                     tracker.close(end_s=max(0.0, time.time() * 1000.0 - tracker.stream_start_ms) / 1000.0)
 
                 return RtmsResult(

@@ -7,7 +7,8 @@ purges raw audio/keyframe blobs for orgs that set Org.retention_days,
 per-org opt-in only -- never the platform default.
 """
 
-from typing import AsyncIterator, Protocol
+from collections.abc import AsyncIterator
+from typing import Protocol
 
 
 class BlobStore(Protocol):

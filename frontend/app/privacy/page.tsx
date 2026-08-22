@@ -79,7 +79,7 @@ export default function PrivacyPage() {
         <p>
           From Settings → Data rights, you can export everything derived from any meeting as a
           JSON file, or permanently delete a meeting and everything derived from it. Deletion is
-          irreversible. If you'd rather we handle a request directly (including full account
+          irreversible. If you&apos;d rather we handle a request directly (including full account
           deletion), email {CONTACT_EMAIL}.
         </p>
       </Section>
@@ -90,7 +90,7 @@ export default function PrivacyPage() {
           only the specific scopes each integration needs (e.g., calendar read access, meeting
           recording access) — never broader account access than the feature requires. You can
           revoke any connection at any time from Settings → Connections, which deletes the stored
-          token on our side immediately; you can also revoke access from the vendor's own
+          token on our side immediately; you can also revoke access from the vendor&apos;s own
           connected-apps settings.
         </p>
       </Section>
@@ -105,7 +105,7 @@ export default function PrivacyPage() {
 
       <Section title="Changes to this policy">
         <p>
-          If this policy changes materially, the "Last updated" date above will change and, where
+          If this policy changes materially, the &ldquo;Last updated&rdquo; date above will change and, where
           practical, connected organizations will be notified.
         </p>
       </Section>

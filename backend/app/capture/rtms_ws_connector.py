@@ -11,7 +11,7 @@ explicit.
 
 from __future__ import annotations
 
-from app.capture.rtms_client import WebSocketConn, WebSocketConnector
+from app.capture.rtms_client import WebSocketConn
 
 
 class _WsConn:

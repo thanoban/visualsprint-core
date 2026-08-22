@@ -3,13 +3,6 @@
 Claim semantics: a worker atomically claims one runnable job; concurrent
 workers skip locked rows, so horizontal scaling is adding replicas.
 Retry: failed jobs are re-queued with exponential backoff until max_attempts.
-"""
-
-"""Durable Postgres job queue — FOR UPDATE SKIP LOCKED, no external broker.
-
-Claim semantics: a worker atomically claims one runnable job; concurrent
-workers skip locked rows, so horizontal scaling is adding replicas.
-Retry: failed jobs are re-queued with exponential backoff until max_attempts.
 
 **The claim must be committed before the stage handler runs.** `attempts` is
 incremented by `claim_next_job`; if that increment is still uncommitted when

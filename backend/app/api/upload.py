@@ -5,7 +5,7 @@ audio stored in blob store → pipeline enqueued. Proves the entire spine
 before any platform API exists.
 """
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel

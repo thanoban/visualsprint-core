@@ -1,7 +1,7 @@
 """Local-filesystem BlobStore for dev. Prod uses the S3/R2 implementation."""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 from app.config import get_settings
 
