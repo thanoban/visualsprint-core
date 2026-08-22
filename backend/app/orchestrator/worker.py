@@ -1348,19 +1348,20 @@ async def run_bounded_pass(max_seconds: float) -> dict:
     return {"jobs_processed": jobs_processed, "reaped": reaped, "swept": swept}
 
 
-def _build_http_app():
+def _build_http_app() -> "Starlette":
     """Serves both the liveness probe Cloud Run requires of every Service
     (see the original docstring this replaced) and the trigger endpoint
     Cloud Scheduler calls to run one bounded pass. Reuses starlette/uvicorn
     -- already dependencies via fastapi[standard]/uvicorn[standard]."""
     from starlette.applications import Starlette
+    from starlette.requests import Request
     from starlette.responses import JSONResponse, PlainTextResponse
     from starlette.routing import Route
 
-    async def healthz(request):
+    async def healthz(request: Request) -> PlainTextResponse:
         return PlainTextResponse("ok")
 
-    async def run_endpoint(request):
+    async def run_endpoint(request: Request) -> JSONResponse:
         settings = get_settings()
         result = await run_bounded_pass(settings.worker_pass_max_seconds)
         return JSONResponse(result)
