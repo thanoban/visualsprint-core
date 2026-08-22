@@ -102,15 +102,16 @@ def test_start_oauth_returns_the_vendor_authorize_url_with_a_signed_state(client
     assert "state=" in url
 
 
-def test_callback_400s_for_an_invalid_state(client):
+def test_callback_redirects_to_error_for_an_invalid_state(client):
     resp = client.get(
         "/api/v1/oauth/google/callback", params={"code": "c", "state": "garbage"},
         follow_redirects=False,
     )
-    assert resp.status_code == 400
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=google" in resp.headers.get("location", "")
 
 
-def test_callback_400s_when_state_was_signed_for_a_different_provider(client, db_session):
+def test_callback_redirects_to_error_when_state_was_signed_for_a_different_provider(client, db_session):
     org = _seed_org(db_session)
     state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
 
@@ -119,7 +120,8 @@ def test_callback_400s_when_state_was_signed_for_a_different_provider(client, db
         follow_redirects=False,
     )
 
-    assert resp.status_code == 400
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=google" in resp.headers.get("location", "")
 
 
 def test_callback_creates_a_calendar_connection_and_redirects_to_the_frontend(
@@ -195,7 +197,7 @@ def test_callback_reconnecting_updates_the_existing_connection_not_a_duplicate(
     assert connections[0].secret_ref == "oauth/google/existing"  # unchanged, not regenerated
 
 
-def test_callback_400s_for_an_unknown_provider_name(client, db_session):
+def test_callback_redirects_to_error_for_an_unknown_provider_name(client, db_session):
     """All seven real vendors are wired now -- the "not wired up yet" branch
     is purely defensive for a hypothetical future ActionKind/provider,
     unreachable through the normal flow since get_provider_config already
@@ -210,7 +212,8 @@ def test_callback_400s_for_an_unknown_provider_name(client, db_session):
         follow_redirects=False,
     )
 
-    assert resp.status_code == 400
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=not-a-real-vendor" in resp.headers.get("location", "")
 
 
 def test_list_connections_404s_for_unknown_org(client):
@@ -296,7 +299,7 @@ def test_callback_creates_a_github_org_connection(client, db_session):
     assert connection.secret_ref == f"oauth/github/{connection.id}"
 
 
-def test_callback_400s_when_github_user_response_has_no_login(client, db_session):
+def test_callback_redirects_to_error_when_github_user_response_has_no_login(client, db_session):
     org = _seed_org(db_session)
     state = sign_state(org_id=org.id, provider="github", secret="test-signing-secret")
 
@@ -314,7 +317,8 @@ def test_callback_400s_when_github_user_response_has_no_login(client, db_session
     finally:
         app.dependency_overrides.pop(get_http_client, None)
 
-    assert resp.status_code == 502
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=github" in resp.headers.get("location", "")
 
 
 def test_callback_creates_a_linear_org_connection(client, db_session):
@@ -423,7 +427,7 @@ def test_callback_creates_a_slack_org_connection_with_no_extra_api_call(client, 
     assert connection.external_id == "T123"
 
 
-def test_callback_502s_when_slack_rejects_the_code(client, db_session):
+def test_callback_redirects_to_error_when_slack_rejects_the_code(client, db_session):
     org = _seed_org(db_session)
     state = sign_state(org_id=org.id, provider="slack", secret="test-signing-secret")
 
@@ -441,7 +445,8 @@ def test_callback_502s_when_slack_rejects_the_code(client, db_session):
     finally:
         app.dependency_overrides.pop(get_http_client, None)
 
-    assert resp.status_code == 502
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=slack" in resp.headers.get("location", "")
     assert (
         db_session.query(OrgConnection)
         .filter(OrgConnection.org_id == org.id, OrgConnection.provider == "slack")
@@ -489,7 +494,7 @@ def test_callback_creates_a_jira_org_connection_with_the_first_accessible_site(c
     assert connection.external_id == "cloud-abc"
 
 
-def test_callback_502s_when_jira_account_has_no_accessible_sites(client, db_session):
+def test_callback_redirects_to_error_when_jira_account_has_no_accessible_sites(client, db_session):
     org = _seed_org(db_session)
     state = sign_state(org_id=org.id, provider="jira", secret="test-signing-secret")
 
@@ -507,7 +512,8 @@ def test_callback_502s_when_jira_account_has_no_accessible_sites(client, db_sess
     finally:
         app.dependency_overrides.pop(get_http_client, None)
 
-    assert resp.status_code == 502
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=jira" in resp.headers.get("location", "")
 
 
 def test_callback_creates_a_zoom_org_connection_with_account_id_as_external_id(client, db_session):
@@ -543,7 +549,7 @@ def test_callback_creates_a_zoom_org_connection_with_account_id_as_external_id(c
     assert connection.external_id == "Abc123XYZ"
 
 
-def test_callback_502s_when_zoom_users_me_omits_account_id(client, db_session):
+def test_callback_redirects_to_error_when_zoom_users_me_omits_account_id(client, db_session):
     org = _seed_org(db_session)
     state = sign_state(org_id=org.id, provider="zoom", secret="test-signing-secret")
 
@@ -561,7 +567,8 @@ def test_callback_502s_when_zoom_users_me_omits_account_id(client, db_session):
     finally:
         app.dependency_overrides.pop(get_http_client, None)
 
-    assert resp.status_code == 502
+    assert resp.status_code in (302, 307)
+    assert "oauth_error=zoom" in resp.headers.get("location", "")
 
 
 def test_callback_creates_a_microsoft_calendar_connection(client, db_session):

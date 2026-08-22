@@ -32,7 +32,11 @@ def db_session():
     if _PG_URL:
         # Postgres: real schema, real dialect — catches pgvector/FTS/HNSW issues.
         # NullPool so each test gets a fresh connection, never a stale one.
+        # Drop first so create_all picks up new columns from recent migrations
+        # rather than silently skipping them (create_all is idempotent, not
+        # alter-aware — it won't add a column to an existing table).
         engine = create_engine(_PG_URL, poolclass=NullPool)
+        Base.metadata.drop_all(engine)
         Base.metadata.create_all(engine)
         session_local = sessionmaker(bind=engine, expire_on_commit=False)
         session = session_local()

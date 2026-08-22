@@ -219,6 +219,9 @@ class Settings(BaseSettings):
     # Per-IP rate limiter on upload and Zoom webhook routes (per-instance,
     # not distributed -- a blunt guard, not a quota).
     rate_limit_enabled: bool = True
+    rate_limit_window_s: float = 60.0
+    rate_limit_upload_per_window: int = 10
+    rate_limit_webhook_per_window: int = 200
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
     # VS_CORS_ALLOWED_ORIGINS=["https://app.example.com","https://staging.example.com"]
     cors_allowed_origins: list[str] = ["https://visualsprint-web-5ieahiycsa-uw.a.run.app"]

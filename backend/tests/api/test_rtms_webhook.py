@@ -121,10 +121,25 @@ def test_url_validation_challenge(client):
 
 
 async def test_rtms_started_then_stopped_finalizes_capture_session(client, db_session):
+    org = Org(name="rtms-test-org")
+    db_session.add(org)
+    db_session.flush()
+    db_session.add(
+        OrgConnection(
+            org_id=org.id,
+            provider="zoom",
+            account_label="rtms@acme.test",
+            external_id="zoom-rtms-acct",
+            secret_ref="oauth/zoom/rtms",
+        )
+    )
+    db_session.commit()
+
     started_resp = _signed_post(
         client,
         "meeting.rtms_started",
         {
+            "account_id": "zoom-rtms-acct",
             "meeting_uuid": "muid-1",
             "operator_id": "op-1",
             "rtms_stream_id": "stream-1",
@@ -243,10 +258,25 @@ async def test_rtms_stopped_persists_roster_and_speaker_labels(client, db_sessio
     )
     rtms_webhook.set_websocket_connector(FakeConnector(signaling_conn, media_conn))
 
+    roster_org = Org(name="rtms-roster-org")
+    db_session.add(roster_org)
+    db_session.flush()
+    db_session.add(
+        OrgConnection(
+            org_id=roster_org.id,
+            provider="zoom",
+            account_label="roster@acme.test",
+            external_id="zoom-roster-acct",
+            secret_ref="oauth/zoom/roster",
+        )
+    )
+    db_session.commit()
+
     started_resp = _signed_post(
         client,
         "meeting.rtms_started",
         {
+            "account_id": "zoom-roster-acct",
             "meeting_uuid": "muid-roster",
             "operator_id": "op-1",
             "rtms_stream_id": "stream-roster",
@@ -346,14 +376,18 @@ def test_wrong_signature_is_rejected(client):
     assert resp.status_code == 401
 
 
-def test_resolve_org_for_zoom_account_falls_back_to_default_when_account_id_is_none(db_session):
-    org = rtms_webhook._resolve_org_for_zoom_account(db_session, None)
-    assert org.name == "default"
+def test_resolve_org_for_zoom_account_raises_404_when_account_id_is_none(db_session):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        rtms_webhook._resolve_org_for_zoom_account(db_session, None)
+    assert exc_info.value.status_code == 404
 
 
-def test_resolve_org_for_zoom_account_falls_back_to_default_when_unrecognized(db_session):
-    org = rtms_webhook._resolve_org_for_zoom_account(db_session, "some-other-account-id")
-    assert org.name == "default"
+def test_resolve_org_for_zoom_account_raises_404_when_unrecognized(db_session):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        rtms_webhook._resolve_org_for_zoom_account(db_session, "some-other-account-id")
+    assert exc_info.value.status_code == 404
 
 
 def test_resolve_org_for_zoom_account_finds_the_connected_org(db_session):
@@ -409,7 +443,7 @@ async def test_rtms_started_routes_to_the_connected_org_not_default(client, db_s
     assert meeting.org_id == connected_org.id
 
 
-async def test_rtms_started_with_unrecognized_account_id_falls_back_to_default(client, db_session):
+async def test_rtms_started_with_unrecognized_account_id_returns_404(client, db_session):
     resp = _signed_post(
         client,
         "meeting.rtms_started",
@@ -420,8 +454,5 @@ async def test_rtms_started_with_unrecognized_account_id_falls_back_to_default(c
             "server_urls": "ws://fake-signaling",
         },
     )
-    assert resp.status_code == 200
-
-    meeting = db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-fallback").one()
-    default_org = db_session.query(Org).filter(Org.name == "default").one()
-    assert meeting.org_id == default_org.id
+    assert resp.status_code == 404
+    assert db_session.query(Meeting).filter(Meeting.platform_meeting_id == "muid-fallback").one_or_none() is None
