@@ -12,6 +12,8 @@ session; requiring it rejects tokens issued for another purpose that happen
 to be signed by the same project.
 """
 
+from typing import cast
+
 import jwt
 from jwt import PyJWKClient
 
@@ -38,7 +40,7 @@ def _get_jwks_client() -> PyJWKClient:
     return _jwks_client
 
 
-def verify_jwt(token: str) -> dict:
+def verify_jwt(token: str) -> dict[str, object]:
     """Returns the verified claims dict (`sub`, `email`, ...) or raises AuthError."""
     try:
         signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
@@ -54,4 +56,4 @@ def verify_jwt(token: str) -> dict:
         raise AuthError(f"invalid token: {exc}") from exc
     if "sub" not in claims:
         raise AuthError("token missing 'sub' claim")
-    return claims
+    return cast(dict[str, object], claims)

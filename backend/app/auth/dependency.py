@@ -31,8 +31,8 @@ def get_current_user(
     except AuthError as exc:
         raise HTTPException(401, str(exc)) from exc
 
-    user_id = claims["sub"]
-    email = claims.get("email", "")
+    user_id = str(claims["sub"])
+    email = str(claims.get("email", ""))
     user = db.get(User, user_id)
     if user is None:
         # First-seen token -- this *is* signup: create the local User row

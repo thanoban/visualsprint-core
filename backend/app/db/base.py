@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -16,7 +16,7 @@ _engine = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
-def get_engine():
+def get_engine() -> "Engine":
     global _engine
     if _engine is None:
         _engine = create_engine(get_settings().database_url, pool_pre_ping=True)

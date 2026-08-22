@@ -15,7 +15,7 @@ class ParticipantNarratorInput(BaseModel):
     person_id: str
     display_name: str
     audited_findings: list[AuditableClaim] = Field(default_factory=list)
-    coverage_disclosure: dict
+    coverage_disclosure: dict[str, object]
 
 
 class ParticipantNarrative(BaseModel):

@@ -28,6 +28,7 @@ from app.db.models import (
     LifecycleState,
     Utterance,
 )
+from app.interfaces.blobstore import BlobStore
 from app.interfaces.llm import LlmClient
 
 log = structlog.get_logger()
@@ -185,7 +186,7 @@ async def run_report_intelligence(
     capture_session_id: str,
     llm: LlmClient,
     model: str | None = None,
-    blobstore=None,
+    blobstore: BlobStore | None = None,
 ) -> tuple[ReportInput, GeneratedReport, str | None]:
     """Build ReportInput, render the report, optionally persist it to the blobstore.
 

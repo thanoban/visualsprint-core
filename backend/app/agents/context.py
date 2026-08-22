@@ -13,6 +13,8 @@ rather than a matter of discipline: the field simply doesn't reach storage
 the verification query path touches.
 """
 
+from datetime import datetime
+
 import structlog
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -157,7 +159,7 @@ def _overlaps_any_gap(start_s: float, end_s: float, gaps: list[CoverageInterval]
     return any(start_s < g.end_s and end_s > g.start_s for g in gaps)
 
 
-def _parse_due(due_hint: str | None, *, meeting_dt):
+def _parse_due(due_hint: str | None, *, meeting_dt: datetime | None) -> datetime | None:
     if not due_hint:
         return None
     from datetime import UTC, datetime, timedelta

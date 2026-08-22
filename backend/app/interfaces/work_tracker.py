@@ -20,7 +20,7 @@ class WorkStatusResult(BaseModel):
     state: WorkState
     label: str = ""
     external_url: str | None = None
-    raw: dict = {}
+    raw: dict[str, object] = {}
 
 
 class WorkTracker(Protocol):
