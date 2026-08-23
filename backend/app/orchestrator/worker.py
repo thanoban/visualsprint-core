@@ -9,6 +9,10 @@ import asyncio
 import traceback
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from starlette.applications import Starlette
 
 import structlog
 
