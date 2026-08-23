@@ -12,7 +12,6 @@ import base64
 from typing import TypeVar
 
 import structlog
-from anthropic import AnthropicVertex
 from pydantic import BaseModel, ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -63,6 +62,8 @@ class VertexLlmClient:
         settings = get_settings()
         self._project_id = _resolve_project_id(project_id or settings.vertex_project_id)
         self._region = region or settings.vertex_region
+        from anthropic import AnthropicVertex
+
         self._client = AnthropicVertex(project_id=self._project_id, region=self._region)
 
     @retry(

@@ -2,11 +2,15 @@
 VAD, LID, and the cascade's per-segment vendor calls. Pure numpy/soundfile,
 no vendor or blob-store concerns, so nothing here needs fakes or network."""
 
-import numpy as np
 import pytest
-import soundfile as sf
 
-from app.asr.audio_io import (
+# numpy/soundfile are optional [asr] extras, installed on the full dev machine
+# but not in CI's minimal `dev` install. app.asr.audio_io imports them eagerly,
+# so skip the whole module (before that import) when they are absent.
+np = pytest.importorskip("numpy")
+sf = pytest.importorskip("soundfile")
+
+from app.asr.audio_io import (  # noqa: E402
     TARGET_SAMPLE_RATE,
     duration_s,
     read_audio,

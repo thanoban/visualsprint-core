@@ -7,11 +7,15 @@ isolation. The real `azure-cognitiveservices-speech` package is installed
 in this venv (used only for its ResultReason enum, never for real
 recognition), so no network or subscription is touched."""
 
-import azure.cognitiveservices.speech as speechsdk
 import pytest
 
 from app.adapters.asr_azure import AzureSpeechAdapter
 from app.adapters.asr_common import VendorTranscriptionError
+
+# The Azure Speech SDK is an optional extra (pyproject [asr]) installed only on
+# the full dev machine, not in CI's minimal `dev` install. Skip the whole module
+# when it is absent instead of erroring during collection.
+speechsdk = pytest.importorskip("azure.cognitiveservices.speech")
 
 
 class _FakeResult:

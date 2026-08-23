@@ -20,7 +20,6 @@ import base64
 from typing import TypeVar
 
 import structlog
-from anthropic import AnthropicFoundry
 from pydantic import BaseModel, ValidationError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -62,6 +61,8 @@ class FoundryLlmClient:
                 "(VS_FOUNDRY_API_KEY / VS_FOUNDRY_RESOURCE) to use the "
                 "Microsoft Foundry LlmClient"
             )
+        from anthropic import AnthropicFoundry
+
         self._client = AnthropicFoundry(api_key=resolved_key, resource=resolved_resource)
 
     @retry(

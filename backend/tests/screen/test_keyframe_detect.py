@@ -1,8 +1,16 @@
-import cv2
-import numpy as np
 import pytest
 
-from app.screen.keyframe_detect import detect_keyframes
+# The [screen] extras (cv2/numpy/imagehash/Pillow/scikit-image) are installed on
+# the full dev machine but not in CI's minimal `dev` install. keyframe_detect
+# imports all of them eagerly, so skip the whole module (before that import) when
+# any is absent -- guard every one, not just the two this test uses by name.
+cv2 = pytest.importorskip("cv2")
+np = pytest.importorskip("numpy")
+pytest.importorskip("imagehash")
+pytest.importorskip("PIL")
+pytest.importorskip("skimage")
+
+from app.screen.keyframe_detect import detect_keyframes  # noqa: E402
 
 FPS = 10
 SIZE = (64, 64)

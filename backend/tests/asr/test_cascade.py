@@ -4,14 +4,22 @@ failover on error/empty/low-confidence, Groq for en. Fakes VAD/LID/vendor
 backends entirely so this needs no torch, no speechbrain, no vendor creds.
 """
 
-import numpy as np
 import pytest
-import soundfile as sf
 
-from app.adapters.asr_common import RawVendorResult, VendorTranscriptionError, VendorWord
-from app.asr.cascade import TranscriptionCascade
-from app.asr.lid import LabeledSpan
-from app.interfaces.transcriber import Lang, TranscriptionRequest
+# numpy/soundfile are optional [asr] extras (dev machine only, not CI). cascade
+# transitively imports app.asr.audio_io, which imports numpy eagerly, so skip
+# the whole module (before that import) when the extras are absent.
+np = pytest.importorskip("numpy")
+sf = pytest.importorskip("soundfile")
+
+from app.adapters.asr_common import (  # noqa: E402
+    RawVendorResult,
+    VendorTranscriptionError,
+    VendorWord,
+)
+from app.asr.cascade import TranscriptionCascade  # noqa: E402
+from app.asr.lid import LabeledSpan  # noqa: E402
+from app.interfaces.transcriber import Lang, TranscriptionRequest  # noqa: E402
 
 
 @pytest.fixture

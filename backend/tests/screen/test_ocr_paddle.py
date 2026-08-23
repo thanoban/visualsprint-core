@@ -1,8 +1,12 @@
-import cv2
-import numpy as np
 import pytest
 
 from app.adapters.ocr_paddle import PaddleOcrEngine
+
+# cv2/numpy are optional [screen] extras (dev machine only, not CI). ocr_paddle
+# imports cv2 lazily so the import above is safe, but this test builds fixtures
+# with cv2/numpy directly -- skip the whole module when they are absent.
+cv2 = pytest.importorskip("cv2")
+np = pytest.importorskip("numpy")
 
 
 class FakeOcrBackend:
