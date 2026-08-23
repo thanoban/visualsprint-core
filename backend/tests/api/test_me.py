@@ -60,17 +60,24 @@ def test_me_links_to_a_person_only_on_unique_email_match(client, db_session, mon
     )
     app.dependency_overrides.pop(get_current_user, None)
 
+    # First login auto-creates a Person linked to this user's email.
     first = client.get("/api/v1/me", headers={"Authorization": "Bearer t1"})
-    org_id = first.json()["org"]["id"]
-    person = Person(org_id=org_id, display_name="Nimal Perera", email="nimal@acme.com")
-    db_session.add(person)
-    db_session.commit()
+    assert first.json()["person"] is not None, "first login should auto-create a person"
+    auto_person_id = first.json()["person"]["id"]
 
+    # Second login with unique email match → same person returned.
     resp = client.get("/api/v1/me", headers={"Authorization": "Bearer t2"})
-
     assert resp.status_code == 200, resp.text
-    assert resp.json()["person"]["id"] == person.id
-    assert db_session.get(Person, person.id).user_id == "user-abc"
+    assert resp.json()["person"]["id"] == auto_person_id
+
+    # When a second person with the same email exists (duplicate), me.py returns None.
+    org_id = first.json()["org"]["id"]
+    duplicate = Person(org_id=org_id, display_name="Nimal Perera", email="nimal@acme.com")
+    db_session.add(duplicate)
+    db_session.commit()
+    resp2 = client.get("/api/v1/me", headers={"Authorization": "Bearer t3"})
+    assert resp2.status_code == 200
+    assert resp2.json()["person"] is None, "duplicate email → no link"
 
 
 def test_missing_authorization_header_is_401(client):

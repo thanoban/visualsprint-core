@@ -13,6 +13,7 @@ rather than a matter of discipline: the field simply doesn't reach storage
 the verification query path touches.
 """
 
+import unicodedata
 from datetime import datetime
 
 import structlog
@@ -105,19 +106,33 @@ def _build_user_content(
     return "\n".join(lines)
 
 
+_HONORIFICS = frozenset(
+    "mr mrs ms dr prof sir rev aiya akka nona mahattaya"
+    " මහත්මයා මිය මහත්තයා ස්වාමිය anna amma appa".split()
+)
+
+
+def _normalize_name(s: str) -> str:
+    """NFKC-normalise + casefold + strip honorifics for multilingual name matching."""
+    normed = unicodedata.normalize("NFKC", s).casefold().strip()
+    tokens = [t.strip(".,") for t in normed.split()]
+    filtered = [t for t in tokens if t and t not in _HONORIFICS]
+    return " ".join(filtered) if filtered else normed
+
+
 def _resolve_owner_hint(db: Session, org_id: str, owner_hint: str | None) -> str | None:
     if not owner_hint:
         return None
     from app.db.models import Person
 
     candidates = db.query(Person).filter(Person.org_id == org_id).all()
-    hint_lower = owner_hint.strip().lower()
+    hint_normed = _normalize_name(owner_hint)
     matches: list[str] = []
     for person in candidates:
-        if person.display_name.strip().lower() == hint_lower:
+        if _normalize_name(person.display_name) == hint_normed:
             matches.append(person.id)
             continue
-        if any(str(alias).strip().lower() == hint_lower for alias in person.aliases):
+        if any(_normalize_name(str(alias)) == hint_normed for alias in person.aliases):
             matches.append(person.id)
     return matches[0] if len(set(matches)) == 1 else None
 

@@ -17,6 +17,7 @@ from app.api.oauth import router as oauth_router
 from app.api.ops import router as ops_router
 from app.api.people import router as people_router
 from app.api.report import router as report_router
+from app.api.speakers import router as speakers_router
 from app.api.rtms_webhook import router as rtms_webhook_router
 from app.api.rtms_webhook import set_websocket_connector
 from app.api.upload import router as upload_router
@@ -79,6 +80,7 @@ app.include_router(rtms_webhook_router)
 app.include_router(oauth_router)
 app.include_router(me_router)
 app.include_router(people_router)
+app.include_router(speakers_router)
 app.include_router(ops_router)
 app.include_router(leads_router)
 

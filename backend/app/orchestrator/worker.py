@@ -116,6 +116,34 @@ def _build_speaker_embedder():
     return PyannoteSpeakerEmbedder()
 
 
+def _auto_add_person_glossary_terms(db: object, org_id: str, resolved: list) -> None:
+    """After identify stage, upsert each resolved person's display_name as a
+    GlossaryTerm so _repair_context feeds it into ASR repair for future sessions.
+    Deduplicates by (org_id, term) — no-op when the term already exists.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import GlossaryTerm, Person
+
+    person_ids = {r.person_id for r in resolved if r.person_id}
+    if not person_ids:
+        return
+    people = (
+        db.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
+    )
+    existing_terms = {
+        row.term
+        for row in db.execute(
+            select(GlossaryTerm.term).where(GlossaryTerm.org_id == org_id)
+        ).all()
+    }
+    for person in people:
+        if person.display_name and person.display_name not in existing_terms:
+            db.add(GlossaryTerm(org_id=org_id, term=person.display_name))
+            existing_terms.add(person.display_name)
+    db.flush()
+
+
 def _get_speaker_embedder():
     """Optional voice embedding backend for identity fusion.
 
@@ -867,6 +895,9 @@ async def _handle_identify(db: object, job: PipelineJob) -> None:
             SpeakerResolution.MANUAL,
         ):
             recompute_voiceprint(db, resolved.person_id)
+    # Auto-add each resolved person's display_name as a GlossaryTerm so
+    # _repair_context improves ASR accuracy for their name in future sessions.
+    _auto_add_person_glossary_terms(db, session.org_id, changed)
     log.info("identify.done", session=session.id, resolved=len(changed), speakers=len(speakers))
 
 

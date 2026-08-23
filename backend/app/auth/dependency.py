@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.verify import AuthError, verify_jwt
 from app.db.base import get_db
-from app.db.models import CaptureSession, Org, OrgMember, User
+from app.db.models import CaptureSession, Org, OrgMember, Person, User
 
 
 def _extract_bearer_token(authorization: str) -> str:
@@ -44,6 +44,11 @@ def get_current_user(
         db.add(org)
         db.flush()
         db.add(OrgMember(org_id=org.id, user_id=user.id, role="owner"))
+        # Create a Person record linked to this user so commitments and
+        # decisions can be attributed to them across meetings.
+        display_name = str(claims.get("user_metadata", {}).get("full_name", "") or email or user_id[:8])
+        person = Person(org_id=org.id, user_id=user.id, display_name=display_name, email=email or None)
+        db.add(person)
         db.commit()
     return user
 
