@@ -107,8 +107,7 @@ def _build_user_content(
 
 
 _HONORIFICS = frozenset(
-    "mr mrs ms dr prof sir rev aiya akka nona mahattaya"
-    " මහත්මයා මිය මහත්තයා ස්වාමිය anna amma appa".split()
+    ["mr", "mrs", "ms", "dr", "prof", "sir", "rev", "aiya", "akka", "nona", "mahattaya", "මහත්මයා", "මිය", "මහත්තයා", "ස්වාමිය", "anna", "amma", "appa"]
 )
 
 
