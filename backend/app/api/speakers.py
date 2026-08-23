@@ -19,7 +19,6 @@ from app.db.models import (
     CaptureSession,
     KnowledgeItem,
     KnowledgeType,
-    Confidence,
     Person,
     SessionSpeaker,
     SpeakerResolution,
