@@ -136,17 +136,38 @@ def fake_speaker_embedder(monkeypatch):
     monkeypatch.setattr(worker, "_speaker_embedder", None)
 
 
+class _NoRepairLlm:
+    """Default LLM stub for the transcribe stage. That handler evaluates
+    worker._get_llm() as a call argument on every run (for app.asr.repair's
+    repair step). repair_segments short-circuits before touching the client
+    when there is no roster/glossary/OCR context -- which is the case for
+    these tests -- so this is never actually called; it exists only so
+    _get_llm() returns a harmless object instead of constructing a real
+    GeminiVertexLlmClient, whose __init__ calls google.auth.default() and
+    fails with 'default credentials not found' in any environment without GCP
+    credentials (i.e. CI). Tests that exercise repair for real inject their
+    own fake, overriding this."""
+
+    async def complete_structured(
+        self, *, model, system, user_content, schema, max_tokens=4096, **kwargs
+    ):
+        from app.asr.repair import RepairResult
+        from app.interfaces.llm import LlmUsage
+
+        return RepairResult(segments=[]), LlmUsage(input_tokens=0, output_tokens=0, model=model)
+
+
 @pytest.fixture(autouse=True)
 def _reset_screen_captioner(monkeypatch):
     monkeypatch.setattr(worker, "_vlm_captioner", worker._VLM_CAPTIONER_UNAVAILABLE)
-    # _llm_client is a lazy module-global singleton (worker._get_llm) -- once
-    # any test reaches it without an explicit monkeypatch override, it
-    # permanently caches a real VertexLlmClient for the rest of the suite
-    # run whenever real Vertex credentials are present in the environment
-    # (backend/.env), silently leaking into later tests that never intended
-    # to make a live call. Reset it alongside the captioner so test order
-    # never matters here.
-    monkeypatch.setattr(worker, "_llm_client", None)
+    # _llm_client is a lazy module-global singleton (worker._get_llm). The
+    # transcribe stage calls _get_llm() unconditionally (as a repair-step
+    # argument), so leaving this None makes _get_llm() construct a real
+    # GeminiVertexLlmClient -> google.auth.default() -> 'default credentials
+    # not found' on any machine without GCP creds (CI). Reset it to a harmless
+    # stub, not None, so no test constructs a live cloud client by default and
+    # order never matters. Tests that assert real repair behaviour override it.
+    monkeypatch.setattr(worker, "_llm_client", _NoRepairLlm())
 
 
 @pytest.fixture
