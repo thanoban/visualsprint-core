@@ -167,6 +167,22 @@ class GoogleMeetJoiner:
         started = loop.time()
         while loop.time() - started < _PREJOIN_READY_TIMEOUT_S:
             await self._dismiss_blocking_dialogs(page)
+            # Detect Google account-chooser with a signed-out account: the
+            # stored session has been invalidated (common when the container
+            # runs from a new IP). Fail immediately with a clear message
+            # instead of timing out for 45 s.
+            try:
+                chooser = page.get_by_text("Choose an account", exact=False)
+                signed_out = page.get_by_text("Signed out", exact=True)
+                if (await chooser.count() > 0 and await chooser.first.is_visible(timeout=300)
+                        and await signed_out.count() > 0):
+                    log.warning(
+                        "bot.meet.session_expired",
+                        hint="Re-run app.bot.capture_google_session and upload a fresh secret version",
+                    )
+                    return False
+            except Exception:
+                pass
             try:
                 if await self._name_input(page).is_visible(timeout=1000):
                     return True
