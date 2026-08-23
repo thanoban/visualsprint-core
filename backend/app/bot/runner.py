@@ -196,6 +196,12 @@ async def run_bot_session(bot_session_id: str) -> None:
     await screen.start()
 
     audio_chunks: list[bytes] = []
+    # Screen frames are discarded in-flight: accumulating 1fps JPEGs for a
+    # full meeting causes OOM in the 2Gi container and produces a large video
+    # blob. The screen pipeline handles video_uri=None gracefully (honest
+    # absence). A proper bot keyframe path (detect_keyframes on-the-fly,
+    # store only changed frames) is the documented upgrade -- see runner.py
+    # docstring.
     screen_frames: list[ScreenFrame] = []
 
     async def _drain_audio() -> None:
@@ -203,8 +209,8 @@ async def run_bot_session(bot_session_id: str) -> None:
             audio_chunks.append(chunk.data)
 
     async def _drain_screen() -> None:
-        async for frame in screen.frames():
-            screen_frames.append(frame)
+        async for _frame in screen.frames():
+            pass  # discard -- see note above
 
     drain_tasks = [asyncio.create_task(_drain_audio()), asyncio.create_task(_drain_screen())]
 
