@@ -63,6 +63,28 @@ export interface InstantCaptureResponse {
   note: string;
 }
 
+export type BotSessionStatus =
+  | "scheduled"
+  | "joining"
+  | "in_lobby"
+  | "live"
+  | "ended"
+  | "missed"
+  | "failed"
+  | "lobby_timeout";
+
+export interface BotSessionStatusResponse {
+  id: string;
+  status: BotSessionStatus;
+  platform: string;
+  scheduled_start: string | null;
+  joined_at: string | null;
+  ended_at: string | null;
+  lobby_timeout_at: string | null;
+  error: string | null;
+  capture_session_id: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Types for the report page. The endpoint that serves these does NOT exist
 // yet (other agents are building the pipeline that produces report data).

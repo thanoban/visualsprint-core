@@ -40,6 +40,18 @@ class InstantCaptureResponse(BaseModel):
     note: str
 
 
+class BotSessionStatusResponse(BaseModel):
+    id: str
+    status: str
+    platform: str
+    scheduled_start: datetime | None = None
+    joined_at: datetime | None = None
+    ended_at: datetime | None = None
+    lobby_timeout_at: datetime | None = None
+    error: str | None = None
+    capture_session_id: str | None = None
+
+
 @router.post("/instant", response_model=InstantCaptureResponse)
 async def start_instant_capture(
     org_id: str,
@@ -100,10 +112,10 @@ async def start_instant_capture(
 
     settings = get_settings()
     note = (
-        "Bot is joining now as “VisualSprint Notetaker.”"
+        'Bot queued as "VisualSprint Notetaker" — will join within ~2 minutes.'
         if settings.bot_dispatch_enabled
         else (
-            "Bot capture is queued but not yet dispatched -- live bot join isn't turned on "
+            "Bot capture is queued but not yet dispatched — live bot join isn't turned on "
             "for this deployment yet."
         )
     )
@@ -113,4 +125,28 @@ async def start_instant_capture(
         meeting_id=meeting.id,
         bot_session_id=bot.id,
         note=note,
+    )
+
+
+@router.get("/sessions/{bot_session_id}", response_model=BotSessionStatusResponse)
+async def get_bot_session_status(
+    org_id: str,
+    bot_session_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> BotSessionStatusResponse:
+    """Poll the live status of one bot session created by POST /instant."""
+    bot = db.get(BotSession, bot_session_id)
+    if bot is None or bot.org_id != org_id:
+        raise HTTPException(404, "bot session not found")
+    return BotSessionStatusResponse(
+        id=bot.id,
+        status=bot.status.value,
+        platform=bot.platform,
+        scheduled_start=bot.scheduled_start,
+        joined_at=bot.joined_at,
+        ended_at=bot.ended_at,
+        lobby_timeout_at=bot.lobby_timeout_at,
+        error=bot.error,
+        capture_session_id=bot.capture_session_id,
     )

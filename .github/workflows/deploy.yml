@@ -275,6 +275,65 @@ jobs:
             --role="roles/run.developer" \
             --quiet
 
+      # --- Cloud Scheduler: triggers the agents worker every 2 minutes ---
+      # The agents service runs in VS_WORKER_MODE=http (scale-to-zero) --
+      # it only processes the pipeline queue and dispatches bot sessions when
+      # something POSTs to /run. Cloud Scheduler provides that trigger.
+      # This step is idempotent: it creates the scheduler SA and job on first
+      # deploy and updates the job URI on subsequent deploys (in case the
+      # agents Cloud Run URL ever changes).
+      - name: Resolve agents URL for Cloud Scheduler
+        id: agents_url
+        run: |
+          URL=$(gcloud run services describe visualsprint-agents \
+            --region "$REGION" --project "$PROJECT_ID" \
+            --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Create Cloud Scheduler SA (idempotent)
+        run: |
+          if ! gcloud iam service-accounts describe \
+                "visualsprint-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
+                --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            gcloud iam service-accounts create visualsprint-scheduler \
+              --project="${PROJECT_ID}" \
+              --display-name="Cloud Scheduler -> visualsprint-agents /run" \
+              --quiet
+          fi
+
+      - name: Grant Scheduler SA permission to invoke agents service
+        run: |
+          gcloud run services add-iam-policy-binding visualsprint-agents \
+            --region="${REGION}" --project="${PROJECT_ID}" \
+            --member="serviceAccount:visualsprint-scheduler@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/run.invoker" \
+            --quiet
+
+      - name: Create or update Cloud Scheduler job for agents worker
+        run: |
+          AGENTS_URL="${{ steps.agents_url.outputs.url }}"
+          SCHEDULER_SA="visualsprint-scheduler@${PROJECT_ID}.iam.gserviceaccount.com"
+          if gcloud scheduler jobs describe visualsprint-agents-run \
+               --project="${PROJECT_ID}" --location="${REGION}" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http visualsprint-agents-run \
+              --project="${PROJECT_ID}" --location="${REGION}" \
+              --schedule="*/2 * * * *" \
+              --uri="${AGENTS_URL}/run" \
+              --http-method=POST \
+              --oidc-service-account-email="${SCHEDULER_SA}" \
+              --oidc-token-audience="${AGENTS_URL}" \
+              --quiet
+          else
+            gcloud scheduler jobs create http visualsprint-agents-run \
+              --project="${PROJECT_ID}" --location="${REGION}" \
+              --schedule="*/2 * * * *" \
+              --uri="${AGENTS_URL}/run" \
+              --http-method=POST \
+              --oidc-service-account-email="${SCHEDULER_SA}" \
+              --oidc-token-audience="${AGENTS_URL}" \
+              --quiet
+          fi
+
       # --- Web: needs the api's live URL baked in at build time (Next.js
       # inlines NEXT_PUBLIC_* into the client bundle) -- fetched fresh
       # rather than hardcoded, so this stays correct if the api service URL

@@ -14,6 +14,7 @@ import Link from "next/link";
 import { API_BASE_URL } from "@/lib/config";
 import { useAuth } from "@/lib/AuthProvider";
 import type {
+  BotSessionStatusResponse,
   CaptureSessionState,
   CaptureSessionStatus,
   InstantCaptureResponse,
@@ -56,10 +57,13 @@ export default function UploadPage() {
   const [instantSubmitting, setInstantSubmitting] = useState(false);
   const [instantError, setInstantError] = useState<string | null>(null);
   const [instantResult, setInstantResult] = useState<InstantCaptureResponse | null>(null);
+  const [botStatus, setBotStatus] = useState<BotSessionStatusResponse | null>(null);
+  const botPollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     return () => {
       if (pollHandle.current) clearInterval(pollHandle.current);
+      if (botPollHandle.current) clearInterval(botPollHandle.current);
     };
   }, []);
 
@@ -78,6 +82,26 @@ export default function UploadPage() {
       }
     } catch (err) {
       setPollError(err instanceof Error ? err.message : "Failed to fetch session status");
+    }
+  }
+
+  async function pollBotSession(orgId: string, botSessionId: string) {
+    try {
+      const res = await authedFetch(
+        `/api/v1/orgs/${orgId}/capture/sessions/${botSessionId}`
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as BotSessionStatusResponse;
+      setBotStatus(data);
+      const terminal = ["ended", "failed", "missed", "lobby_timeout"];
+      if (terminal.includes(data.status)) {
+        if (botPollHandle.current) {
+          clearInterval(botPollHandle.current);
+          botPollHandle.current = null;
+        }
+      }
+    } catch {
+      // transient — keep polling
     }
   }
 
@@ -168,6 +192,18 @@ export default function UploadPage() {
       const data = (await res.json()) as InstantCaptureResponse;
       setInstantResult(data);
       setInstantUrl("");
+      setBotStatus(null);
+      if (botPollHandle.current) {
+        clearInterval(botPollHandle.current);
+        botPollHandle.current = null;
+      }
+      if (data.dispatched && data.bot_session_id && me) {
+        const orgId = me.org.id;
+        const sessionId = data.bot_session_id;
+        botPollHandle.current = setInterval(() => {
+          void pollBotSession(orgId, sessionId);
+        }, 5000);
+      }
     } catch (err) {
       setInstantError(err instanceof Error ? err.message : "Unknown error starting capture.");
     } finally {
@@ -229,19 +265,54 @@ export default function UploadPage() {
             </p>
           )}
           {instantResult && (
-            <p
-              style={{
-                marginTop: 12,
-                borderRadius: 6,
-                padding: "8px 12px",
-                fontSize: 13,
-                background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-bg)" : "var(--evidence-bg)",
-                color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-strong)" : "var(--evidence)",
-                border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent)" : "var(--evidence)"}`,
-              }}
-            >
-              {instantResult.note}
-            </p>
+            <div style={{ marginTop: 12 }}>
+              <p
+                style={{
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  margin: 0,
+                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-bg)" : "var(--evidence-bg)",
+                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-strong)" : "var(--evidence)",
+                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent)" : "var(--evidence)"}`,
+                }}
+              >
+                {instantResult.note}
+              </p>
+              {botStatus && (
+                <p
+                  style={{
+                    marginTop: 8,
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontSize: 13,
+                    margin: "8px 0 0",
+                    background:
+                      botStatus.status === "live" ? "var(--accent-bg)" :
+                      botStatus.status === "ended" ? "var(--surface)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap-bg)" :
+                      "var(--surface)",
+                    color:
+                      botStatus.status === "live" ? "var(--accent-strong)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap)" :
+                      "var(--text-faint)",
+                    border:
+                      botStatus.status === "live" ? "1px solid var(--accent)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "1px solid var(--gap)" :
+                      "1px solid var(--border)",
+                  }}
+                >
+                  {botStatus.status === "scheduled" && "⏳ Waiting for worker to dispatch…"}
+                  {botStatus.status === "joining" && "🤖 Bot is joining the meeting…"}
+                  {botStatus.status === "in_lobby" && "🚪 Bot is in the lobby — waiting to be admitted by the organizer."}
+                  {botStatus.status === "live" && "🔴 Bot is live and recording."}
+                  {botStatus.status === "ended" && "✅ Meeting ended — processing recording."}
+                  {botStatus.status === "failed" && `❌ Bot failed to join${botStatus.error ? `: ${botStatus.error}` : "."}`}
+                  {botStatus.status === "missed" && "⚠️ Session missed — the meeting may have already ended before the bot could join."}
+                  {botStatus.status === "lobby_timeout" && "⏱ Lobby timeout — the organizer didn't admit the bot within 10 minutes."}
+                </p>
+              )}
+            </div>
           )}
         </section>
 
