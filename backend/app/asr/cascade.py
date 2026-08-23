@@ -36,6 +36,41 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_CONFIDENCE = 0.6
 UNROUTED_PROVIDER = "unrouted"
+# Inline audio limit for chirp_2's synchronous Recognize API.  Anything
+# longer must be chunked before being sent. Using 55s leaves a small margin.
+_CHIRP2_MAX_CHUNK_S = 55.0
+
+
+class _TimeChunkVAD:
+    """VAD stub that skips torch/Silero entirely.  Splits audio into fixed-
+    length chunks that fit within chirp_2's inline-audio limit.  Correct for
+    multilingual bot captures — VAD-derived boundaries are not needed when the
+    whole chunk goes to a multilingual recogniser that does its own VAD."""
+
+    def detect_speech_spans(self, audio_path: str) -> list[tuple[float, float]]:
+        from app.asr.audio_io import duration_s
+
+        dur = duration_s(audio_path)
+        spans: list[tuple[float, float]] = []
+        cursor = 0.0
+        while cursor < dur - 1e-6:
+            spans.append((cursor, min(cursor + _CHIRP2_MAX_CHUNK_S, dur)))
+            cursor += _CHIRP2_MAX_CHUNK_S
+        return spans or [(0.0, dur)]
+
+
+class _UnknownLID:
+    """LID stub that skips speechbrain/VoxLingua107 entirely.  Returns every
+    span as UNKNOWN so the cascade routes all audio to the multilingual chirp_2
+    path, which is actually more correct for code-switching audio."""
+
+    def label_language(
+        self, audio_path: str, spans: list[tuple[float, float]]
+    ) -> list["LabeledSpan"]:
+        return [
+            LabeledSpan(start_s=s, end_s=e, lang=Lang.UNKNOWN, confidence=1.0)
+            for s, e in spans
+        ]
 
 
 class TranscriptionCascade:
@@ -86,6 +121,8 @@ class TranscriptionCascade:
             return await self._transcribe_english(audio_path, span)
         if span.lang in (Lang.SI, Lang.TA):
             return await self._transcribe_si_ta(audio_path, span)
+        if span.lang == Lang.UNKNOWN:
+            return await self._transcribe_multilingual(audio_path, span)
         return self._unrouted_segment(span), set(), False
 
     async def _transcribe_english(
@@ -123,6 +160,24 @@ class TranscriptionCascade:
         if best is not None:
             return _to_segment(span, best), providers_used, True
         return self._failed_segment(span, azure_provider), providers_used, True
+
+    async def _transcribe_multilingual(
+        self, audio_path: str, span: LabeledSpan
+    ) -> tuple[TranscriptSegment, set[str], bool]:
+        """chirp_2 with all three language codes — handles code-switching
+        without needing LID.  Falls back to an empty segment on total failure
+        so the pipeline continues rather than crashing."""
+        audio_bytes = slice_to_wav_bytes(audio_path, span.start_s, span.end_s)
+        provider = "google:chirp_2:multilingual"
+        try:
+            result = await self._google.transcribe_multilingual(audio_bytes)
+        except Exception as exc:
+            logger.warning(
+                "multilingual chirp_2 failed for span %.2f-%.2f: %s",
+                span.start_s, span.end_s, exc,
+            )
+            return self._failed_segment(span, provider), {provider}, False
+        return _to_segment(span, result), {result.provider}, False
 
     async def _try_vendor(
         self, adapter, audio_bytes: bytes, lang_hint: str

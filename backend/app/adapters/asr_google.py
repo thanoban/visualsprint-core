@@ -11,7 +11,10 @@ from app.config import get_settings
 
 MODEL = "chirp_2"
 _LOCALE_MAP = {"si": "si-LK", "ta": "ta-IN"}
-DEFAULT_TIMEOUT_S = 30.0
+# chirp_2 supports up to 10 language codes simultaneously — used for
+# multilingual/code-switching audio where the language is not pre-determined.
+MULTILINGUAL_LOCALES = ["si-LK", "ta-IN", "en-US"]
+DEFAULT_TIMEOUT_S = 60.0
 
 
 class GoogleSpeechAdapter:
@@ -54,12 +57,24 @@ class GoogleSpeechAdapter:
 
     async def transcribe_segment(self, audio_bytes: bytes, lang_hint: str) -> RawVendorResult:
         locale = self._locale(lang_hint)
+        return await self._recognize(audio_bytes, [locale], self.provider_name(lang_hint))
+
+    async def transcribe_multilingual(self, audio_bytes: bytes) -> RawVendorResult:
+        """Send audio to chirp_2 with all supported locales simultaneously.
+        chirp_2 auto-selects the correct language per segment, making this
+        correct for code-switching audio without needing local LID inference."""
+        provider = f"google:{MODEL}:multilingual"
+        return await self._recognize(audio_bytes, MULTILINGUAL_LOCALES, provider)
+
+    async def _recognize(
+        self, audio_bytes: bytes, language_codes: list[str], provider: str
+    ) -> RawVendorResult:
         client = self._ensure_client()
         from google.cloud.speech_v2.types import cloud_speech
 
         config = cloud_speech.RecognitionConfig(
             auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-            language_codes=[locale],
+            language_codes=language_codes,
             model=MODEL,
             features=cloud_speech.RecognitionFeatures(
                 enable_word_time_offsets=True,
@@ -71,19 +86,20 @@ class GoogleSpeechAdapter:
             config=config,
             content=audio_bytes,
         )
+        label = ",".join(language_codes)
         try:
             response = await asyncio.wait_for(
                 client.recognize(request=request), timeout=self._timeout_s
             )
         except TimeoutError as exc:
             raise VendorTranscriptionError(
-                f"google {MODEL}/{locale} timed out after {self._timeout_s}s"
+                f"google {MODEL}/{label} timed out after {self._timeout_s}s"
             ) from exc
         except Exception as exc:
             raise VendorTranscriptionError(
-                f"google {MODEL}/{locale} request failed: {exc}"
+                f"google {MODEL}/{label} request failed: {exc}"
             ) from exc
-        return _normalize(response, self.provider_name(lang_hint))
+        return _normalize(response, provider)
 
 
 def _normalize(response, provider: str) -> RawVendorResult:

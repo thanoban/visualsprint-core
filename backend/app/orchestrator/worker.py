@@ -76,9 +76,20 @@ def _get_transcriber():
     test never needs real Google/Azure/Groq credentials or torch/speechbrain."""
     global _transcriber
     if _transcriber is None:
-        from app.asr.cascade import TranscriptionCascade
+        from app.adapters.blobstore_s3 import get_blobstore
+        from app.asr.cascade import TranscriptionCascade, _TimeChunkVAD, _UnknownLID
 
-        _transcriber = TranscriptionCascade()
+        # Use time-chunked VAD and unknown-language LID stubs so that torch
+        # and speechbrain are never imported in the agents worker.  This cuts
+        # peak memory from ~1 GB to ~200 MB.  All audio goes to chirp_2 in
+        # multilingual mode (si-LK + ta-IN + en-US simultaneously), which is
+        # correct for code-switching audio and was the whole point of picking
+        # chirp_2 (docs/04-asr.md).
+        _transcriber = TranscriptionCascade(
+            vad=_TimeChunkVAD(),
+            lid=_UnknownLID(),
+            blob_store=get_blobstore(),
+        )
     return _transcriber
 
 
