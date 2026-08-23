@@ -34,20 +34,32 @@ class PlaywrightScreenCapture:
         log.info("bot.screen.started")
 
     async def _loop(self) -> None:
-        try:
-            while True:
-                image_bytes = await self._page.screenshot(type="jpeg", quality=60)
+        # Screenshot timeout: generous enough for a heavy SPA page (Meet loads
+        # a lot of JS on join) but short enough that a single stuck call can't
+        # freeze the asyncio event loop and block poll_status() indefinitely.
+        _SCREENSHOT_TIMEOUT_MS = 8_000
+        consecutive_failures = 0
+        while True:
+            try:
+                image_bytes = await self._page.screenshot(
+                    type="jpeg", quality=60, timeout=_SCREENSHOT_TIMEOUT_MS
+                )
+                consecutive_failures = 0
                 await self._queue.put(
                     ScreenFrame(
                         captured_at_s=time.monotonic() - self._started_at,
                         image_bytes=image_bytes,
                     )
                 )
-                await asyncio.sleep(_INTERVAL_S)
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            log.warning("bot.screen.loop_failed", error=str(exc))
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                consecutive_failures += 1
+                log.warning("bot.screen.frame_skipped", error=str(exc), consecutive=consecutive_failures)
+                if consecutive_failures >= 10:
+                    log.warning("bot.screen.loop_aborted", consecutive=consecutive_failures)
+                    return
+            await asyncio.sleep(_INTERVAL_S)
 
     async def frames(self) -> AsyncIterator[ScreenFrame]:
         while True:
