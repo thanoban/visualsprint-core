@@ -253,7 +253,7 @@ jobs:
           BOT_ARGS="${BOT_ARGS} --set-env-vars=${BOT_ENV}"
           BOT_ARGS="${BOT_ARGS} --max-retries=0"
           BOT_ARGS="${BOT_ARGS} --task-timeout=14400"
-          BOT_ARGS="${BOT_ARGS} --memory=1Gi"
+          BOT_ARGS="${BOT_ARGS} --memory=2Gi"
           BOT_ARGS="${BOT_ARGS} --quiet"
           if gcloud run jobs describe visualsprint-bot \
                --region="${REGION}" --project="${PROJECT_ID}" 2>/dev/null; then
