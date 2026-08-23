@@ -13,7 +13,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool, StaticPool
 
@@ -36,6 +36,12 @@ def db_session():
         # rather than silently skipping them (create_all is idempotent, not
         # alter-aware — it won't add a column to an existing table).
         engine = create_engine(_PG_URL, poolclass=NullPool)
+        # The `person`/`knowledge_item` tables declare pgvector `Vector` columns,
+        # so the extension must exist before create_all issues `... VECTOR(n)`.
+        # The migrated main DB gets it via the initial migration, but this suite
+        # builds its own schema on a bare `createdb` test DB, so create it here.
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         Base.metadata.drop_all(engine)
         Base.metadata.create_all(engine)
         session_local = sessionmaker(bind=engine, expire_on_commit=False)
