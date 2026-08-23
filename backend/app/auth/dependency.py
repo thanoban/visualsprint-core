@@ -46,7 +46,9 @@ def get_current_user(
         db.add(OrgMember(org_id=org.id, user_id=user.id, role="owner"))
         # Create a Person record linked to this user so commitments and
         # decisions can be attributed to them across meetings.
-        display_name = str(claims.get("user_metadata", {}).get("full_name", "") or email or user_id[:8])
+        _meta = claims.get("user_metadata")
+        _full_name = _meta.get("full_name", "") if isinstance(_meta, dict) else ""
+        display_name = str(_full_name or email or user_id[:8])
         person = Person(org_id=org.id, user_id=user.id, display_name=display_name, email=email or None)
         db.add(person)
         db.commit()
