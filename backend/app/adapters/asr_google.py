@@ -5,6 +5,7 @@ app.config.Settings.google_credentials_json — never hardcoded.
 """
 
 import asyncio
+from typing import Any
 
 from app.adapters.asr_common import RawVendorResult, VendorTranscriptionError, VendorWord
 from app.config import get_settings
@@ -39,7 +40,7 @@ class GoogleSpeechAdapter:
             raise ValueError(f"unsupported lang_hint for google adapter: {lang_hint!r}")
         return locale
 
-    def _ensure_client(self):
+    def _ensure_client(self) -> Any:
         if self._client is not None:
             return self._client
         from google.cloud.speech_v2 import SpeechAsyncClient
@@ -47,7 +48,7 @@ class GoogleSpeechAdapter:
         if self._credentials_path:
             from google.oauth2 import service_account
 
-            credentials = service_account.Credentials.from_service_account_file(
+            credentials = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
                 self._credentials_path
             )
             self._client = SpeechAsyncClient(credentials=credentials)
@@ -102,7 +103,7 @@ class GoogleSpeechAdapter:
         return _normalize(response, provider)
 
 
-def _normalize(response, provider: str) -> RawVendorResult:
+def _normalize(response: Any, provider: str) -> RawVendorResult:
     texts: list[str] = []
     words: list[VendorWord] = []
     confidences: list[float] = []

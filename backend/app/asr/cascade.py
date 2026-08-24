@@ -66,7 +66,7 @@ class _UnknownLID:
 
     def label_language(
         self, audio_path: str, spans: list[tuple[float, float]]
-    ) -> list["LabeledSpan"]:
+    ) -> list[LabeledSpan]:
         return [
             LabeledSpan(start_s=s, end_s=e, lang=Lang.UNKNOWN, confidence=1.0)
             for s, e in spans
@@ -180,7 +180,10 @@ class TranscriptionCascade:
         return _to_segment(span, result), {result.provider}, False
 
     async def _try_vendor(
-        self, adapter, audio_bytes: bytes, lang_hint: str
+        self,
+        adapter: GoogleSpeechAdapter | AzureSpeechAdapter,
+        audio_bytes: bytes,
+        lang_hint: str,
     ) -> RawVendorResult | None:
         try:
             return await adapter.transcribe_segment(audio_bytes, lang_hint)
