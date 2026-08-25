@@ -13,6 +13,7 @@ from app.api.corrections import router as corrections_router
 from app.api.data_rights import router as data_rights_router
 from app.api.leads import router as leads_router
 from app.api.me import router as me_router
+from app.api.meetings import router as meetings_router
 from app.api.oauth import router as oauth_router
 from app.api.ops import router as ops_router
 from app.api.people import router as people_router
@@ -70,6 +71,7 @@ if get_settings().rate_limit_enabled:
 app.add_middleware(RequestContextMiddleware)
 
 app.include_router(upload_router)
+app.include_router(meetings_router)
 app.include_router(capture_router)
 app.include_router(report_router)
 app.include_router(chat_router)
