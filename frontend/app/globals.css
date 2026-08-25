@@ -4,10 +4,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Design tokens -- from the Claude Design project "Visualsprint core
-   development" (Settings.dc.html / AppSidebar.dc.html), ported verbatim
-   rather than re-derived, so every page built against that project stays
-   pixel-consistent with this one. */
+/* Design tokens -- from the Claude Design project "VisualSprint landing
+   redesign" -> "VisualSprint App.dc.html" (the Meetings dashboard), applied
+   app-wide so every authenticated page shares one palette. --accent is now
+   that design's blue primary (was teal, from an earlier Settings.dc.html /
+   AppSidebar.dc.html iteration of the same project) -- --success is a
+   separate green token for "verified" / "resolved" / "ready" states, which
+   the source design keeps distinct from its blue brand color. */
 :root {
   --bg: #f6f4ee;
   --surface: #ffffff;
@@ -17,9 +20,11 @@
   --text: #14171d;
   --text-muted: #6b6558;
   --text-faint: #948d7c;
-  --accent: #1f7a5c;
-  --accent-bg: #e3f1ea;
-  --accent-strong: #145c44;
+  --accent: #2563eb;
+  --accent-bg: #eef4ff;
+  --accent-strong: #1d4ed8;
+  --success: #0d7a5f;
+  --success-bg: #e4f6ef;
   --evidence: #b3790f;
   --evidence-bg: #f8edd6;
   --gap: #ab4a2f;
@@ -37,9 +42,11 @@
   --text: #eae6dc;
   --text-muted: #a39c8a;
   --text-faint: #726c5c;
-  --accent: #3ab892;
-  --accent-bg: rgba(58, 184, 146, 0.14);
-  --accent-strong: #5cd1ab;
+  --accent: #5b8dff;
+  --accent-bg: rgba(91, 141, 255, 0.14);
+  --accent-strong: #8fb2ff;
+  --success: #3ab892;
+  --success-bg: rgba(58, 184, 146, 0.14);
   --evidence: #e0a83e;
   --evidence-bg: rgba(224, 168, 62, 0.16);
   --gap: #dd8563;
@@ -51,7 +58,7 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "Plus Jakarta Sans", sans-serif;
 }
 
 a {

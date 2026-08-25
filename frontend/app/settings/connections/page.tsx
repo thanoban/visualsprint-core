@@ -18,7 +18,7 @@ const VENDORS = [
   { provider: "microsoft", label: "Microsoft", description: "Calendar watch, Teams recordings", mono: "MS", teamOnly: false },
 ];
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 function pillButtonStyle(active: boolean): React.CSSProperties {
@@ -169,9 +169,9 @@ export default function ConnectionsPage() {
         {justConnected && (
           <div
             style={{
-              background: "var(--accent-bg)",
-              border: "1px solid var(--accent)",
-              color: "var(--accent-strong)",
+              background: "var(--success-bg)",
+              border: "1px solid var(--success)",
+              color: "var(--success)",
               borderRadius: 8,
               padding: "8px 12px",
               fontSize: 13,
@@ -354,7 +354,7 @@ export default function ConnectionsPage() {
                           width: 6,
                           height: 6,
                           borderRadius: "50%",
-                          background: "var(--accent)",
+                          background: "var(--success)",
                           display: "inline-block",
                           flexShrink: 0,
                         }}

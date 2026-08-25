@@ -26,7 +26,7 @@ async function fetchMeetingReport(captureSessionId: string): Promise<MeetingRepo
   return (await res.json()) as MeetingReport;
 }
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
 
@@ -48,7 +48,7 @@ const CONF_LABELS: Record<ConfidenceLevel, string> = {
 
 // [fg, bg, dot]
 const CONF_COLOR: Record<ConfidenceLevel, [string, string, string]> = {
-  verified: ["var(--accent-strong)", "var(--accent-bg)", "var(--accent)"],
+  verified: ["var(--success)", "var(--success-bg)", "var(--success)"],
   partially_supported: ["var(--evidence)", "var(--evidence-bg)", "var(--evidence)"],
   ambiguous: ["var(--text-faint)", "var(--surface2)", "var(--text-faint)"],
   unsupported: ["var(--gap)", "var(--gap-bg)", "var(--gap)"],
@@ -165,13 +165,13 @@ function ItemCard({ item }: { item: FlatItem }) {
                 item.lifecycle_state === "recurring"
                   ? "var(--evidence)"
                   : item.lifecycle_state === "resolved"
-                    ? "var(--accent-strong)"
+                    ? "var(--success)"
                     : "var(--text-faint)",
               background:
                 item.lifecycle_state === "recurring"
                   ? "var(--evidence-bg)"
                   : item.lifecycle_state === "resolved"
-                    ? "var(--accent-bg)"
+                    ? "var(--success-bg)"
                     : "var(--surface2)",
               padding: "3px 9px",
               borderRadius: 4,

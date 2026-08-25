@@ -22,7 +22,7 @@ import type {
 } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 2000;
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
 
@@ -272,9 +272,9 @@ export default function UploadPage() {
                   padding: "8px 12px",
                   fontSize: 13,
                   margin: 0,
-                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-bg)" : "var(--evidence-bg)",
-                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-strong)" : "var(--evidence)",
-                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent)" : "var(--evidence)"}`,
+                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--success-bg)" : "var(--evidence-bg)",
+                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--success)" : "var(--evidence)",
+                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--success)" : "var(--evidence)"}`,
                 }}
               >
                 {instantResult.note}
@@ -288,16 +288,16 @@ export default function UploadPage() {
                     fontSize: 13,
                     margin: "8px 0 0",
                     background:
-                      botStatus.status === "live" ? "var(--accent-bg)" :
+                      botStatus.status === "live" ? "var(--success-bg)" :
                       botStatus.status === "ended" ? "var(--surface)" :
                       ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap-bg)" :
                       "var(--surface)",
                     color:
-                      botStatus.status === "live" ? "var(--accent-strong)" :
+                      botStatus.status === "live" ? "var(--success)" :
                       ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap)" :
                       "var(--text-faint)",
                     border:
-                      botStatus.status === "live" ? "1px solid var(--accent)" :
+                      botStatus.status === "live" ? "1px solid var(--success)" :
                       ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "1px solid var(--gap)" :
                       "1px solid var(--border)",
                   }}
@@ -438,7 +438,7 @@ export default function UploadPage() {
                           fontFamily: mono,
                           fontSize: 14,
                           fontWeight: 600,
-                          background: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence-bg)" : "var(--surface2)",
+                          background: isDone ? "var(--success)" : isActive ? "var(--evidence-bg)" : "var(--surface2)",
                           color: isDone ? "#fff" : isActive ? "var(--evidence)" : "var(--text-faint)",
                           border: isActive ? "2px solid var(--evidence)" : "1px solid var(--border-strong)",
                         }}
@@ -453,7 +453,7 @@ export default function UploadPage() {
                           fontSize: 12,
                           margin: "6px 0 0",
                           fontWeight: isActive ? 600 : 400,
-                          color: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence)" : "var(--text-faint)",
+                          color: isDone ? "var(--success)" : isActive ? "var(--evidence)" : "var(--text-faint)",
                         }}
                       >
                         {isDone ? "Done" : isActive ? "In progress" : "Queued"}

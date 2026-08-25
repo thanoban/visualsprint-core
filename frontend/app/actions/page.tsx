@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/AuthProvider";
 import type { ProposedActionOut } from "@/lib/types";
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
 
@@ -127,8 +127,8 @@ function PendingCard({
                 borderRadius: 6,
                 padding: "8px 12px",
                 fontSize: 13,
-                background: result.status === "executed" ? "var(--accent-bg)" : "var(--evidence-bg)",
-                color: result.status === "executed" ? "var(--accent-strong)" : "var(--evidence)",
+                background: result.status === "executed" ? "var(--success-bg)" : "var(--evidence-bg)",
+                color: result.status === "executed" ? "var(--success)" : "var(--evidence)",
               }}
             >
               {result.status === "executed" ? (
@@ -276,8 +276,8 @@ export default function ActionsPage() {
                       borderRadius: 20,
                       width: "fit-content",
                       justifySelf: "end",
-                      color: statusIsPositive(h.status) ? "var(--accent-strong)" : "var(--gap)",
-                      background: statusIsPositive(h.status) ? "var(--accent-bg)" : "var(--gap-bg)",
+                      color: statusIsPositive(h.status) ? "var(--success)" : "var(--gap)",
+                      background: statusIsPositive(h.status) ? "var(--success-bg)" : "var(--gap-bg)",
                     }}
                   >
                     {statusLabel(h.status)}
