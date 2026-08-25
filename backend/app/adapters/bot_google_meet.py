@@ -48,8 +48,25 @@ _DISMISS_LABELS = (
     "Continue without microphone and camera",
     "Continue without microphone",
     "Join without an account",
+    # Newer Meet UI variants (2024+): mic/camera consent overlays that
+    # appear before or on the pre-join screen and must be dismissed first.
+    "Continue anyway",
+    "Use without microphone",
 )
-_DISMISS_TEXTS = ("Accept all", "Reject all", "I agree")
+_DISMISS_TEXTS = ("Accept all", "Reject all", "I agree", "Accept")
+
+# Texts that appear when Meet refuses anonymous join (personal @gmail meetings
+# only allow signed-in Google accounts). Detecting these fast-fails instead of
+# waiting out the full 45s _PREJOIN_READY_TIMEOUT_S.
+_SIGN_IN_REQUIRED_TEXTS = (
+    "You can't join this video call",
+    "can't join this meeting",
+    "To join, sign in",
+    "Sign in to join",
+    "join requires a Google Account",
+    "only for Google account holders",
+    "This call is for Google account holders",
+)
 
 
 class GoogleMeetJoiner:
@@ -167,6 +184,7 @@ class GoogleMeetJoiner:
         started = loop.time()
         while loop.time() - started < _PREJOIN_READY_TIMEOUT_S:
             await self._dismiss_blocking_dialogs(page)
+
             # Detect Google account-chooser with a signed-out account: the
             # stored session has been invalidated (common when the container
             # runs from a new IP). Fail immediately with a clear message
@@ -183,6 +201,26 @@ class GoogleMeetJoiner:
                     return False
             except Exception:
                 pass
+
+            # Detect sign-in-required walls (personal @gmail meetings block
+            # anonymous users outright). Fast-fail instead of waiting 45s.
+            for wall_text in _SIGN_IN_REQUIRED_TEXTS:
+                try:
+                    el = page.get_by_text(wall_text, exact=False)
+                    if await el.count() > 0 and await el.first.is_visible(timeout=300):
+                        log.warning(
+                            "bot.meet.anonymous_blocked",
+                            text=wall_text,
+                            hint=(
+                                "Meeting requires a signed-in Google account. "
+                                "Run `python -m app.bot.capture_google_session`, upload the JSON "
+                                "as GCP Secret `visualsprint-bot-google-session`, and redeploy."
+                            ),
+                        )
+                        return False
+                except Exception:
+                    pass
+
             try:
                 if await self._name_input(page).is_visible(timeout=1000):
                     return True
@@ -201,13 +239,31 @@ class GoogleMeetJoiner:
         return False
 
     async def _dismiss_blocking_dialogs(self, page) -> None:
+        import asyncio
+
         for label in _DISMISS_LABELS:
             try:
                 btn = page.get_by_role("button", name=label)
                 if await btn.count() > 0 and await btn.first.is_visible(timeout=300):
                     await btn.first.click(timeout=1500)
+                    if label == "Join without an account":
+                        # Meet SPA needs time to transition to the name-input
+                        # screen after this click — give it a generous buffer
+                        # so the next iteration finds the pre-join UI ready.
+                        await asyncio.sleep(3.0)
+                    continue
             except Exception:
                 pass
+            # Some Meet UI variants render "Join without an account" as a link
+            # (<a>) rather than a <button>. Try that as a fallback.
+            if label == "Join without an account":
+                try:
+                    link = page.get_by_role("link", name=label)
+                    if await link.count() > 0 and await link.first.is_visible(timeout=300):
+                        await link.first.click(timeout=1500)
+                        await asyncio.sleep(3.0)
+                except Exception:
+                    pass
         for text in _DISMISS_TEXTS:
             try:
                 btn = page.get_by_text(text, exact=False)
