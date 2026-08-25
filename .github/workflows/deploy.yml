@@ -240,6 +240,15 @@ jobs:
           BOT_ARGS="${BOT_ARGS} --max-retries=0"
           BOT_ARGS="${BOT_ARGS} --task-timeout=14400"
           BOT_ARGS="${BOT_ARGS} --memory=2Gi"
+          # Static outbound IP via Cloud NAT (router=visualsprint-router,
+          # static addr=visualsprint-bot-nat-ip, connector=visualsprint-connector,
+          # all created once in us-west1). --vpc-egress=all-traffic forces ALL
+          # egress (including to Google Meet/accounts.google.com) through the
+          # connector -> Cloud NAT -> same static IP every run. Without this the
+          # container gets a different ephemeral IP each cold start, and Google
+          # invalidates the stored session within ~1-2 hours of first use.
+          BOT_ARGS="${BOT_ARGS} --vpc-connector=visualsprint-connector"
+          BOT_ARGS="${BOT_ARGS} --vpc-egress=all-traffic"
           BOT_ARGS="${BOT_ARGS} --quiet"
           if gcloud run jobs describe visualsprint-bot \
                --region="${REGION}" --project="${PROJECT_ID}" 2>/dev/null; then
