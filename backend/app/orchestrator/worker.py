@@ -86,8 +86,8 @@ def _get_transcriber():
         # correct for code-switching audio and was the whole point of picking
         # chirp_2 (docs/04-asr.md).
         _transcriber = TranscriptionCascade(
-            vad=_TimeChunkVAD(),
-            lid=_UnknownLID(),
+            vad=_TimeChunkVAD(),  # type: ignore[arg-type]
+            lid=_UnknownLID(),  # type: ignore[arg-type]
             blob_store=get_blobstore(),
         )
     return _transcriber

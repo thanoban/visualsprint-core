@@ -81,6 +81,76 @@ class GoogleMeetJoiner:
     def page(self):
         return self._session.page
 
+    async def _handle_google_auth_redirect(self, page, join_url: str) -> bool:
+        """After goto(), Google may redirect to accounts.google.com for account
+        selection or a security check before returning to Meet. Handle all the
+        known interstitials so the signed-in session actually reaches the
+        pre-join screen. Returns False only on an unrecoverable auth wall
+        (2FA challenge, account suspended, etc.)."""
+        import asyncio
+
+        for _ in range(12):
+            url = page.url
+            log.info("bot.meet.auth_redirect_check", url=url)
+
+            if "meet.google.com" in url:
+                return True
+
+            if "accounts.google.com" in url:
+                # Account chooser: click the first listed account tile
+                try:
+                    for sel in ("[data-identifier]", "[data-email]",
+                                "li[data-authuser]", ".wLBAL"):
+                        tile = page.locator(sel).first
+                        if await tile.count() > 0 and await tile.is_visible(timeout=1500):
+                            await tile.click(timeout=3000)
+                            await asyncio.sleep(2.5)
+                            break
+                except Exception:
+                    pass
+
+                # "Continue" / "Next" buttons that appear before redirect back
+                for btn_text in ("Continue", "Next", "Allow", "I agree"):
+                    try:
+                        btn = page.get_by_role("button", name=btn_text)
+                        if await btn.count() > 0 and await btn.first.is_visible(timeout=800):
+                            await btn.first.click(timeout=2000)
+                            await asyncio.sleep(2.0)
+                            break
+                    except Exception:
+                        pass
+
+                # Detect unrecoverable security challenges (2FA, phone prompt)
+                for wall in ("Verify it's you", "2-Step Verification",
+                             "Enter the code", "Verify your identity",
+                             "This device isn't recognised"):
+                    try:
+                        if await page.get_by_text(wall, exact=False).count() > 0:
+                            log.warning(
+                                "bot.meet.auth_challenge",
+                                text=wall,
+                                url=page.url,
+                                hint=(
+                                    "Google security challenge blocked the signed-in session. "
+                                    "Re-capture the session on a machine where the account "
+                                    "has already passed 2FA, or add the Cloud Run IP range "
+                                    "as a trusted device."
+                                ),
+                            )
+                            return False
+                    except Exception:
+                        pass
+
+                await asyncio.sleep(1.5)
+                continue
+
+            # Any other non-Meet domain (e.g. google.com/sorry CAPTCHA)
+            if "meet.google.com" not in url:
+                log.warning("bot.meet.unexpected_redirect", url=url)
+                await asyncio.sleep(1.5)
+
+        return "meet.google.com" in page.url
+
     async def join(
         self, join_url: str, *, display_name: str = "VisualSprint Notetaker"
     ) -> JoinOutcome:
@@ -99,6 +169,16 @@ class GoogleMeetJoiner:
         page = self._session.page
         try:
             await page.goto(join_url, timeout=_GOTO_TIMEOUT_MS, wait_until="load")
+
+            # When launched with a stored Google session, Meet often redirects
+            # to accounts.google.com for account selection before showing the
+            # pre-join screen. Handle that redirect flow first.
+            on_meet = await self._handle_google_auth_redirect(page, join_url)
+            if not on_meet:
+                await self._save_debug_screenshot(page, "auth_redirect_failed")
+                log.warning("bot.meet.join_failed", error="Google auth redirect did not resolve to Meet")
+                self._state = JoinOutcome.FAILED
+                return self._state
 
             # Wait for the pre-join screen to actually settle (name input or a
             # join button visible), dismissing any coach-marks/consent dialogs
@@ -183,6 +263,15 @@ class GoogleMeetJoiner:
         loop = asyncio.get_event_loop()
         started = loop.time()
         while loop.time() - started < _PREJOIN_READY_TIMEOUT_S:
+            # If Meet redirected away (e.g. mid-load session expiry sends back
+            # to accounts.google.com), try to recover via the auth handler.
+            if "meet.google.com" not in page.url:
+                log.warning("bot.meet.prejoin_redirected", url=page.url)
+                recovered = await self._handle_google_auth_redirect(page, "")
+                if not recovered:
+                    return False
+                continue
+
             await self._dismiss_blocking_dialogs(page)
 
             # Detect Google account-chooser with a signed-out account: the
