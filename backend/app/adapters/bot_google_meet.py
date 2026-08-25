@@ -76,80 +76,108 @@ class GoogleMeetJoiner:
         self._session = PlaywrightSession()
         self._display_name = "VisualSprint Notetaker"
         self._state = JoinOutcome.FAILED
+        # Set by the join flow to carry the specific reason for FAILED so that
+        # runner.py can store it in BotSession.error instead of the generic
+        # "join mechanics failed" string -- makes the UI actionable.
+        self.error_detail: str | None = None
 
     @property
     def page(self):
         return self._session.page
 
-    async def _handle_google_auth_redirect(self, page, join_url: str) -> bool:
+    async def _handle_google_auth_redirect(self, page) -> bool:
         """After goto(), Google may redirect to accounts.google.com for account
-        selection or a security check before returning to Meet. Handle all the
-        known interstitials so the signed-in session actually reaches the
-        pre-join screen. Returns False only on an unrecoverable auth wall
-        (2FA challenge, account suspended, etc.)."""
+        selection before returning to Meet. Works its way through the known
+        interstitials and returns True once the URL is back on meet.google.com.
+        Sets self.error_detail and returns False only on a truly unrecoverable
+        wall (password prompt = session expired; 2FA prompt; CAPTCHA)."""
         import asyncio
 
-        for _ in range(12):
+        for attempt in range(15):
             url = page.url
-            log.info("bot.meet.auth_redirect_check", url=url)
+            log.info("bot.meet.auth_redirect_check", url=url, attempt=attempt)
 
             if "meet.google.com" in url:
                 return True
 
             if "accounts.google.com" in url:
-                # Account chooser: click the first listed account tile
+                # Session has a password field → cookies are fully expired,
+                # the bot cannot proceed without the account password.
                 try:
-                    for sel in ("[data-identifier]", "[data-email]",
-                                "li[data-authuser]", ".wLBAL"):
-                        tile = page.locator(sel).first
-                        if await tile.count() > 0 and await tile.is_visible(timeout=1500):
-                            await tile.click(timeout=3000)
-                            await asyncio.sleep(2.5)
-                            break
+                    pw = page.locator("input[type='password']")
+                    if await pw.count() > 0 and await pw.first.is_visible(timeout=500):
+                        self.error_detail = (
+                            "Google session expired — re-run "
+                            "`python -m app.bot.capture_google_session` "
+                            "and upload a new secret version"
+                        )
+                        log.warning("bot.meet.session_expired_password_prompt",
+                                    hint=self.error_detail)
+                        return False
                 except Exception:
                     pass
 
-                # "Continue" / "Next" buttons that appear before redirect back
-                for btn_text in ("Continue", "Next", "Allow", "I agree"):
-                    try:
-                        btn = page.get_by_role("button", name=btn_text)
-                        if await btn.count() > 0 and await btn.first.is_visible(timeout=800):
-                            await btn.first.click(timeout=2000)
-                            await asyncio.sleep(2.0)
-                            break
-                    except Exception:
-                        pass
-
-                # Detect unrecoverable security challenges (2FA, phone prompt)
+                # Unrecoverable security / bot-detection walls
                 for wall in ("Verify it's you", "2-Step Verification",
-                             "Enter the code", "Verify your identity",
-                             "This device isn't recognised"):
+                             "Verify your identity", "This device isn't recognised",
+                             "Couldn't sign you in"):
                     try:
                         if await page.get_by_text(wall, exact=False).count() > 0:
-                            log.warning(
-                                "bot.meet.auth_challenge",
-                                text=wall,
-                                url=page.url,
-                                hint=(
-                                    "Google security challenge blocked the signed-in session. "
-                                    "Re-capture the session on a machine where the account "
-                                    "has already passed 2FA, or add the Cloud Run IP range "
-                                    "as a trusted device."
-                                ),
+                            self.error_detail = (
+                                f"Google blocked the bot session ({wall!r}). "
+                                "Re-capture the session with "
+                                "`python -m app.bot.capture_google_session`."
                             )
+                            log.warning("bot.meet.auth_challenge",
+                                        wall=wall, url=url,
+                                        hint=self.error_detail)
                             return False
                     except Exception:
                         pass
 
+                # Account chooser: click the first account tile.
+                # Try all selector variants — Google's chooser UI varies by
+                # region and account type.
+                clicked = False
+                for sel in ("[data-identifier]", "[data-email]",
+                            "li[data-authuser]", ".wLBAL", ".daaWNd"):
+                    try:
+                        tile = page.locator(sel).first
+                        if await tile.count() > 0 and await tile.is_visible(timeout=1000):
+                            await tile.click(timeout=3000)
+                            await asyncio.sleep(3.0)
+                            clicked = True
+                            break
+                    except Exception:
+                        pass
+
+                # "Continue" / "Next" buttons (appear after tile click or as
+                # standalone prompts before the redirect completes)
+                if not clicked:
+                    for btn_text in ("Continue", "Next", "Allow", "I agree",
+                                     "Use another account"):
+                        try:
+                            btn = page.get_by_role("button", name=btn_text)
+                            if await btn.count() > 0 and await btn.first.is_visible(timeout=800):
+                                await btn.first.click(timeout=2000)
+                                await asyncio.sleep(2.0)
+                                break
+                        except Exception:
+                            pass
+
                 await asyncio.sleep(1.5)
                 continue
 
-            # Any other non-Meet domain (e.g. google.com/sorry CAPTCHA)
-            if "meet.google.com" not in url:
-                log.warning("bot.meet.unexpected_redirect", url=url)
-                await asyncio.sleep(1.5)
+            # Any other non-Meet domain (CAPTCHA, google.com/sorry, etc.)
+            log.warning("bot.meet.unexpected_redirect", url=url)
+            await asyncio.sleep(2.0)
 
-        return "meet.google.com" in page.url
+        self.error_detail = (
+            "Google auth redirect did not resolve to Meet after 15 attempts — "
+            "session is likely expired. Re-run "
+            "`python -m app.bot.capture_google_session`."
+        )
+        return False
 
     async def join(
         self, join_url: str, *, display_name: str = "VisualSprint Notetaker"
@@ -170,13 +198,14 @@ class GoogleMeetJoiner:
         try:
             await page.goto(join_url, timeout=_GOTO_TIMEOUT_MS, wait_until="load")
 
-            # When launched with a stored Google session, Meet often redirects
-            # to accounts.google.com for account selection before showing the
-            # pre-join screen. Handle that redirect flow first.
-            on_meet = await self._handle_google_auth_redirect(page, join_url)
+            # When launched with a stored Google session, Meet redirects to
+            # accounts.google.com for account selection before the pre-join
+            # screen. Handle that entire flow before looking for Meet UI.
+            on_meet = await self._handle_google_auth_redirect(page)
             if not on_meet:
                 await self._save_debug_screenshot(page, "auth_redirect_failed")
-                log.warning("bot.meet.join_failed", error="Google auth redirect did not resolve to Meet")
+                log.warning("bot.meet.join_failed",
+                            error=self.error_detail or "Google auth redirect did not resolve to Meet")
                 self._state = JoinOutcome.FAILED
                 return self._state
 
@@ -186,7 +215,8 @@ class GoogleMeetJoiner:
             ready = await self._wait_for_prejoin(page)
             if not ready:
                 await self._save_debug_screenshot(page, "prejoin_never_ready")
-                log.warning("bot.meet.join_failed", error="pre-join screen never became ready")
+                log.warning("bot.meet.join_failed",
+                            error=self.error_detail or "pre-join screen never became ready")
                 self._state = JoinOutcome.FAILED
                 return self._state
 
@@ -198,7 +228,8 @@ class GoogleMeetJoiner:
                 filled = await self._fill_when_stable(name_input, display_name)
                 if not filled:
                     await self._save_debug_screenshot(page, "name_fill_failed")
-                    log.warning("bot.meet.join_failed", error="could not fill guest name field")
+                    self.error_detail = "Could not fill guest name field — Meet DOM changed"
+                    log.warning("bot.meet.join_failed", error=self.error_detail)
                     self._state = JoinOutcome.FAILED
                     return self._state
 
@@ -217,18 +248,21 @@ class GoogleMeetJoiner:
             if await join_btn.count() > 0:
                 if not await self._click_when_stable(join_btn):
                     await self._save_debug_screenshot(page, "join_now_click_failed")
+                    self.error_detail = "Could not click Join now — Meet DOM changed"
                     self._state = JoinOutcome.FAILED
                     return self._state
                 self._state = JoinOutcome.LIVE
             elif await ask_btn.count() > 0:
                 if not await self._click_when_stable(ask_btn):
                     await self._save_debug_screenshot(page, "ask_to_join_click_failed")
+                    self.error_detail = "Could not click Ask to join — Meet DOM changed"
                     self._state = JoinOutcome.FAILED
                     return self._state
                 self._state = JoinOutcome.IN_LOBBY
             else:
                 await self._save_debug_screenshot(page, "no_join_button")
-                log.warning("bot.meet.join_failed", error="no Join now / Ask to join button found")
+                self.error_detail = "No Join now / Ask to join button found — session may be signed out"
+                log.warning("bot.meet.join_failed", error=self.error_detail)
                 self._state = JoinOutcome.FAILED
                 return self._state
 
@@ -256,56 +290,55 @@ class GoogleMeetJoiner:
     async def _wait_for_prejoin(self, page) -> bool:
         """Poll until the guest name field OR a join button is actually
         visible, dismissing blocking dialogs each pass. Returns False if the
-        screen never settles within the timeout (sign-in wall, error page,
-        meeting-not-found, etc.)."""
+        screen never settles within the timeout."""
         import asyncio
 
         loop = asyncio.get_event_loop()
         started = loop.time()
         while loop.time() - started < _PREJOIN_READY_TIMEOUT_S:
-            # If Meet redirected away (e.g. mid-load session expiry sends back
-            # to accounts.google.com), try to recover via the auth handler.
+            # If Meet redirected away mid-load (session expiry can trigger a
+            # second redirect after the initial goto() succeeds), re-run the
+            # full auth handler.
             if "meet.google.com" not in page.url:
                 log.warning("bot.meet.prejoin_redirected", url=page.url)
-                recovered = await self._handle_google_auth_redirect(page, "")
+                recovered = await self._handle_google_auth_redirect(page)
                 if not recovered:
                     return False
                 continue
 
             await self._dismiss_blocking_dialogs(page)
 
-            # Detect Google account-chooser with a signed-out account: the
-            # stored session has been invalidated (common when the container
-            # runs from a new IP). Fail immediately with a clear message
-            # instead of timing out for 45 s.
+            # Meet sometimes shows a sign-in overlay ON the meet.google.com
+            # domain when the passive auth redirected back but the session
+            # cookies were invalid. Detect "Signed out" on the Meet page itself
+            # and treat it the same as an accounts.google.com redirect.
             try:
-                chooser = page.get_by_text("Choose an account", exact=False)
                 signed_out = page.get_by_text("Signed out", exact=True)
-                if (await chooser.count() > 0 and await chooser.first.is_visible(timeout=300)
-                        and await signed_out.count() > 0):
-                    log.warning(
-                        "bot.meet.session_expired",
-                        hint="Re-run app.bot.capture_google_session and upload a fresh secret version",
+                if await signed_out.count() > 0 and await signed_out.first.is_visible(timeout=300):
+                    self.error_detail = (
+                        "Google session expired (signed-out overlay on Meet) — "
+                        "re-run `python -m app.bot.capture_google_session` "
+                        "and upload a new secret version"
                     )
+                    log.warning("bot.meet.session_expired", hint=self.error_detail)
                     return False
             except Exception:
                 pass
 
             # Detect sign-in-required walls (personal @gmail meetings block
-            # anonymous users outright). Fast-fail instead of waiting 45s.
+            # anonymous users). Fast-fail instead of waiting out the 45s.
             for wall_text in _SIGN_IN_REQUIRED_TEXTS:
                 try:
                     el = page.get_by_text(wall_text, exact=False)
                     if await el.count() > 0 and await el.first.is_visible(timeout=300):
-                        log.warning(
-                            "bot.meet.anonymous_blocked",
-                            text=wall_text,
-                            hint=(
-                                "Meeting requires a signed-in Google account. "
-                                "Run `python -m app.bot.capture_google_session`, upload the JSON "
-                                "as GCP Secret `visualsprint-bot-google-session`, and redeploy."
-                            ),
+                        self.error_detail = (
+                            "Meeting requires a signed-in Google account — "
+                            "re-run `python -m app.bot.capture_google_session` "
+                            "and upload the JSON as Secret "
+                            "`visualsprint-bot-google-session`"
                         )
+                        log.warning("bot.meet.anonymous_blocked",
+                                    text=wall_text, hint=self.error_detail)
                         return False
                 except Exception:
                     pass
@@ -325,6 +358,12 @@ class GoogleMeetJoiner:
                 except Exception:
                     pass
             await asyncio.sleep(1.5)
+
+        if not self.error_detail:
+            self.error_detail = (
+                "Pre-join screen never became ready — possible causes: "
+                "session expired, meeting URL invalid, or Meet UI changed"
+            )
         return False
 
     async def _dismiss_blocking_dialogs(self, page) -> None:

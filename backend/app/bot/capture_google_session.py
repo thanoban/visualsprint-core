@@ -163,10 +163,89 @@ async def _capture(profile_dir: Path, out_path: str) -> None:
         await context.close()
 
     print(f"\nSaved session to: {out_path}  (signed_in check: {'OK' if signed_in else 'FAILED -- see warning above'})")
+
+    # Verify the session will actually work from the bot's environment: re-open
+    # it in a headless Chromium with exactly the same flags the bot uses in
+    # Cloud Run. Google's passive-auth redirect flow runs here -- if the
+    # exported cookies are valid, we land on meet.google.com; if they're
+    # already expired or IP-restricted, the chooser shows "Signed out" and we
+    # warn loudly before the upload step.
+    print("\n" + "=" * 72)
+    print("  Verifying session in headless Chromium (same config as the bot)...")
+    print("=" * 72)
+    bot_ok = await _verify_headless(out_path)
+    if bot_ok:
+        print("  ✓ Session verified: headless Chromium reached Google account page.")
+    else:
+        print(
+            "\n  ⚠  WARNING: the headless verification failed. Google may have already\n"
+            "     invalidated this session when it saw a different IP/fingerprint.\n"
+            "     Uploading it now is likely to produce the same 'signed_in=True but\n"
+            "     session_expired' failure in Cloud Run.\n"
+            "\n"
+            "     This is a fundamental limitation of session-cookie bot auth:\n"
+            "     Google ties sessions to device fingerprint + IP and invalidates\n"
+            "     them quickly when reused from cloud IPs.\n"
+            "\n"
+            "     Options:\n"
+            "       1. Use a Google Workspace meeting link (allows anonymous guest\n"
+            "          join -- no bot session needed for those).\n"
+            "       2. Upload anyway and accept that the session may expire within\n"
+            "          hours of being used from a Cloud Run IP.\n"
+        )
+
     print("\nNext:")
-    print("  gcloud secrets create visualsprint-bot-google-session \\")
+    print("  gcloud secrets versions add visualsprint-bot-google-session \\")
     print(f'    --project=visualsprint-agent --data-file="{out_path}"')
-    print("(or `gcloud secrets versions add ...` to refresh an existing one).")
+    print("(Use `gcloud secrets create` if the secret doesn't exist yet.)")
+
+
+async def _verify_headless(storage_state_path: str) -> bool:
+    """Open the exported session in headless Chromium with the bot's exact
+    flags and check that Google account page loads signed-in (not redirected
+    to a sign-in wall). Returns True if the session is usable."""
+    from playwright.async_api import async_playwright
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--use-fake-ui-for-media-stream",
+                    "--use-fake-device-for-media-stream",
+                    "--lang=en-US",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            )
+            ctx = await browser.new_context(
+                storage_state=storage_state_path,
+                locale="en-US",
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                ),
+            )
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            page = await ctx.new_page()
+            await page.goto(
+                "https://myaccount.google.com/",
+                wait_until="domcontentloaded",
+                timeout=30_000,
+            )
+            import asyncio
+            await asyncio.sleep(3.0)
+            url = page.url
+            signed_in = "myaccount.google.com" in url and "signin" not in url
+            await ctx.close()
+            await browser.close()
+            return signed_in
+    except Exception as exc:
+        print(f"  (headless verification error: {exc})")
+        return False
 
 
 def main() -> None:

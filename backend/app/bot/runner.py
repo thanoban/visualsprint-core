@@ -17,6 +17,8 @@ bot mid-capture can't be resumed from a cold start.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -27,7 +29,7 @@ import structlog
 
 from app.db.base import get_sessionmaker
 from app.db.models import BotSession, BotStatus
-from app.interfaces.meeting_bot import JoinOutcome, MeetingJoiner, ScreenFrame
+from app.interfaces.meeting_bot import JoinOutcome, MeetingJoiner
 
 log = structlog.get_logger()
 
@@ -100,35 +102,48 @@ async def _wait_out_lobby(joiner: MeetingJoiner) -> JoinOutcome:
     return JoinOutcome.IN_LOBBY  # caller treats "still waiting" as a timeout
 
 
-def _mux_frames_to_video(frames: list[ScreenFrame]) -> bytes | None:
-    """Best-effort JPEG-sequence -> mp4 mux via ffmpeg, mirroring
-    app/capture/blob_ingest.py's ffmpeg-optional convention: return None
-    (never raise) when ffmpeg isn't on PATH, and let the screen stage's
-    existing 'no video_uri' honest-absence path handle it -- a session
-    without ffmpeg still gets a full transcript, just no keyframes."""
-    if not frames or shutil.which("ffmpeg") is None:
+def _mux_frame_dir_to_video(frame_dir: Path) -> bytes | None:
+    """Best-effort JPEG-sequence -> mp4 mux via ffmpeg.
+
+    Bot capture used to discard screen frames entirely to avoid OOM from
+    accumulating them in RAM. Spooling frames to a temp directory keeps memory
+    flat while still producing a normal video_uri for the existing screen/OCR
+    stage to consume.
+    """
+    if shutil.which("ffmpeg") is None:
         return None
-    with tempfile.TemporaryDirectory() as td:
-        tdp = Path(td)
-        for i, frame in enumerate(frames):
-            (tdp / f"frame{i:06d}.jpg").write_bytes(frame.image_bytes)
-        out = tdp / "out.mp4"
-        try:
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-framerate", "1",
-                    "-i", str(tdp / "frame%06d.jpg"),
-                    "-pix_fmt", "yuv420p",
-                    str(out),
-                ],
-                check=True,
-                capture_output=True,
-            )
-        except Exception as exc:
-            log.warning("bot.runner.mux_failed", error=str(exc))
-            return None
-        return out.read_bytes()
+    if not any(frame_dir.glob("frame*.jpg")):
+        return None
+    out = frame_dir / "out.mp4"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-framerate", "1",
+                "-i", str(frame_dir / "frame%06d.jpg"),
+                "-pix_fmt", "yuv420p",
+                str(out),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except Exception as exc:
+        log.warning("bot.runner.mux_failed", error=str(exc))
+        return None
+    return out.read_bytes()
+
+
+def _should_keep_screen_frame(image_bytes: bytes, last_digest: str | None) -> tuple[bool, str]:
+    """Keep only visually distinct bot screenshots.
+
+    The full meeting UI changes constantly because participant video tiles
+    animate every second. A lightweight hash over a heavily-strided byte sample
+    is enough to suppress exact repeats and near-repeats without dragging in
+    the heavyweight screen-analysis stack here.
+    """
+    sample = image_bytes[::128] or image_bytes
+    digest = hashlib.sha1(sample).hexdigest()
+    return digest != last_digest, digest
 
 
 async def run_bot_session(bot_session_id: str) -> None:
@@ -160,11 +175,15 @@ async def run_bot_session(bot_session_id: str) -> None:
         return
 
     if outcome == JoinOutcome.FAILED:
-        _mark_status(bot_session_id, BotStatus.FAILED, error="join mechanics failed")
+        # joiner.error_detail carries the specific reason (session expired,
+        # anonymous blocked, DOM change, etc.) set during the join flow.
+        # Fall back to a generic message only if none was set.
+        error_msg = getattr(joiner, "error_detail", None) or "join mechanics failed"
+        _mark_status(bot_session_id, BotStatus.FAILED, error=error_msg)
         await _safe_leave(joiner)
         return
     if outcome == JoinOutcome.DENIED:
-        _mark_status(bot_session_id, BotStatus.FAILED, error="join request denied")
+        _mark_status(bot_session_id, BotStatus.FAILED, error="join request denied by host")
         await _safe_leave(joiner)
         return
 
@@ -202,50 +221,65 @@ async def run_bot_session(bot_session_id: str) -> None:
     # absence). A proper bot keyframe path (detect_keyframes on-the-fly,
     # store only changed frames) is the documented upgrade -- see runner.py
     # docstring.
-    screen_frames: list[ScreenFrame] = []
+    kept_screen_frames = 0
 
     async def _drain_audio() -> None:
         async for chunk in audio.chunks():
             audio_chunks.append(chunk.data)
 
-    async def _drain_screen() -> None:
-        async for _frame in screen.frames():
-            pass  # discard -- see note above
+    with tempfile.TemporaryDirectory(prefix="visualsprint-bot-screen-") as td:
+        frame_dir = Path(td)
 
-    drain_tasks = [asyncio.create_task(_drain_audio()), asyncio.create_task(_drain_screen())]
+        async def _drain_screen() -> None:
+            nonlocal kept_screen_frames
+            last_digest: str | None = None
+            async for frame in screen.frames():
+                keep, digest = _should_keep_screen_frame(frame.image_bytes, last_digest)
+                if not keep:
+                    continue
+                last_digest = digest
+                (frame_dir / f"frame{kept_screen_frames:06d}.jpg").write_bytes(frame.image_bytes)
+                kept_screen_frames += 1
 
-    loop = asyncio.get_event_loop()
-    started = loop.time()
-    roster: list = []
-    try:
-        while loop.time() - started < MAX_MEETING_S:
-            await asyncio.sleep(_POLL_INTERVAL_S)
-            outcome = await joiner.poll_status()
-            if outcome in (JoinOutcome.ENDED, JoinOutcome.FAILED, JoinOutcome.DENIED):
-                break
-    finally:
+        drain_tasks = [asyncio.create_task(_drain_audio()), asyncio.create_task(_drain_screen())]
+
+        loop = asyncio.get_event_loop()
+        started = loop.time()
+        roster: list = []
         try:
-            roster = await joiner.roster()
-        except Exception as exc:
-            log.warning("bot.runner.roster_failed", error=str(exc))
-        await screen.stop()
-        await audio.stop()
-        for t in drain_tasks:
+            while loop.time() - started < MAX_MEETING_S:
+                await asyncio.sleep(_POLL_INTERVAL_S)
+                outcome = await joiner.poll_status()
+                if outcome in (JoinOutcome.ENDED, JoinOutcome.FAILED, JoinOutcome.DENIED):
+                    break
+        finally:
             try:
-                await asyncio.wait_for(t, timeout=10.0)
-            except Exception:
-                t.cancel()
-        await _safe_leave(joiner)
+                roster = await joiner.roster()
+            except Exception as exc:
+                log.warning("bot.runner.roster_failed", error=str(exc))
+            await screen.stop()
+            await audio.stop()
+            for task in drain_tasks:
+                try:
+                    await asyncio.wait_for(task, timeout=10.0)
+                except Exception:
+                    task.cancel()
+                    with contextlib.suppress(Exception):
+                        await task
+            await _safe_leave(joiner)
 
-    _mark_status(bot_session_id, BotStatus.ENDED, ended_at=datetime.now(UTC))
-    await _finalize_capture(bot_session_id, org_id, audio_chunks, screen_frames, roster)
+        _mark_status(bot_session_id, BotStatus.ENDED, ended_at=datetime.now(UTC))
+        await _finalize_capture(
+            bot_session_id, org_id, audio_chunks, frame_dir, kept_screen_frames, roster
+        )
 
 
 async def _finalize_capture(
     bot_session_id: str,
     org_id: str,
     audio_chunks: list[bytes],
-    screen_frames: list[ScreenFrame],
+    screen_frame_dir: Path,
+    kept_screen_frames: int,
     roster: list,
 ) -> None:
     if not audio_chunks:
@@ -266,7 +300,7 @@ async def _finalize_capture(
     # Muxed to mp4 when ffmpeg is available; otherwise video_uri stays unset
     # and the screen stage's existing "no video_uri" honest-absence path
     # handles it -- the transcript is unaffected either way.
-    video_bytes = _mux_frames_to_video(screen_frames)
+    video_bytes = _mux_frame_dir_to_video(screen_frame_dir) if kept_screen_frames > 0 else None
 
     Session = get_sessionmaker()
     with Session() as db:
@@ -320,4 +354,5 @@ async def _finalize_capture(
             bot_session=bot_session_id,
             capture_session=session.id,
             has_video=video_uri is not None,
+            kept_screen_frames=kept_screen_frames,
         )

@@ -43,25 +43,25 @@ class PlaywrightSession:
             args=[
                 # Required in Docker/Cloud Run: Chrome cannot create a sandbox
                 # when running as root (the default in Cloud Run containers).
-                # Without --no-sandbox Chrome exits immediately with SIGILL/
-                # signal 31 before the page even loads.
                 "--no-sandbox",
                 # Cloud Run allocates only 64 MB of /dev/shm by default; Chrome
                 # uses it heavily for shared memory between renderer processes.
-                # --disable-dev-shm-usage tells it to use /tmp instead, which
-                # has no such limit.
                 "--disable-dev-shm-usage",
                 # Auto-accept the mic/camera permission prompt and hand back
                 # a synthetic (silent) device -- the bot must never transmit
                 # its own audio/video into the meeting, only receive.
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
-                # Force an English UI. Every Meet/Teams joiner selector is
-                # text/aria-label based ("Your name", "Join now", "Ask to
-                # join"); a container whose default locale isn't English would
-                # render those labels translated and break every selector,
-                # which is indistinguishable from a "DOM changed" failure.
+                # Force an English UI so text/aria-label selectors are stable.
                 "--lang=en-US",
+                # Remove the automation fingerprint that Google uses as a
+                # primary bot-detection signal. navigator.webdriver=true and
+                # the corresponding Chrome DevTools Protocol property are the
+                # first things Google checks when deciding to invalidate a
+                # session that comes in from a new IP. Combined with the
+                # add_init_script below this meaningfully extends how long a
+                # stored Google session stays valid in a cloud container.
+                "--disable-blink-features=AutomationControlled",
             ],
         )
         context_kwargs = dict(
@@ -93,6 +93,13 @@ class PlaywrightSession:
                 self.context = await self.browser.new_context(**context_kwargs)
             else:
                 raise
+        # Override navigator.webdriver at the JS level so Google's client-side
+        # detection also returns undefined instead of true. The Chromium flag
+        # above removes the CDP property; this covers the JS property that
+        # survives the flag in some Chromium builds.
+        await self.context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         self.page = await self.context.new_page()
         log.info("bot.browser.launched", display_name=display_name, signed_in=signed_in)
 
