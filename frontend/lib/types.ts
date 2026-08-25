@@ -85,6 +85,22 @@ export interface BotSessionStatusResponse {
   capture_session_id: string | null;
 }
 
+export interface MeetingListItem {
+  id: string;
+  title: string;
+  platform: string;
+  scheduled_start: string | null;
+  scheduled_end: string | null;
+  latest_capture_session_id: string | null;
+  latest_capture_mode: string | null;
+  latest_capture_state: CaptureSessionState | null;
+  latest_capture_error: string | null;
+  latest_bot_session_id: string | null;
+  latest_bot_status: BotSessionStatus | null;
+  latest_bot_error: string | null;
+  has_coverage_gap: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Types for the report page. The endpoint that serves these does NOT exist
 // yet (other agents are building the pipeline that produces report data).
