@@ -1141,6 +1141,11 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
     db.expunge_all()
     db.commit()
 
+    blob = get_blobstore()
+    detect = _get_keyframe_detect_fn()
+    ocr = _get_ocr()
+    captioner = _get_vlm_captioner()
+
     if not video_uri:
         # Check for bot-preextracted keyframes written by persist_capture_artifacts.
         # These are already uploaded distinct frames — only OCR/captioning needed.
@@ -1189,11 +1194,6 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
         db.flush()
         log.info("screen.done", session=session_id, keyframes=len(preextracted))
         return
-
-    blob = get_blobstore()
-    detect = _get_keyframe_detect_fn()
-    ocr = _get_ocr()
-    captioner = _get_vlm_captioner()
 
     local_path = Path(video_uri)
     if local_path.exists():

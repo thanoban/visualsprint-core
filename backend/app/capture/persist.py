@@ -14,7 +14,7 @@ whose output it consumes, so both callers importing it is the correct
 direction either way.
 """
 
-from app.interfaces.platform import CaptureArtifacts, PreExtractedFrame
+from app.interfaces.platform import CaptureArtifacts
 
 
 def _person_for_roster_entry(db: object, org_id: str, entry):
