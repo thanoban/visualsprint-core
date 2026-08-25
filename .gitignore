@@ -47,3 +47,6 @@ backend/app/bot/.bot_edge_profile/
 
 # Mentor review copy — read-only reference, not part of the project
 visualsprint-mentors/
+
+# Codex scratch directory
+.codex-tmp/

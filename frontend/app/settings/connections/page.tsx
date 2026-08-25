@@ -108,7 +108,6 @@ export default function ConnectionsPage() {
       window.history.replaceState({}, "", window.location.pathname);
     }
     if (oauthError) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConnectError(`Failed to connect ${oauthError}. Please try again.`);
       window.history.replaceState({}, "", window.location.pathname);
     }
