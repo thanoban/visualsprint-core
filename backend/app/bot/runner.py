@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
+import io
 import shutil
 import signal
 import subprocess
@@ -42,6 +42,11 @@ LOBBY_TIMEOUT_S = 600.0
 MAX_MEETING_S = 4 * 3600.0  # safety cap so a stuck "live" poll can't run forever
 _POLL_INTERVAL_S = 5.0
 _LOBBY_POLL_INTERVAL_S = 10.0
+# Keyframes are evidence, not a video archive. This bounded policy keeps a
+# four-hour meeting within the Cloud Run writable-filesystem/memory budget.
+SCREEN_MAX_KEYFRAMES = 90
+SCREEN_MIN_KEEP_INTERVAL_S = 10.0
+SCREEN_CHANGE_THRESHOLD = 10.0
 
 _joiner_factories: dict[str, type] | None = None  # test-injection seam
 
@@ -110,30 +115,44 @@ def _webm_chunks_to_wav(chunks: list[bytes]) -> bytes | None:
     MediaRecorder emits independent WebM segments every _CHUNK_MS ms.
     Naive byte-concatenation produces an invalid container (only the first
     chunk has a valid Matroska file header), which soundfile/libsndfile
-    cannot read. Piping all chunks through ffmpeg's concat protocol fixes
-    this: ffmpeg handles the stream discontinuities and outputs a single
-    well-formed WAV that soundfile can read without issues.
-    Requires ffmpeg in PATH (already available in the bot container for
-    video muxing). Falls back to None so the caller can upload the raw
-    WebM as an honest-absence artifact rather than silently discarding.
+    cannot read. The concat demuxer must receive every independent segment
+    as a separate file; piping joined bytes was the production bug that left
+    successful bot captures stuck retrying the transcribe stage.
+
+    Returns None when conversion cannot be completed. The caller treats that
+    as a capture failure instead of publishing an untranscribable artifact.
     """
     if shutil.which("ffmpeg") is None:
         return None
-    raw = b"".join(chunks)
     try:
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", "pipe:0",
-                "-ac", "1",
-                "-ar", "16000",
-                "-f", "wav",
-                "pipe:1",
-            ],
-            input=raw,
-            capture_output=True,
-            timeout=300,
-        )
+        with tempfile.TemporaryDirectory(prefix="visualsprint-bot-audio-") as td:
+            chunk_dir = Path(td)
+            manifest = chunk_dir / "chunks.ffconcat"
+            lines = ["ffconcat version 1.0"]
+            for i, chunk in enumerate(chunks):
+                if not chunk:
+                    continue
+                path = chunk_dir / f"chunk{i:06d}.webm"
+                path.write_bytes(chunk)
+                escaped_path = path.as_posix().replace("'", r"'\''")
+                lines.append(f"file '{escaped_path}'")
+            if len(lines) == 1:
+                return None
+            manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-i", str(manifest),
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-f", "wav",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=300,
+            )
         if result.returncode == 0 and result.stdout:
             return result.stdout
         log.warning(
@@ -147,17 +166,51 @@ def _webm_chunks_to_wav(chunks: list[bytes]) -> bytes | None:
 
 
 
-def _should_keep_screen_frame(image_bytes: bytes, last_digest: str | None) -> tuple[bool, str]:
-    """Keep only visually distinct bot screenshots.
+def _screen_signature(image_bytes: bytes) -> bytes:
+    """Return a compact grayscale signature for perceptual comparison."""
+    from PIL import Image
 
-    The full meeting UI changes constantly because participant video tiles
-    animate every second. A lightweight hash over a heavily-strided byte sample
-    is enough to suppress exact repeats and near-repeats without dragging in
-    the heavyweight screen-analysis stack here.
-    """
-    sample = image_bytes[::128] or image_bytes
-    digest = hashlib.sha1(sample).hexdigest()
-    return digest != last_digest, digest
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        return bytes(image.convert("L").resize((32, 18)).getdata())
+
+
+def _should_keep_screen_frame(
+    image_bytes: bytes,
+    last_signature: bytes | None,
+    last_kept_at_s: float | None,
+    captured_at_s: float,
+) -> tuple[bool, bytes | None]:
+    """Keep meaningful visual changes, not every animated video tile."""
+    if last_kept_at_s is not None and captured_at_s - last_kept_at_s < SCREEN_MIN_KEEP_INTERVAL_S:
+        return False, last_signature
+    try:
+        signature = _screen_signature(image_bytes)
+    except Exception as exc:
+        # A malformed screenshot must not interrupt audio capture. Keep it so
+        # the normal screen stage can make the final OCR decision.
+        log.warning("bot.runner.screen_signature_failed", error=str(exc))
+        return True, last_signature
+    if last_signature is None:
+        return True, signature
+    mean_delta = sum(
+        abs(a - b) for a, b in zip(signature, last_signature, strict=True)
+    ) / len(signature)
+    return mean_delta >= SCREEN_CHANGE_THRESHOLD, signature
+
+
+def _host_admission_error(platform: str) -> str:
+    if platform == "meet":
+        return (
+            "The organizer denied the Google Meet lobby request. A bot cannot bypass Meet "
+            "host controls: invite the dedicated bot Google account to the event and allow "
+            "that account (or everyone with the link) before capture starts."
+        )
+    if platform == "teams":
+        return (
+            "The organizer denied the Teams lobby request. A bot cannot bypass Teams host "
+            "controls; add it as an allowed participant or change the lobby policy first."
+        )
+    return "The organizer denied the bot's lobby request."
 
 
 async def run_bot_session(bot_session_id: str) -> None:
@@ -197,7 +250,7 @@ async def run_bot_session(bot_session_id: str) -> None:
         await _safe_leave(joiner)
         return
     if outcome == JoinOutcome.DENIED:
-        _mark_status(bot_session_id, BotStatus.FAILED, error="join request denied by host")
+        _mark_status(bot_session_id, BotStatus.FAILED, error=_host_admission_error(platform))
         await _safe_leave(joiner)
         return
 
@@ -205,7 +258,7 @@ async def run_bot_session(bot_session_id: str) -> None:
         _mark_status(bot_session_id, BotStatus.IN_LOBBY)
         outcome = await _wait_out_lobby(joiner)
         if outcome == JoinOutcome.DENIED:
-            _mark_status(bot_session_id, BotStatus.FAILED, error="never admitted from lobby")
+            _mark_status(bot_session_id, BotStatus.FAILED, error=_host_admission_error(platform))
             await _safe_leave(joiner)
             return
         if outcome != JoinOutcome.LIVE:
@@ -213,7 +266,10 @@ async def run_bot_session(bot_session_id: str) -> None:
                 bot_session_id,
                 BotStatus.LOBBY_TIMEOUT,
                 lobby_timeout_at=datetime.now(UTC),
-                error="lobby admission timed out — organizer never admitted the bot",
+                error=(
+                    "Lobby admission timed out. The organizer must allow the bot through "
+                    "the meeting's host controls; the bot cannot bypass that policy."
+                ),
             )
             await _safe_leave(joiner)
             return
@@ -229,13 +285,7 @@ async def run_bot_session(bot_session_id: str) -> None:
     await screen.start()
 
     audio_chunks: list[bytes] = []
-    # Screen frames are discarded in-flight: accumulating 1fps JPEGs for a
-    # full meeting causes OOM in the 2Gi container and produces a large video
-    # blob. The screen pipeline handles video_uri=None gracefully (honest
-    # absence). A proper bot keyframe path (detect_keyframes on-the-fly,
-    # store only changed frames) is the documented upgrade -- see runner.py
-    # docstring.
-    kept_screen_frames = 0
+    kept_screen_frames: list[tuple[Path, float]] = []
 
     async def _drain_audio() -> None:
         async for chunk in audio.chunks():
@@ -245,15 +295,29 @@ async def run_bot_session(bot_session_id: str) -> None:
         frame_dir = Path(td)
 
         async def _drain_screen() -> None:
-            nonlocal kept_screen_frames
-            last_digest: str | None = None
+            last_signature: bytes | None = None
+            last_kept_at_s: float | None = None
+            limit_logged = False
             async for frame in screen.frames():
-                keep, digest = _should_keep_screen_frame(frame.image_bytes, last_digest)
+                if len(kept_screen_frames) >= SCREEN_MAX_KEYFRAMES:
+                    if not limit_logged:
+                        log.warning(
+                            "bot.runner.screen_frame_limit_reached",
+                            bot_session=bot_session_id,
+                            limit=SCREEN_MAX_KEYFRAMES,
+                        )
+                        limit_logged = True
+                    continue
+                keep, signature = _should_keep_screen_frame(
+                    frame.image_bytes, last_signature, last_kept_at_s, frame.captured_at_s
+                )
                 if not keep:
                     continue
-                last_digest = digest
-                (frame_dir / f"frame{kept_screen_frames:06d}.jpg").write_bytes(frame.image_bytes)
-                kept_screen_frames += 1
+                last_signature = signature
+                last_kept_at_s = frame.captured_at_s
+                path = frame_dir / f"frame{len(kept_screen_frames):06d}.jpg"
+                path.write_bytes(frame.image_bytes)
+                kept_screen_frames.append((path, frame.captured_at_s))
 
         drain_tasks = [asyncio.create_task(_drain_audio()), asyncio.create_task(_drain_screen())]
 
@@ -293,7 +357,7 @@ async def run_bot_session(bot_session_id: str) -> None:
 
         _mark_status(bot_session_id, BotStatus.ENDED, ended_at=datetime.now(UTC))
         await _finalize_capture(
-            bot_session_id, org_id, audio_chunks, frame_dir, kept_screen_frames, roster
+            bot_session_id, org_id, audio_chunks, kept_screen_frames, roster
         )
 
 
@@ -301,8 +365,7 @@ async def _finalize_capture(
     bot_session_id: str,
     org_id: str,
     audio_chunks: list[bytes],
-    screen_frame_dir: Path,
-    kept_screen_frames: int,
+    screen_frames: list[tuple[Path, float]],
     roster: list[Any],
 ) -> None:
     if not audio_chunks:
@@ -325,25 +388,20 @@ async def _finalize_capture(
 
     blob_store = get_blobstore()
 
-    # MediaRecorder emits audio/webm;codecs=opus in independent segments.
-    # Concatenating raw bytes produces an invalid WebM container (only the
-    # first chunk has a Matroska file header), which soundfile cannot read.
-    # Convert to 16 kHz mono WAV via ffmpeg so the pipeline's audio_io.py
-    # (soundfile-based) can read it without issues.
+    # The pipeline consumes WAV/FLAC through soundfile. Never enqueue a joined
+    # sequence of MediaRecorder fragments that only looks like a valid WebM.
     wav_audio = _webm_chunks_to_wav(audio_chunks)
-    if wav_audio:
-        audio_blob_key = f"bot-audio/{org_id}/{bot_session_id}.wav"
-        audio_content_type = "audio/wav"
-        log.info("bot.runner.audio_converted_to_wav", bot_session=bot_session_id,
-                 size_bytes=len(wav_audio))
-    else:
-        # ffmpeg not available: upload raw WebM as honest-absence fallback.
-        # The transcribe stage will fail, but the blob is still retrievable.
-        wav_audio = b"".join(audio_chunks)
-        audio_blob_key = f"bot-audio/{org_id}/{bot_session_id}.webm"
-        audio_content_type = "audio/webm"
-        log.warning("bot.runner.audio_webm_fallback", bot_session=bot_session_id,
-                    reason="ffmpeg not available — transcribe stage will need webm support")
+    if not wav_audio:
+        _mark_status(
+            bot_session_id,
+            BotStatus.FAILED,
+            error="Captured audio could not be converted to WAV; no transcript was queued.",
+        )
+        return
+    audio_blob_key = f"bot-audio/{org_id}/{bot_session_id}.wav"
+    audio_content_type = "audio/wav"
+    log.info("bot.runner.audio_converted_to_wav", bot_session=bot_session_id,
+             size_bytes=len(wav_audio))
 
     Session = get_sessionmaker()
     with Session() as db:
@@ -364,8 +422,7 @@ async def _finalize_capture(
         # screenshots. The screen stage enriches them with OCR/captioning
         # in-place, skipping the video download + ffmpeg decode step entirely.
         preextracted: list[PreExtractedFrame] = []
-        for i in range(kept_screen_frames):
-            frame_path = screen_frame_dir / f"frame{i:06d}.jpg"
+        for i, (frame_path, captured_at_s) in enumerate(screen_frames):
             if not frame_path.exists():
                 continue
             frame_bytes = frame_path.read_bytes()
@@ -374,7 +431,7 @@ async def _finalize_capture(
                 frame_bytes,
                 content_type="image/jpeg",
             )
-            preextracted.append(PreExtractedFrame(image_uri=frame_uri, timestamp_s=float(i)))
+            preextracted.append(PreExtractedFrame(image_uri=frame_uri, timestamp_s=captured_at_s))
         if preextracted:
             log.info("bot.runner.keyframes_uploaded", bot_session=bot_session_id,
                      count=len(preextracted))
@@ -410,7 +467,7 @@ async def _finalize_capture(
             bot_session=bot_session_id,
             capture_session=session.id,
             keyframes=len(preextracted),
-            kept_screen_frames=kept_screen_frames,
+            kept_screen_frames=len(screen_frames),
         )
 
 

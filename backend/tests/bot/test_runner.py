@@ -7,6 +7,8 @@ app.bot.runner.get_sessionmaker, mirroring the pattern other orchestrator
 tests use for the real Postgres-backed get_sessionmaker.
 """
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -25,6 +27,8 @@ from app.db.models import (
     PipelineJob,
 )
 from app.interfaces.meeting_bot import BotRosterEntry, JoinOutcome
+
+REAL_WEBM_CHUNKS_TO_WAV = runner._webm_chunks_to_wav
 
 
 @pytest.fixture
@@ -149,6 +153,10 @@ class ScreenFrameCapture(FakeScreenCapture):
 def fake_capture_classes(monkeypatch):
     monkeypatch.setattr("app.bot.audio_capture.PlaywrightAudioCapture", FakeAudioCapture)
     monkeypatch.setattr("app.bot.screen_capture.PlaywrightScreenCapture", FakeScreenCapture)
+    # Browser bytes are deliberately synthetic in this suite. Conversion is
+    # exercised separately from bot lifecycle behavior, so keep the lifecycle
+    # tests independent from a host ffmpeg installation.
+    monkeypatch.setattr(runner, "_webm_chunks_to_wav", lambda chunks: b"fake-wav" if chunks else None)
 
 
 def _seed_bot_session(db_sessionmaker, *, platform="meet") -> str:
@@ -238,6 +246,7 @@ async def test_denied_join_marks_failed_without_capturing(db_sessionmaker, monke
         bot = db.get(BotSession, bot_id)
         assert bot.status == BotStatus.FAILED
         assert bot.capture_session_id is None
+        assert "cannot bypass" in bot.error
 
 
 async def test_lobby_then_admitted_transitions_to_live_and_captures(db_sessionmaker, monkeypatch):
@@ -283,6 +292,7 @@ async def test_no_audio_captured_marks_failed(db_sessionmaker, monkeypatch):
 
 async def test_live_join_with_screen_frames_uploads_keyframes(db_sessionmaker, monkeypatch):
     monkeypatch.setattr("app.bot.screen_capture.PlaywrightScreenCapture", ScreenFrameCapture)
+    monkeypatch.setattr(runner, "SCREEN_MIN_KEEP_INTERVAL_S", 0.0)
 
     bot_id = _seed_bot_session(db_sessionmaker)
     joiner = FakeJoiner(join_outcome=JoinOutcome.LIVE, poll_outcomes=[JoinOutcome.ENDED])
@@ -304,3 +314,26 @@ async def test_live_join_with_screen_frames_uploads_keyframes(db_sessionmaker, m
         ).scalars().all()
         assert len(keyframes) > 0  # pre-extracted frames persisted as Keyframe rows
         assert all(kf.image_uri.startswith("blob://keyframes/") for kf in keyframes)
+        assert [kf.valid_from_s for kf in keyframes] == [0.0, 1.0]
+
+
+def test_webm_chunks_are_given_to_ffmpeg_as_a_concat_manifest(monkeypatch):
+    """Independent MediaRecorder fragments cannot safely be byte-joined."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        manifest_path = command[command.index("-i") + 1]
+        manifest = Path(manifest_path).read_text(encoding="utf-8")
+        assert "ffconcat version 1.0" in manifest
+        assert "chunk000000.webm" in manifest
+        assert "chunk000001.webm" in manifest
+        return type("Completed", (), {"returncode": 0, "stdout": b"wav", "stderr": b""})()
+
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "ffmpeg")
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert REAL_WEBM_CHUNKS_TO_WAV([b"first", b"second"]) == b"wav"
+    command, kwargs = calls[0]
+    assert command[2:5] == ["-f", "concat", "-safe"]
+    assert "input" not in kwargs

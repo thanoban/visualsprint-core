@@ -61,6 +61,7 @@ export interface InstantCaptureResponse {
   meeting_id: string | null;
   bot_session_id: string | null;
   note: string;
+  admission_guidance: string | null;
 }
 
 export type BotSessionStatus =

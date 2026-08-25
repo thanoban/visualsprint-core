@@ -38,6 +38,26 @@ class InstantCaptureResponse(BaseModel):
     meeting_id: str | None = None
     bot_session_id: str | None = None
     note: str
+    admission_guidance: str | None = None
+
+
+def _admission_guidance(platform: str, bot_google_account_email: str | None) -> str | None:
+    if platform == "meet":
+        account = (
+            f"Invite {bot_google_account_email} to the calendar event"
+            if bot_google_account_email
+            else "Invite the dedicated VisualSprint bot Google account to the calendar event"
+        )
+        return (
+            f"{account}, then set Google Meet access to allow that account (or allow everyone "
+            "with the link). This avoids a lobby request. The bot cannot bypass host controls."
+        )
+    if platform == "teams":
+        return (
+            "Set the Teams lobby policy to allow the bot, or add it as an allowed participant "
+            "before the meeting starts. The bot cannot bypass organizer admission."
+        )
+    return None
 
 
 class BotSessionStatusResponse(BaseModel):
@@ -125,6 +145,7 @@ async def start_instant_capture(
         meeting_id=meeting.id,
         bot_session_id=bot.id,
         note=note,
+        admission_guidance=_admission_guidance(platform, settings.bot_google_account_email),
     )
 
 

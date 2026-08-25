@@ -788,6 +788,11 @@ async def _handle_diarize(db: object, job: PipelineJob) -> None:
     if not mixed_tracks:
         log.info("diarize.skipped_per_participant", session=session.id)
         return
+    if not get_settings().diarization_enabled:
+        # Do not let an optional, gated model prevent transcription and report
+        # generation. Mixed audio remains explicitly unattributed.
+        log.info("diarize.disabled", session=session.id)
+        return
 
     db.query(SpeakerTurn).filter(SpeakerTurn.capture_session_id == session.id).delete()
     db.query(SessionSpeaker).filter(SessionSpeaker.capture_session_id == session.id).delete()

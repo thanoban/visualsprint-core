@@ -279,6 +279,11 @@ export default function UploadPage() {
               >
                 {instantResult.note}
               </p>
+              {instantResult.admission_guidance && (
+                <p style={{ margin: "8px 0 0", borderRadius: 6, background: "var(--evidence-bg)", border: "1px solid var(--evidence)", padding: "8px 12px", fontSize: 12.5, color: "var(--evidence)" }}>
+                  Before the bot joins: {instantResult.admission_guidance}
+                </p>
+              )}
               {botStatus && (
                 <p
                   style={{

@@ -12,3 +12,4 @@ The numbered files below split it into focused, structured documents.
 | [05-data-model.md](05-data-model.md) | All core tables, lifecycle vs edges, DB-enforced action gate |
 | [06-roadmap.md](06-roadmap.md) | Phases 0–6, deliverables, first sellable slice |
 | [07-verification-and-risks.md](07-verification-and-risks.md) | E2E test strategy, acceptance criteria, risk register |
+| [16-bot-reliability.md](16-bot-reliability.md) | Production bot incident findings, durable capture fixes, and Meet setup |

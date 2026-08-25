@@ -16,7 +16,10 @@ from app.interfaces.meeting_bot import ScreenFrame
 
 log = structlog.get_logger()
 
-_INTERVAL_S = 1.0
+# runner.py retains only perceptually distinct frames. Sampling every five
+# seconds still notices a new slide promptly without continuously stressing a
+# long-running Meet page.
+_INTERVAL_S = 5.0
 
 
 class PlaywrightScreenCapture:

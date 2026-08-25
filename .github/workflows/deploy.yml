@@ -204,7 +204,7 @@ jobs:
             --command python \
             --args="-m,app.orchestrator.worker" \
             --set-secrets="$AGENTS_SECRETS" \
-            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION},VS_SECRETSTORE_BACKEND=gcp" \
+            --set-env-vars="VS_GOOGLE_CREDENTIALS_JSON=/secrets/google-speech-credentials.json,VS_LLM_PROVIDER=gemini,VS_WORKER_MODE=http,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_DISPATCH_ENABLED=true,VS_BOT_DISPATCH_MODE=cloud_run_job,VS_BOT_CLOUD_RUN_JOB_NAME=visualsprint-bot,VS_BOT_CLOUD_RUN_PROJECT=${PROJECT_ID},VS_BOT_CLOUD_RUN_REGION=${REGION},VS_SECRETSTORE_BACKEND=gcp,VS_DIARIZATION_ENABLED=false" \
             --memory=1Gi \
             --timeout=600 \
             --min-instances=0 --max-instances=2 \

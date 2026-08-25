@@ -84,6 +84,7 @@ storage = [
 ]
 bot = [
     "playwright>=1.47",  # Mode B guest-bot join (app/bot/, app/adapters/bot_*.py)
+    "Pillow>=10.4",  # bounded perceptual screen-frame selection
     "google-cloud-storage>=2.18",  # GCS BlobStore -- bot stores recordings to shared GCS bucket
     "google-auth>=2.35",  # ADC credential refresh for GCS signed URLs
 ]

@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     azure_speech_region: str | None = None
     groq_api_key: str | None = None
     huggingface_token: str | None = None  # pyannote diarization pipelines are HF-gated
+    # Speaker separation is optional. Preserve the transcript/report path when
+    # the gated model has not been approved or cannot fit the worker budget.
+    diarization_enabled: bool = True
 
     # --- Agents (Gemini via Vertex AI by default as of 2026-08-11 -- Claude
     # on Vertex/Foundry remain available behind the same LlmClient interface
@@ -204,6 +207,9 @@ class Settings(BaseSettings):
     # for Workspace-hosted meetings that allow guests); the bot degrades
     # honestly rather than failing to start.
     bot_google_storage_state_path: str | None = None
+    # Non-secret identity of the dedicated bot account. The UI uses this to
+    # tell organizers which account to invite before the meeting starts.
+    bot_google_account_email: str | None = None
     # Person-level analysis can multiply LLM spend through the high-stakes
     # ensemble. It is fully wired but opt-in so local/test deployments and
     # budget-constrained projects never incur surprise vendor calls.
