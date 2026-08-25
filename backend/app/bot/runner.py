@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import hashlib
 import shutil
+import signal
 import subprocess
 import tempfile
 from datetime import UTC, datetime
@@ -246,9 +247,18 @@ async def run_bot_session(bot_session_id: str) -> None:
         loop = asyncio.get_event_loop()
         started = loop.time()
         roster: list = []
+
+        # SIGTERM from Cloud Run (manual cancel / scale-down) sets this event
+        # so the capture loop exits cleanly and _finalize_capture still runs.
+        _shutdown = asyncio.Event()
+        install_sigterm_handler(bot_session_id, _shutdown)
+
         try:
             while loop.time() - started < MAX_MEETING_S:
                 await asyncio.sleep(_POLL_INTERVAL_S)
+                if _shutdown.is_set():
+                    log.warning("bot.runner.shutdown_flag", bot_session=bot_session_id)
+                    break
                 outcome = await joiner.poll_status()
                 if outcome in (JoinOutcome.ENDED, JoinOutcome.FAILED, JoinOutcome.DENIED):
                     break
@@ -356,3 +366,22 @@ async def _finalize_capture(
             has_video=video_uri is not None,
             kept_screen_frames=kept_screen_frames,
         )
+
+
+def install_sigterm_handler(bot_session_id: str, shutdown_event: "asyncio.Event") -> None:
+    """Wire SIGTERM → graceful shutdown flag so Cloud Run cancel/scale-down
+    triggers _finalize_capture instead of dying with data in memory."""
+    loop = asyncio.get_event_loop()
+
+    def _handle() -> None:
+        log.warning(
+            "bot.runner.sigterm",
+            bot_session=bot_session_id,
+            msg="SIGTERM received — setting shutdown flag to flush audio",
+        )
+        shutdown_event.set()
+
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _handle)
+    except (NotImplementedError, RuntimeError):
+        pass  # Windows or non-main-thread: not fatal, just skip it

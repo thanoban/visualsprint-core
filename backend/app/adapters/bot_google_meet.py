@@ -80,6 +80,9 @@ class GoogleMeetJoiner:
         # runner.py can store it in BotSession.error instead of the generic
         # "join mechanics failed" string -- makes the UI actionable.
         self.error_detail: str | None = None
+        # Stored at join() time so poll_status() can detect URL drift away
+        # from the meeting room (Meet navigates to a lobby/home page on end).
+        self._meeting_code: str | None = None
 
     @property
     def page(self):
@@ -189,6 +192,11 @@ class GoogleMeetJoiner:
         # this video call" screen). Falls back to anonymous guest-join when
         # unset (works only for Workspace-hosted meetings that allow guests).
         from app.config import get_settings
+
+        # Extract the meeting room code (e.g. "abc-defg-hij") so poll_status
+        # can detect URL drift when Meet navigates away on meeting end.
+        m = re.search(r"meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", join_url)
+        self._meeting_code = m.group(1) if m else None
 
         await self._session.launch(
             display_name=display_name,
@@ -497,7 +505,13 @@ class GoogleMeetJoiner:
 
     async def poll_status(self) -> JoinOutcome:
         page = self._session.page
+        # Closed page means Meet navigated away (crash, kick, or meeting end).
+        # Treat as ENDED so _finalize_capture still runs -- not FAILED, which
+        # would skip the finalize path and lose the captured audio.
         if page is None or page.is_closed():
+            if self._state == JoinOutcome.LIVE:
+                self._state = JoinOutcome.ENDED
+                return self._state
             return JoinOutcome.FAILED
         try:
             if self._state == JoinOutcome.IN_LOBBY:
@@ -513,25 +527,69 @@ class GoogleMeetJoiner:
                             return self._state
                     except Exception:
                         pass
+
             elif self._state == JoinOutcome.LIVE:
-                # End of meeting: a positive end message, or the in-call
-                # controls all gone (host ended / bot removed). Checked in
-                # that order so a matched end-screen wins; the control-absence
-                # fallback covers Meet end screens whose exact wording we don't
-                # match, so finalize still fires instead of the bot capturing
-                # silence until the 4h safety cap.
+                # --- Signal 1: URL drift. ---
+                # Meet navigates away from the room URL when the call ends
+                # (to a lobby page, the home screen, or an end-call summary).
+                # If our stored meeting code is no longer in the current URL,
+                # the bot is off the call page -- treat as ended.
+                current_url = page.url
+                if self._meeting_code and self._meeting_code not in current_url:
+                    log.info("bot.meet.end_detected", reason="url_drift", url=current_url)
+                    self._state = JoinOutcome.ENDED
+                    return self._state
+
+                # --- Signal 2: End-screen text. ---
+                # Google Meet's post-call screen shows different strings
+                # depending on who ended and which Meet version is running.
+                # Match any of these with a single pass.
                 for txt in (
-                    "You left the meeting", "You've been removed", "call ended",
-                    "Return to home screen", "meeting has ended", "You were removed",
+                    # Host ended the call
+                    "The call has ended",
+                    "This meeting has ended",
+                    "The meeting has ended",
+                    "call has ended",
+                    "ended for everyone",
+                    "Host ended the meeting",
+                    # Bot was removed / left
+                    "You left the meeting",
+                    "You've been removed",
+                    "You were removed",
+                    "removed from the call",
+                    # Generic end phrases across Meet UI generations
+                    "call ended",
+                    "meeting has ended",
+                    "Return to home screen",
+                    "left the call",
+                    "Your meeting has ended",
                 ):
                     try:
                         if await page.get_by_text(txt, exact=False).count() > 0:
+                            log.info("bot.meet.end_detected", reason="end_text", text=txt)
                             self._state = JoinOutcome.ENDED
                             return self._state
                     except Exception:
                         pass
+
+                # --- Signal 3: Rejoin button. ---
+                # "Rejoin" only appears on the post-call summary / end screen,
+                # never inside an active meeting.
+                try:
+                    rejoin = page.get_by_role("button", name=re.compile(r"Rejoin", re.I))
+                    if await rejoin.count() > 0:
+                        log.info("bot.meet.end_detected", reason="rejoin_button")
+                        self._state = JoinOutcome.ENDED
+                        return self._state
+                except Exception:
+                    pass
+
+                # --- Signal 4: In-call controls gone. ---
+                # Covers any Meet end-screen variant not caught above.
                 if not await self._is_in_meeting(page):
+                    log.info("bot.meet.end_detected", reason="controls_gone")
                     self._state = JoinOutcome.ENDED
+
             return self._state
         except Exception as exc:
             log.warning("bot.meet.poll_failed", error=str(exc))
