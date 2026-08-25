@@ -281,9 +281,8 @@ async def test_no_audio_captured_marks_failed(db_sessionmaker, monkeypatch):
         assert bot.capture_session_id is None
 
 
-async def test_live_join_with_screen_frames_persists_video_uri(db_sessionmaker, monkeypatch):
+async def test_live_join_with_screen_frames_uploads_keyframes(db_sessionmaker, monkeypatch):
     monkeypatch.setattr("app.bot.screen_capture.PlaywrightScreenCapture", ScreenFrameCapture)
-    monkeypatch.setattr(runner, "_mux_frame_dir_to_video", lambda frame_dir: b"fake-video-bytes")
 
     bot_id = _seed_bot_session(db_sessionmaker)
     joiner = FakeJoiner(join_outcome=JoinOutcome.LIVE, poll_outcomes=[JoinOutcome.ENDED])
@@ -292,7 +291,16 @@ async def test_live_join_with_screen_frames_persists_video_uri(db_sessionmaker, 
     await runner.run_bot_session(bot_id)
 
     with db_sessionmaker() as db:
+        from sqlalchemy import select
+
+        from app.db.models import Keyframe
+
         bot = db.get(BotSession, bot_id)
         session = db.get(CaptureSession, bot.capture_session_id)
         assert session is not None
-        assert session.video_uri == f"blob://bot-video/{bot.org_id}/{bot_id}.mp4"
+        assert session.video_uri is None  # no mp4 mux — keyframes uploaded directly
+        keyframes = db.execute(
+            select(Keyframe).where(Keyframe.capture_session_id == session.id)
+        ).scalars().all()
+        assert len(keyframes) > 0  # pre-extracted frames persisted as Keyframe rows
+        assert all(kf.image_uri.startswith("blob://keyframes/") for kf in keyframes)

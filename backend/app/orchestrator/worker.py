@@ -1116,29 +1116,78 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
     if session is None:
         raise RuntimeError(f"capture_session {job.capture_session_id} not found")
 
-    existing_keyframe_ids = [
-        kf.id
-        for kf in db.execute(
-            select(Keyframe.id).where(Keyframe.capture_session_id == session.id)
-        ).all()
-    ]
-    if existing_keyframe_ids:
-        db.query(UtteranceKeyframe).filter(
-            UtteranceKeyframe.keyframe_id.in_(existing_keyframe_ids)
-        ).delete(synchronize_session=False)
-        db.query(Keyframe).filter(Keyframe.capture_session_id == session.id).delete()
-
-    # Snapshot the scalar fields we need, then release the DB connection
-    # before potentially long blob download + GPU work (same pattern as
-    # _handle_transcribe — avoids holding a pool connection during I/O).
+    # Snapshot the scalar fields we need before any deletes.
     session_id = session.id
     org_id = session.org_id
     video_uri = session.video_uri
+
+    # Idempotency: clear prior stage output before re-running.
+    # For video-based sessions, delete all keyframes so extraction starts fresh.
+    # For pre-extracted bot frames (video_uri is None), DON'T delete — the
+    # OCR enrichment pass below is idempotent (checks kf.ocr_text before re-doing).
+    if video_uri:
+        existing_keyframe_ids = [
+            kf.id
+            for kf in db.execute(
+                select(Keyframe.id).where(Keyframe.capture_session_id == session.id)
+            ).all()
+        ]
+        if existing_keyframe_ids:
+            db.query(UtteranceKeyframe).filter(
+                UtteranceKeyframe.keyframe_id.in_(existing_keyframe_ids)
+            ).delete(synchronize_session=False)
+            db.query(Keyframe).filter(Keyframe.capture_session_id == session.id).delete()
+
     db.expunge_all()
     db.commit()
 
     if not video_uri:
-        log.info("stage.screen.no_video", session=session_id)
+        # Check for bot-preextracted keyframes written by persist_capture_artifacts.
+        # These are already uploaded distinct frames — only OCR/captioning needed.
+        preextracted = (
+            db.execute(select(Keyframe).where(Keyframe.capture_session_id == session_id))
+            .scalars()
+            .all()
+        )
+        if not preextracted:
+            log.info("stage.screen.no_video", session=session_id)
+            return
+
+        # Enrich pre-extracted frames: OCR text, VLM caption, entity detection.
+        for kf in preextracted:
+            if kf.ocr_text:
+                continue  # already enriched — idempotent re-run
+            ocr_result = await ocr.recognize(kf.image_uri)
+            entities = extract_entities(ocr_result.full_text)
+            kf.ocr_text = ocr_result.full_text
+            kf.detected_entities = [e.model_dump() for e in entities]
+            if captioner is not None:
+                try:
+                    frame_bytes = await blob.get(kf.image_uri)
+                    from app.adapters.vlm_caption import caption_keyframe
+
+                    kf.vlm_caption = await caption_keyframe(frame_bytes, captioner=captioner)
+                except Exception as exc:
+                    log.warning("screen.caption_failed", session=session_id, error=str(exc))
+        db.flush()
+
+        utterances = (
+            db.execute(select(Utterance).where(Utterance.capture_session_id == session_id))
+            .scalars()
+            .all()
+        )
+        for grounding in ground_utterances(utterances, preextracted):
+            db.add(
+                UtteranceKeyframe(
+                    org_id=org_id,
+                    utterance_id=grounding.utterance_id,
+                    keyframe_id=grounding.keyframe_id,
+                    score=grounding.score,
+                    method=grounding.method,
+                )
+            )
+        db.flush()
+        log.info("screen.done", session=session_id, keyframes=len(preextracted))
         return
 
     blob = get_blobstore()

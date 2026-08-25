@@ -145,36 +145,6 @@ def _webm_chunks_to_wav(chunks: list[bytes]) -> bytes | None:
     return None
 
 
-def _mux_frame_dir_to_video(frame_dir: Path) -> bytes | None:
-    """Best-effort JPEG-sequence -> mp4 mux via ffmpeg.
-
-    Bot capture used to discard screen frames entirely to avoid OOM from
-    accumulating them in RAM. Spooling frames to a temp directory keeps memory
-    flat while still producing a normal video_uri for the existing screen/OCR
-    stage to consume.
-    """
-    if shutil.which("ffmpeg") is None:
-        return None
-    if not any(frame_dir.glob("frame*.jpg")):
-        return None
-    out = frame_dir / "out.mp4"
-    try:
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-framerate", "1",
-                "-i", str(frame_dir / "frame%06d.jpg"),
-                "-pix_fmt", "yuv420p",
-                str(out),
-            ],
-            check=True,
-            capture_output=True,
-        )
-    except Exception as exc:
-        log.warning("bot.runner.mux_failed", error=str(exc))
-        return None
-    return out.read_bytes()
-
 
 def _should_keep_screen_frame(image_bytes: bytes, last_digest: str | None) -> tuple[bool, str]:
     """Keep only visually distinct bot screenshots.
@@ -343,7 +313,13 @@ async def _finalize_capture(
     from app.capture.consent import record_disclosure
     from app.capture.persist import persist_capture_artifacts
     from app.db.models import CaptureSession
-    from app.interfaces.platform import AudioTrack, CaptureArtifacts, CaptureMode, RosterEntry
+    from app.interfaces.platform import (
+        AudioTrack,
+        CaptureArtifacts,
+        CaptureMode,
+        PreExtractedFrame,
+        RosterEntry,
+    )
     from app.orchestrator.queue import enqueue_pipeline
 
     blob_store = get_blobstore()
@@ -368,11 +344,6 @@ async def _finalize_capture(
         log.warning("bot.runner.audio_webm_fallback", bot_session=bot_session_id,
                     reason="ffmpeg not available — transcribe stage will need webm support")
 
-    # Muxed to mp4 when ffmpeg is available; otherwise video_uri stays unset
-    # and the screen stage's existing "no video_uri" honest-absence path
-    # handles it -- the transcript is unaffected either way.
-    video_bytes = _mux_frame_dir_to_video(screen_frame_dir) if kept_screen_frames > 0 else None
-
     Session = get_sessionmaker()
     with Session() as db:
         bot = db.get(BotSession, bot_session_id)
@@ -386,13 +357,26 @@ async def _finalize_capture(
         )
         bot.audio_blob_uri = audio_uri
 
-        video_uri = None
-        if video_bytes is not None:
-            video_uri = await blob_store.put(
-                f"bot-video/{org_id}/{bot_session_id}.mp4",
-                video_bytes,
-                content_type="video/mp4",
+        # Upload each pre-filtered JPEG frame directly as a keyframe blob —
+        # no mp4 mux needed. The bot already deduplicates near-identical
+        # frames in _drain_screen, so these ARE the essential distinct
+        # screenshots. The screen stage enriches them with OCR/captioning
+        # in-place, skipping the video download + ffmpeg decode step entirely.
+        preextracted: list[PreExtractedFrame] = []
+        for i in range(kept_screen_frames):
+            frame_path = screen_frame_dir / f"frame{i:06d}.jpg"
+            if not frame_path.exists():
+                continue
+            frame_bytes = frame_path.read_bytes()
+            frame_uri = await blob_store.put(
+                f"keyframes/{org_id}/{bot_session_id}/{i:06d}.jpg",
+                frame_bytes,
+                content_type="image/jpeg",
             )
+            preextracted.append(PreExtractedFrame(image_uri=frame_uri, timestamp_s=float(i)))
+        if preextracted:
+            log.info("bot.runner.keyframes_uploaded", bot_session=bot_session_id,
+                     count=len(preextracted))
 
         session = CaptureSession(org_id=org_id, meeting_id=bot.meeting_id, mode="B")
         db.add(session)
@@ -402,8 +386,8 @@ async def _finalize_capture(
         artifacts = CaptureArtifacts(
             mode=CaptureMode.BOT,
             audio_tracks=[AudioTrack(uri=audio_uri, participant=None)],
-            video_uri=video_uri,
             roster=[RosterEntry(display_name=r.display_name) for r in roster],
+            preextracted_keyframes=preextracted,
         )
         persist_capture_artifacts(db, session, artifacts)
         record_disclosure(
@@ -424,7 +408,7 @@ async def _finalize_capture(
             "bot.runner.finalized",
             bot_session=bot_session_id,
             capture_session=session.id,
-            has_video=video_uri is not None,
+            keyframes=len(preextracted),
             kept_screen_frames=kept_screen_frames,
         )
 

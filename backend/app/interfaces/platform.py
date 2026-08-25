@@ -39,6 +39,19 @@ class AudioTrack(BaseModel):
     participant: RosterEntry | None = None  # set → per-participant track (Zoom); None → mixed
 
 
+class PreExtractedFrame(BaseModel):
+    """Bot-captured JPEG already uploaded to blob storage.
+
+    The bot deduplicates near-identical frames before capture, so these are
+    the essential distinct screenshots — no further keyframe detection needed.
+    The screen stage enriches them with OCR/caption in-place instead of
+    downloading a full video and re-extracting.
+    """
+
+    image_uri: str
+    timestamp_s: float
+
+
 class CaptureArtifacts(BaseModel):
     mode: CaptureMode
     audio_tracks: list[AudioTrack]
@@ -47,6 +60,7 @@ class CaptureArtifacts(BaseModel):
     roster: list[RosterEntry] = []
     speaker_labels: list[SpeakerLabelSpan] = []  # identity-fusion signal
     platform_transcript_uri: str | None = None  # free cross-check, never our transcript
+    preextracted_keyframes: list[PreExtractedFrame] = []  # bot-captured, skip video mux
 
 
 class PlatformAdapter(Protocol):

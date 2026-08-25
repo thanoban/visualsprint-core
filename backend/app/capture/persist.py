@@ -14,7 +14,7 @@ whose output it consumes, so both callers importing it is the correct
 direction either way.
 """
 
-from app.interfaces.platform import CaptureArtifacts
+from app.interfaces.platform import CaptureArtifacts, PreExtractedFrame
 
 
 def _person_for_roster_entry(db: object, org_id: str, entry):
@@ -122,3 +122,19 @@ def persist_capture_artifacts(db: object, session, artifacts: CaptureArtifacts) 
         )
 
     session.video_uri = artifacts.screen_share_uri or artifacts.video_uri
+
+    if artifacts.preextracted_keyframes:
+        from app.db.models import Keyframe
+
+        frames = artifacts.preextracted_keyframes
+        for i, frame in enumerate(frames):
+            valid_to = frames[i + 1].timestamp_s if i + 1 < len(frames) else frame.timestamp_s + 5.0
+            db.add(
+                Keyframe(
+                    org_id=session.org_id,
+                    capture_session_id=session.id,
+                    valid_from_s=frame.timestamp_s,
+                    valid_to_s=valid_to,
+                    image_uri=frame.image_uri,
+                )
+            )
