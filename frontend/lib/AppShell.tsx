@@ -3,7 +3,14 @@
 import { usePathname } from "next/navigation";
 import { AppSidebar } from "./AppSidebar";
 
-const NO_SIDEBAR_PATHS = new Set(["/login", "/welcome", "/privacy", "/terms", "/support"]);
+// "/" (the Meetings dashboard) renders its own full layout, including its own
+// sidebar, ported from the Claude Design project's "VisualSprint App.dc.html"
+// artboard -- that artboard uses its own blue token set (see app/page.tsx),
+// distinct from the teal/green tokens AppSidebar uses elsewhere in the app.
+// Nesting it under the shared AppSidebar would show two different sidebars
+// (or a color clash) on the same screen, so it opts out here like the
+// marketing page does.
+const NO_SIDEBAR_PATHS = new Set(["/", "/login", "/welcome", "/privacy", "/terms", "/support"]);
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
