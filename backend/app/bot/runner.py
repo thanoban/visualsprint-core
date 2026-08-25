@@ -368,7 +368,7 @@ async def _finalize_capture(
         )
 
 
-def install_sigterm_handler(bot_session_id: str, shutdown_event: "asyncio.Event") -> None:
+def install_sigterm_handler(bot_session_id: str, shutdown_event: asyncio.Event) -> None:
     """Wire SIGTERM → graceful shutdown flag so Cloud Run cancel/scale-down
     triggers _finalize_capture instead of dying with data in memory."""
     loop = asyncio.get_event_loop()
@@ -381,7 +381,5 @@ def install_sigterm_handler(bot_session_id: str, shutdown_event: "asyncio.Event"
         )
         shutdown_event.set()
 
-    try:
+    with contextlib.suppress(NotImplementedError, RuntimeError):
         loop.add_signal_handler(signal.SIGTERM, _handle)
-    except (NotImplementedError, RuntimeError):
-        pass  # Windows or non-main-thread: not fatal, just skip it
