@@ -9,14 +9,14 @@ import asyncio
 import traceback
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
 
 import structlog
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db.base import get_sessionmaker
 from app.db.models import PipelineJob
 from app.orchestrator import queue as q
@@ -1329,6 +1329,8 @@ async def run_once() -> bool:
     # --- transaction 2: run the handler ---
     with Session() as db:
         job = db.get(PipelineJob, job_id)
+        if job is None:
+            return True
         handler = _HANDLERS.get(stage, _noop)
         try:
             await handler(db, job)
@@ -1348,7 +1350,7 @@ async def run_once() -> bool:
     return True
 
 
-def _sweep_registry(settings) -> list[tuple[str, float, Callable[[object], Awaitable[None]]]]:
+def _sweep_registry(settings: Settings) -> list[tuple[str, float, Callable[[object], Awaitable[None]]]]:
     """(name, interval_seconds, coroutine_fn) for every periodic sweep.
 
     Single source of truth for both the local-dev loop and the production
@@ -1371,7 +1373,7 @@ def _sweep_registry(settings) -> list[tuple[str, float, Callable[[object], Await
     return sweeps
 
 
-def _sweep_due(db, name: str, interval_s: float, now: datetime) -> bool:
+def _sweep_due(db: Any, name: str, interval_s: float, now: datetime) -> bool:
     """Durable due-check backed by WorkerSweepState (see its docstring) --
     not an in-memory timestamp, because the production worker no longer
     stays running between checks."""
@@ -1383,10 +1385,10 @@ def _sweep_due(db, name: str, interval_s: float, now: datetime) -> bool:
     last_run_at = state.last_run_at
     if last_run_at.tzinfo is None:
         last_run_at = last_run_at.replace(tzinfo=UTC)
-    return (now - last_run_at).total_seconds() >= interval_s
+    return bool((now - last_run_at).total_seconds() >= interval_s)
 
 
-def _mark_swept(db, name: str, now: datetime) -> None:
+def _mark_swept(db: Any, name: str, now: datetime) -> None:
     from app.db.models import WorkerSweepState
 
     state = db.get(WorkerSweepState, name)
@@ -1417,7 +1419,7 @@ async def run_due_sweeps() -> list[str]:
     return ran
 
 
-async def run_bounded_pass(max_seconds: float) -> dict:
+async def run_bounded_pass(max_seconds: float) -> dict[str, Any]:
     """Drain the job queue and run any due sweeps, then return -- this is
     the whole point of the scale-to-zero worker: Cloud Scheduler invokes it
     on a short interval, it does whatever work is pending, and the container
