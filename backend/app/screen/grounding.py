@@ -7,6 +7,7 @@ scores pairs, it does not write to the DB.
 from __future__ import annotations
 
 import enum
+from collections.abc import Sequence
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -65,8 +66,8 @@ def score_grounding(utterance: UtteranceLike, keyframe: KeyframeLike) -> Groundi
 
 
 def ground_utterances(
-    utterances: list[UtteranceLike],
-    keyframes: list[KeyframeLike],
+    utterances: Sequence[UtteranceLike],
+    keyframes: Sequence[KeyframeLike],
     threshold: float = DEFAULT_THRESHOLD,
 ) -> list[GroundingScore]:
     scores: list[GroundingScore] = []
