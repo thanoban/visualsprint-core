@@ -17,7 +17,7 @@ interface NavItem {
 // project's 5-page scope -- dropping them would be a real regression, so
 // they're appended with the same glyph-badge treatment.
 const NAV_ITEMS: NavItem[] = [
-  { key: "meetings", label: "Meetings", href: "/", glyph: "M" },
+  { key: "meetings", label: "Meetings", href: "/meetings", glyph: "M" },
   { key: "chat", label: "Org Chat", href: "/chat", glyph: "C" },
   { key: "upload", label: "Upload", href: "/upload", glyph: "U" },
   { key: "people", label: "People", href: "/people", glyph: "P" },

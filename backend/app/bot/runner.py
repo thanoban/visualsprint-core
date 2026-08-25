@@ -288,7 +288,7 @@ async def run_bot_session(bot_session_id: str) -> None:
 
         loop = asyncio.get_event_loop()
         started = loop.time()
-        roster: list = []
+        roster: list[object] = []
 
         # SIGTERM from Cloud Run (manual cancel / scale-down) sets this event
         # so the capture loop exits cleanly and _finalize_capture still runs.
@@ -332,7 +332,7 @@ async def _finalize_capture(
     audio_chunks: list[bytes],
     screen_frame_dir: Path,
     kept_screen_frames: int,
-    roster: list,
+    roster: list[object],
 ) -> None:
     if not audio_chunks:
         log.warning("bot.runner.no_audio_captured", bot_session=bot_session_id)

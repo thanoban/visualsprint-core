@@ -246,9 +246,9 @@ class TranscriptionCascade:
                     capture_output=True,
                     timeout=300,
                 )
-                logger.info("cascade.webm_converted_to_wav", uri=audio_uri)
+                logger.info("cascade.webm_converted_to_wav: %s", audio_uri)
             except Exception as exc:
-                logger.warning("cascade.webm_convert_failed", uri=audio_uri, error=str(exc))
+                logger.warning("cascade.webm_convert_failed %s: %s", audio_uri, exc)
                 wav_path = None
 
         try:
