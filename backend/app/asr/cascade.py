@@ -10,6 +10,8 @@ back onto the original timeline.
 """
 
 import logging
+import shutil
+import subprocess
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -221,10 +223,40 @@ class TranscriptionCascade:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
+
+        # soundfile (libsndfile) cannot read WebM. Browser MediaRecorder chunks
+        # concatenated naively also produce an invalid WebM container (only the
+        # first segment has a Matroska file header). Convert to 16 kHz mono WAV
+        # via ffmpeg so audio_io.slice_to_wav_bytes can read it without issues.
+        # This also fixes any existing blobs already stored as .webm in GCS.
+        wav_path: str | None = None
+        if suffix.lower() == ".webm" and shutil.which("ffmpeg"):
+            wav_path = tmp_path[: -len(suffix)] + ".wav"
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", tmp_path,
+                        "-ac", "1",
+                        "-ar", "16000",
+                        "-f", "wav",
+                        wav_path,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=300,
+                )
+                logger.info("cascade.webm_converted_to_wav", uri=audio_uri)
+            except Exception as exc:
+                logger.warning("cascade.webm_convert_failed", uri=audio_uri, error=str(exc))
+                wav_path = None
+
         try:
-            yield tmp_path
+            yield wav_path if wav_path and Path(wav_path).exists() else tmp_path
         finally:
             Path(tmp_path).unlink(missing_ok=True)
+            if wav_path:
+                Path(wav_path).unlink(missing_ok=True)
 
 
 def _to_segment(span: LabeledSpan, result: RawVendorResult) -> TranscriptSegment:

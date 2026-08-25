@@ -103,6 +103,48 @@ async def _wait_out_lobby(joiner: MeetingJoiner) -> JoinOutcome:
     return JoinOutcome.IN_LOBBY  # caller treats "still waiting" as a timeout
 
 
+def _webm_chunks_to_wav(chunks: list[bytes]) -> bytes | None:
+    """Convert browser MediaRecorder WebM chunks to 16 kHz mono WAV.
+
+    MediaRecorder emits independent WebM segments every _CHUNK_MS ms.
+    Naive byte-concatenation produces an invalid container (only the first
+    chunk has a valid Matroska file header), which soundfile/libsndfile
+    cannot read. Piping all chunks through ffmpeg's concat protocol fixes
+    this: ffmpeg handles the stream discontinuities and outputs a single
+    well-formed WAV that soundfile can read without issues.
+    Requires ffmpeg in PATH (already available in the bot container for
+    video muxing). Falls back to None so the caller can upload the raw
+    WebM as an honest-absence artifact rather than silently discarding.
+    """
+    if shutil.which("ffmpeg") is None:
+        return None
+    raw = b"".join(chunks)
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", "pipe:0",
+                "-ac", "1",
+                "-ar", "16000",
+                "-f", "wav",
+                "pipe:1",
+            ],
+            input=raw,
+            capture_output=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+        log.warning(
+            "bot.runner.webm_to_wav_failed",
+            returncode=result.returncode,
+            stderr=result.stderr.decode(errors="replace")[:400],
+        )
+    except Exception as exc:
+        log.warning("bot.runner.webm_to_wav_failed", error=str(exc))
+    return None
+
+
 def _mux_frame_dir_to_video(frame_dir: Path) -> bytes | None:
     """Best-effort JPEG-sequence -> mp4 mux via ffmpeg.
 
@@ -305,7 +347,26 @@ async def _finalize_capture(
     from app.orchestrator.queue import enqueue_pipeline
 
     blob_store = get_blobstore()
-    raw_audio = b"".join(audio_chunks)
+
+    # MediaRecorder emits audio/webm;codecs=opus in independent segments.
+    # Concatenating raw bytes produces an invalid WebM container (only the
+    # first chunk has a Matroska file header), which soundfile cannot read.
+    # Convert to 16 kHz mono WAV via ffmpeg so the pipeline's audio_io.py
+    # (soundfile-based) can read it without issues.
+    wav_audio = _webm_chunks_to_wav(audio_chunks)
+    if wav_audio:
+        audio_blob_key = f"bot-audio/{org_id}/{bot_session_id}.wav"
+        audio_content_type = "audio/wav"
+        log.info("bot.runner.audio_converted_to_wav", bot_session=bot_session_id,
+                 size_bytes=len(wav_audio))
+    else:
+        # ffmpeg not available: upload raw WebM as honest-absence fallback.
+        # The transcribe stage will fail, but the blob is still retrievable.
+        wav_audio = b"".join(audio_chunks)
+        audio_blob_key = f"bot-audio/{org_id}/{bot_session_id}.webm"
+        audio_content_type = "audio/webm"
+        log.warning("bot.runner.audio_webm_fallback", bot_session=bot_session_id,
+                    reason="ffmpeg not available — transcribe stage will need webm support")
 
     # Muxed to mp4 when ffmpeg is available; otherwise video_uri stays unset
     # and the screen stage's existing "no video_uri" honest-absence path
@@ -319,9 +380,9 @@ async def _finalize_capture(
             return
 
         audio_uri = await blob_store.put(
-            f"bot-audio/{org_id}/{bot_session_id}.webm",
-            raw_audio,
-            content_type="audio/webm",
+            audio_blob_key,
+            wav_audio,
+            content_type=audio_content_type,
         )
         bot.audio_blob_uri = audio_uri
 
