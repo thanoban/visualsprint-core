@@ -83,6 +83,8 @@ class GoogleMeetJoiner:
         # Stored at join() time so poll_status() can detect URL drift away
         # from the meeting room (Meet navigates to a lobby/home page on end).
         self._meeting_code: str | None = None
+        self._join_url: str | None = None
+        self._session_cleared: bool = False  # cleared once when session expires; never loop
 
     @property
     def page(self):
@@ -104,19 +106,35 @@ class GoogleMeetJoiner:
                 return True
 
             if "accounts.google.com" in url:
-                # Session has a password field → cookies are fully expired,
-                # the bot cannot proceed without the account password.
+                # Session has a password field → cookies are fully expired.
+                # Rather than failing, clear the cookies and navigate directly
+                # to the Meet URL for anonymous guest join. Works for Workspace
+                # meetings; personal @gmail meetings will show a sign-in wall
+                # which _wait_for_prejoin catches and reports correctly.
                 try:
                     pw = page.locator("input[type='password']")
                     if await pw.count() > 0 and await pw.first.is_visible(timeout=500):
-                        self.error_detail = (
-                            "Google session expired — re-run "
-                            "`python -m app.bot.capture_google_session` "
-                            "and upload a new secret version"
+                        if self._session_cleared:
+                            self.error_detail = (
+                                "Google session expired — re-run "
+                                "`python -m app.bot.capture_google_session` "
+                                "and upload a new secret version"
+                            )
+                            log.warning("bot.meet.session_expired_password_prompt",
+                                        hint=self.error_detail)
+                            return False
+                        log.warning(
+                            "bot.meet.session_expired_password_prompt_anon_fallback",
+                            hint="Google session expired (password prompt) — clearing "
+                            "session and retrying as anonymous guest. Re-run "
+                            "`python -m app.bot.capture_google_session` to restore.",
                         )
-                        log.warning("bot.meet.session_expired_password_prompt",
-                                    hint=self.error_detail)
-                        return False
+                        self._session_cleared = True
+                        await page.context.clear_cookies()
+                        target = self._join_url or "https://meet.google.com/"
+                        await page.goto(target, timeout=_GOTO_TIMEOUT_MS, wait_until="domcontentloaded")
+                        await asyncio.sleep(2.0)
+                        continue
                 except Exception:
                     pass
 
@@ -186,6 +204,7 @@ class GoogleMeetJoiner:
         self, join_url: str, *, display_name: str = "VisualSprint Notetaker"
     ) -> JoinOutcome:
         self._display_name = display_name
+        self._join_url = join_url
         # Join as the configured signed-in Google account when a session is
         # available -- required for meetings hosted by personal @gmail
         # accounts, which refuse anonymous users outright (the "You can't join
@@ -318,18 +337,46 @@ class GoogleMeetJoiner:
 
             # Meet sometimes shows a sign-in overlay ON the meet.google.com
             # domain when the passive auth redirected back but the session
-            # cookies were invalid. Detect "Signed out" on the Meet page itself
-            # and treat it the same as an accounts.google.com redirect.
+            # cookies were invalid. Don't fail immediately — clear the expired
+            # session cookies and reload so Meet serves its anonymous guest UI.
+            # This works for Workspace-hosted meetings (the majority of business
+            # meetings). If the meeting also blocks anonymous users (personal
+            # @gmail meetings), the existing sign-in-required wall detection
+            # below will catch it and fail with the correct error message.
             try:
                 signed_out = page.get_by_text("Signed out", exact=True)
                 if await signed_out.count() > 0 and await signed_out.first.is_visible(timeout=300):
-                    self.error_detail = (
-                        "Google session expired (signed-out overlay on Meet) — "
-                        "re-run `python -m app.bot.capture_google_session` "
-                        "and upload a new secret version"
+                    if self._session_cleared:
+                        # Already tried the anonymous fallback; Meet is still
+                        # showing "Signed out" — this meeting may require a
+                        # signed-in account even for guests (unusual but real).
+                        self.error_detail = (
+                            "Google session expired (signed-out overlay on Meet) — "
+                            "re-run `python -m app.bot.capture_google_session` "
+                            "and upload a new secret version"
+                        )
+                        log.warning("bot.meet.session_expired_anon_also_blocked",
+                                    hint=self.error_detail)
+                        return False
+                    log.warning(
+                        "bot.meet.session_expired_trying_anonymous",
+                        hint="Google session expired — clearing session and retrying as "
+                        "anonymous guest. Re-run `python -m app.bot.capture_google_session` "
+                        "to restore signed-in join for personal Gmail meetings.",
                     )
-                    log.warning("bot.meet.session_expired", hint=self.error_detail)
-                    return False
+                    # Clear expired Google cookies so the next navigation lands
+                    # on Meet's anonymous pre-join screen instead of the sign-out
+                    # overlay. One-shot: _session_cleared prevents looping if
+                    # anonymous join is also blocked.
+                    self._session_cleared = True
+                    await page.context.clear_cookies()
+                    await page.goto(
+                        self._join_url or page.url,
+                        timeout=_GOTO_TIMEOUT_MS,
+                        wait_until="domcontentloaded",
+                    )
+                    await asyncio.sleep(2.0)
+                    continue
             except Exception:
                 pass
 
