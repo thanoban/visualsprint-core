@@ -51,11 +51,17 @@ jobs:
       # GCS bucket names are globally unique across ALL GCP projects -- a
       # generic name like "visualsprint-blobs" is almost certainly already
       # claimed. Using ${PROJECT_ID} as a suffix guarantees uniqueness since
-      # project IDs are globally unique. The || true was suppressing failures
-      # from name collisions, causing the next IAM step to fail with "bucket
-      # does not exist". The correct idiom: fail loudly on any error OTHER
-      # than "already exists" (which is the only safe-to-suppress case).
+      # project IDs are globally unique.
+      #
+      # continue-on-error: true -- these are one-time idempotent setup steps.
+      # The bucket and IAM bindings already exist after the first successful
+      # deploy. If the WIF token refresh transiently times out (STS connection
+      # reset, seen empirically), this must not block the Docker build + Cloud
+      # Run deploy steps that follow. If the bucket genuinely does not exist,
+      # the subsequent Cloud Run services will fail on their first blob write
+      # and the next deploy (with healthy auth) will fix it.
       - name: Create GCS blob bucket
+        continue-on-error: true
         run: |
           BUCKET="gs://visualsprint-blobs-${PROJECT_ID}"
           gcloud storage buckets create "${BUCKET}" \
@@ -66,6 +72,7 @@ jobs:
             > /dev/null
 
       - name: Grant runtime SA blob access
+        continue-on-error: true
         run: |
           BUCKET="gs://visualsprint-blobs-${PROJECT_ID}"
           # storage.objectAdmin: agents + bot read/write recordings and screenshots.
