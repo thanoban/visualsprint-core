@@ -1,6 +1,9 @@
 /**
  * Popup UI controller.
- * Handles sign-in/out and displays recording status.
+ * Handles sign-in/out, displays recording status, and — critically — triggers
+ * tab audio capture via getMediaStreamId when the user opens the popup while a
+ * meeting is pending. The popup is the only MV3 context with a real user
+ * gesture that allows chrome.tabCapture.getMediaStreamId to succeed.
  */
 import { VS_SUPABASE_URL, VS_SUPABASE_ANON_KEY } from "../lib/config.js";
 import { getStoredSession, setStoredSession, clearStoredSession } from "../lib/auth.js";
@@ -23,6 +26,7 @@ const $title     = document.getElementById("meeting-title");
 const $elapsed   = document.getElementById("elapsed-time");
 const $chunks    = document.getElementById("chunk-count");
 const $frames    = document.getElementById("frame-count");
+const $hint      = document.querySelector("#view-idle .hint");
 
 // ─── View management ─────────────────────────────────────────────────────────
 
@@ -58,10 +62,7 @@ $signinBtn.addEventListener("click", async () => {
       expires_at:    Math.floor(Date.now() / 1000) + data.expires_in,
     };
     await setStoredSession(session);
-
-    // Fetch and store the user's default org_id
     await _fetchAndStoreOrgId(session.access_token);
-
     showView("idle");
   } catch (e) {
     showError("Network error — is VisualSprint running?");
@@ -79,10 +80,9 @@ async function _fetchAndStoreOrgId(accessToken) {
     });
     if (!resp.ok) return;
     const data = await resp.json();
-    // me endpoint returns { orgs: [{id, role}] }; pick the first (owner) org
     const orgId = data.org?.id;
     if (orgId) await chrome.storage.local.set({ vs_org_id: orgId });
-  } catch { /* ignore — user can retry by re-signing in */ }
+  } catch { /* ignore */ }
 }
 
 function showError(msg) {
@@ -108,6 +108,32 @@ $stopBtn.addEventListener("click", async () => {
   showView("processing");
 });
 
+// ─── Tab-capture trigger (called on popup open when meeting is pending) ───────
+//
+// The popup context has a user gesture (user clicked the extension icon).
+// chrome.tabCapture.getMediaStreamId succeeds here; it would fail in the SW.
+// The stream ID is forwarded to the SW via STREAM_ID_READY, and the SW
+// handles the rest (createSession, offscreen document, recording).
+
+async function _triggerCapture(tabId) {
+  try {
+    const streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(id);
+        }
+      });
+    });
+    chrome.runtime.sendMessage({ type: "STREAM_ID_READY", tabId, streamId });
+    if ($hint) $hint.textContent = "Connecting audio capture…";
+  } catch (e) {
+    console.error("[VS popup] tabCapture failed:", e.message);
+    if ($hint) $hint.textContent = "Audio capture failed: " + e.message;
+  }
+}
+
 // ─── Status polling ───────────────────────────────────────────────────────────
 
 let _pollTimer = null;
@@ -128,7 +154,18 @@ async function pollStatus() {
     showView("processing");
   } else {
     const session = await getStoredSession();
-    showView(session ? "idle" : "signin");
+    if (!session) { showView("signin"); return; }
+    showView("idle");
+    // Check if a meeting is pending for this tab (detected but capture not yet started)
+    if (tab) {
+      const pendingStore = await chrome.storage.session.get("vs_pending_meetings");
+      const pending = (pendingStore.vs_pending_meetings ?? {})[tab.id];
+      if (pending && $hint) {
+        $hint.textContent = "Meeting detected — capturing audio…";
+      } else if ($hint) {
+        $hint.textContent = "Join a Google Meet, Zoom, or Teams meeting to start capturing automatically.";
+      }
+    }
   }
 }
 
@@ -148,6 +185,27 @@ function _formatTime(s) {
 (async function init() {
   const session = await getStoredSession();
   if (!session) { showView("signin"); return; }
+
+  // Check if the current tab has a meeting pending capture.
+  // This MUST happen before any await on unrelated work so the user-gesture
+  // context (popup open) is still active when getMediaStreamId is called.
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab) {
+    const recordings = await _getActiveRecordings();
+    const rec = recordings[tab.id];
+    const notRecording = !rec || rec.finalized;
+    if (notRecording) {
+      const pendingStore = await chrome.storage.session.get("vs_pending_meetings");
+      const pending = (pendingStore.vs_pending_meetings ?? {})[tab.id];
+      if (pending) {
+        // Trigger capture immediately — we are in a user-gesture context.
+        showView("idle");
+        if ($hint) $hint.textContent = "Meeting detected — starting audio capture…";
+        await _triggerCapture(tab.id);
+      }
+    }
+  }
+
   await pollStatus();
   _pollTimer = setInterval(pollStatus, 3000);
 })();
