@@ -50,12 +50,14 @@ treated as a supervised event.
 
 ### Fix status
 
+**Update 2026-08-26** — verified directly against `.github/workflows/deploy.yml` (not assumed): A and B are done. C is deliberately deferred, not "in progress" — see the deploy.yml comment at the api deploy step, which accepts RTMS unreliability under scale-to-zero until there are paying users and budget for an always-on instance.
+
 | Cause | Fix | Status |
 |---|---|---|
-| A — secretstore backend | `VS_SECRETSTORE_BACKEND=gcp` on `api` + `agents`; grant `roles/secretmanager.admin` to `visualsprint-backend-service-a` | in progress |
-| A — stale tokens | User must re-connect Google + Microsoft calendars after the fix ships (old tokens are unrecoverable — lived on a wiped disk) | pending, manual |
-| B — Zoom account id | Store `visualsprint-zoom-account-id` secret, use in `_get_s2s_token` instead of `"me"` | in progress |
-| C — RTMS reliability | Interim: `--no-cpu-throttling --max-instances=1` on `api`. Durable: move RTMS streaming to its own Cloud Run Job (mirrors the bot's `JobDispatcher`), state in DB keyed by `rtms_stream_id` | interim in progress, durable fix planned |
+| A — secretstore backend | `VS_SECRETSTORE_BACKEND=gcp` on `api` + `agents` | **done** — both `--set-env-vars` blocks in deploy.yml set it |
+| A — stale tokens | User must re-connect Google + Microsoft calendars after the fix ships (old tokens are unrecoverable — lived on a wiped disk) | pending, manual — depends on end users actually reconnecting |
+| B — Zoom account id | Store `visualsprint-zoom-account-id` secret, use in `_get_s2s_token` instead of `"me"` | **done** — `rtms_webhook.py`'s `_get_s2s_token` reads `settings.zoom_account_id`; secret wired into `api`'s `--set-secrets`. Not verified: whether the secret's stored value is the real account ID vs. still a placeholder — needs a live `gcloud secrets versions access` check, not just a repo read |
+| C — RTMS reliability | Durable fix: move RTMS streaming to its own Cloud Run Job (mirrors the bot's `JobDispatcher`), state in DB keyed by `rtms_stream_id` | **deliberately deferred** — deploy.yml keeps `api` at `--cpu-throttling --min-instances=0`, accepting RTMS unreliability pre-revenue. Re-enable `--no-cpu-throttling --min-instances=1` only when RTMS is actively needed and the ~$60/mo always-on cost is budgeted |
 | D — first live run | Supervised test pass: instant Meet capture → scheduled Meet → Zoom → Teams | planned |
 
 ### Also fixed same week (superseded, listed for the record)

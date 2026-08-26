@@ -57,6 +57,10 @@ export async function uploadKeyframe(orgId, sessionId, seq, timestampS, jpegByte
   return resp.json();
 }
 
+export async function getEscalations(orgId) {
+  return _apiFetch(`/api/v1/orgs/${orgId}/companion/escalations`);
+}
+
 export async function finalizeSession(orgId, sessionId, totalChunks, roster) {
   return _apiFetch(
     `/api/v1/orgs/${orgId}/companion/sessions/${sessionId}/finalize`,

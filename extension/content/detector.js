@@ -43,6 +43,53 @@
   let inMeeting = false;
   let meetingTitle = "";
   let checkInterval = null;
+  let consentSent = false;
+
+  const CONSENT_MESSAGE =
+    "VisualSprint is recording this meeting for notes and transcript. " +
+    "Let the host know if you'd like this paused.";
+
+  // Best-effort in-meeting disclosure: post a chat message so participants
+  // (not just the signed-in user) see the recording notice live. Scoped to
+  // Meet only -- selectors for Zoom/Teams chat panels are unverified and a
+  // wrong guess is worse than no attempt. This never blocks recording: the
+  // DB-level ConsentRecord (backend/app/capture/consent.py) is written
+  // regardless of whether this DOM injection succeeds.
+  async function injectConsentMessage() {
+    if (platform !== "meet" || consentSent) return;
+    consentSent = true;
+    try {
+      const chatToggle = document.querySelector(
+        'button[aria-label="Chat with everyone"], button[aria-label="Show everyone chat"]'
+      );
+      if (chatToggle && chatToggle.getAttribute("aria-pressed") !== "true") {
+        chatToggle.click();
+        await new Promise((r) => setTimeout(r, 800)); // panel opens with animation
+      }
+
+      const input = document.querySelector(
+        'textarea[aria-label="Send a message"], textarea[placeholder="Send a message"]'
+      );
+      if (!input) throw new Error("chat input not found");
+
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value"
+      ).set;
+      nativeSetter.call(input, CONSENT_MESSAGE);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+
+      await new Promise((r) => setTimeout(r, 200));
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true })
+      );
+
+      chrome.runtime.sendMessage({ type: "CONSENT_INJECTED", ok: true });
+    } catch (e) {
+      console.warn("[VS] consent chat injection failed:", e.message);
+      chrome.runtime.sendMessage({ type: "CONSENT_INJECTED", ok: false, error: e.message });
+    }
+  }
 
   function getParticipants() {
     if (!platform) return [];
@@ -78,11 +125,13 @@
         url: location.href,
         title: meetingTitle,
       });
+      injectConsentMessage();
     }
   }
 
   function sendEnded() {
     inMeeting = false;
+    consentSent = false;
     chrome.runtime.sendMessage({
       type: "MEETING_ENDED",
       platform,

@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.bot.runner as runner
+import app.capture.audio_utils as audio_utils
 from app.db.base import Base
 from app.db.models import (
     AudioTrack,
@@ -383,8 +384,12 @@ def test_webm_chunks_are_given_to_ffmpeg_as_a_concat_manifest(monkeypatch):
         assert "chunk000001.webm" in manifest
         return type("Completed", (), {"returncode": 0, "stdout": b"wav", "stderr": b""})()
 
-    monkeypatch.setattr(runner.shutil, "which", lambda name: "ffmpeg")
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    # webm_chunks_to_wav's actual shutil/subprocess calls live in
+    # app.capture.audio_utils since it was extracted there to be shared with
+    # Mode C (companion extension) capture -- app.bot.runner keeps only a
+    # thin wrapper and no longer imports shutil/subprocess itself.
+    monkeypatch.setattr(audio_utils.shutil, "which", lambda name: "ffmpeg")
+    monkeypatch.setattr(audio_utils.subprocess, "run", fake_run)
 
     assert REAL_WEBM_CHUNKS_TO_WAV([b"first", b"second"]) == b"wav"
     command, kwargs = calls[0]

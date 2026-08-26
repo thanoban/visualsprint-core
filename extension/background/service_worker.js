@@ -10,7 +10,7 @@
  *  - Handle service worker restarts (recover state from chrome.storage.session)
  */
 
-import { createSession, uploadChunk, uploadKeyframe, finalizeSession } from "../lib/api.js";
+import { createSession, uploadChunk, uploadKeyframe, finalizeSession, getEscalations } from "../lib/api.js";
 import { getStoredSession } from "../lib/auth.js";
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -217,6 +217,14 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       });
       break;
 
+    case "CONSENT_INJECTED":
+      if (msg.ok) {
+        console.info("[VS] consent notice posted to meeting chat");
+      } else {
+        console.warn("[VS] consent chat injection failed (recording continues; DB-level consent record still written):", msg.error);
+      }
+      break;
+
     case "STOP_REQUESTED": {
       // Popup messages have no sender.tab; tabId is passed in the message body.
       const stopTabId = msg.tabId ?? tabId;
@@ -254,6 +262,76 @@ async function _handleAudioChunk(msg) {
     // TODO: queue for retry
   }
 }
+
+// ─── Bot-blocked → companion escalation ──────────────────────────────────────
+// If a dispatched Mode B bot times out stuck in the meeting lobby (Google
+// Meet's guest-security block -- docs/03-capture.md), offer the user a
+// one-click handoff to Mode C: focus/open the meeting tab, which lets the
+// existing content-script detector start companion capture the moment the
+// user is actually admitted. This is the "Smart Capture Router" handoff.
+
+const ESCALATION_ALARM = "vs_escalation_poll";
+const SEEN_ESCALATIONS_KEY = "vs_seen_escalations";
+
+chrome.alarms.create(ESCALATION_ALARM, { periodInMinutes: 1 });
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ESCALATION_ALARM) checkEscalations();
+});
+
+async function checkEscalations() {
+  const orgId = await getOrgId();
+  if (!orgId) return; // not signed in -- nothing to check against
+
+  let resp;
+  try {
+    resp = await getEscalations(orgId);
+  } catch (e) {
+    return; // network hiccup or expired token -- retried on the next alarm tick
+  }
+
+  const seenStore = await chrome.storage.local.get(SEEN_ESCALATIONS_KEY);
+  const seen = new Set(seenStore[SEEN_ESCALATIONS_KEY] ?? []);
+  const fresh = (resp.escalations ?? []).filter((e) => !seen.has(e.bot_session_id));
+  if (fresh.length === 0) return;
+
+  for (const esc of fresh) {
+    seen.add(esc.bot_session_id);
+    chrome.notifications.create(`vs_escalation_${esc.bot_session_id}`, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: "Meeting bot blocked in lobby",
+      message: `"${esc.title}" — the automated bot couldn't get in. Click to capture from your browser instead.`,
+      priority: 2,
+    });
+    await chrome.storage.session.set({
+      [`vs_escalation_url_${esc.bot_session_id}`]: esc.join_url,
+    });
+  }
+  await chrome.storage.local.set({ [SEEN_ESCALATIONS_KEY]: Array.from(seen) });
+}
+
+chrome.notifications.onClicked.addListener(async (notificationId) => {
+  if (!notificationId.startsWith("vs_escalation_")) return;
+  const botSessionId = notificationId.slice("vs_escalation_".length);
+  const key = `vs_escalation_url_${botSessionId}`;
+  const stored = await chrome.storage.session.get(key);
+  const url = stored[key];
+  chrome.notifications.clear(notificationId);
+  if (!url) return;
+
+  try {
+    const tabs = await chrome.tabs.query({ url: `${url}*` });
+    if (tabs.length > 0) {
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      await chrome.windows.update(tabs[0].windowId, { focused: true });
+      return;
+    }
+  } catch (e) {
+    console.warn("[VS] tab lookup for escalation failed, opening new tab:", e.message);
+  }
+  chrome.tabs.create({ url });
+});
 
 // ─── Tab close → auto-finalize ────────────────────────────────────────────────
 

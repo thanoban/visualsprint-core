@@ -5,20 +5,30 @@ The Chrome extension calls these endpoints during a live meeting:
   POST /sessions/{capture_session_id}/chunks        — upload one 5-second WebM/Opus chunk
   POST /sessions/{capture_session_id}/keyframes     — upload one JPEG screenshot
   POST /sessions/{capture_session_id}/finalize      — assemble WAV, persist, enqueue pipeline
+  GET  /escalations                                 — bot sessions stuck in the Meet lobby,
+                                                        for the extension to offer as a
+                                                        one-click Mode C fallback
 
 Everything downstream of finalize is the standard pipeline (acquire → report).
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.auth.dependency import get_current_user, is_org_member, require_session_member
+from app.auth.dependency import (
+    get_current_user,
+    is_org_member,
+    require_org_member,
+    require_session_member,
+)
 from app.db.base import get_db
-from app.db.models import CaptureSession, Meeting, User
+from app.db.models import BotSession, BotStatus, CaptureSession, Meeting, User
 
 log = structlog.get_logger()
 
@@ -30,6 +40,11 @@ router = APIRouter(
 MAX_CHUNK_BYTES = 10 * 1024 * 1024   # 10 MB per audio chunk
 MAX_FRAME_BYTES = 2 * 1024 * 1024    # 2 MB per JPEG keyframe
 MAX_CHUNKS = 3_600                    # 5 h at 5 s chunks
+
+# A bot stuck in the lobby is only worth surfacing to the user while they
+# might still be sitting in the meeting themselves -- past this window the
+# meeting has likely ended or moved on without capture either way.
+ESCALATION_WINDOW_MINUTES = 15
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +70,19 @@ class CompanionFinalizeRequest(BaseModel):
 class CompanionFinalizeResponse(BaseModel):
     capture_session_id: str
     enqueued: bool
+
+
+class EscalationEntry(BaseModel):
+    bot_session_id: str
+    meeting_id: str | None
+    join_url: str
+    platform: str
+    title: str
+    lobby_timeout_at: str
+
+
+class EscalationsResponse(BaseModel):
+    escalations: list[EscalationEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -262,3 +290,42 @@ async def finalize_session(
              chunks_used=len(chunks), missing=len(missing),
              keyframes=len(preextracted), roster=len(roster))
     return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
+
+
+@router.get("/escalations", response_model=EscalationsResponse)
+async def list_escalations(
+    org_id: str,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> EscalationsResponse:
+    """Bot sessions that never got past the Meet/Zoom/Teams lobby, recent
+    enough that the user is plausibly still sitting in the meeting. The
+    extension polls this and offers a one-click Mode C fallback -- the
+    "Smart Capture Router" handoff from Mode B to Mode C."""
+    cutoff = datetime.now(UTC) - timedelta(minutes=ESCALATION_WINDOW_MINUTES)
+
+    rows = (
+        db.query(BotSession, Meeting)
+        .outerjoin(Meeting, BotSession.meeting_id == Meeting.id)
+        .filter(
+            BotSession.org_id == org_id,
+            BotSession.status == BotStatus.LOBBY_TIMEOUT,
+            BotSession.lobby_timeout_at.isnot(None),
+            BotSession.lobby_timeout_at >= cutoff,
+        )
+        .order_by(BotSession.lobby_timeout_at.desc())
+        .all()
+    )
+
+    escalations = [
+        EscalationEntry(
+            bot_session_id=bot.id,
+            meeting_id=bot.meeting_id,
+            join_url=bot.join_url,
+            platform=bot.platform,
+            title=(meeting.title if meeting else "") or "Meeting",
+            lobby_timeout_at=bot.lobby_timeout_at.isoformat(),
+        )
+        for bot, meeting in rows
+    ]
+    return EscalationsResponse(escalations=escalations)
