@@ -11,7 +11,8 @@
  */
 
 import { createSession, uploadChunk, uploadKeyframe, finalizeSession, getEscalations } from "../lib/api.js";
-import { getStoredSession } from "../lib/auth.js";
+
+console.info("[VS] service worker module loaded");
 
 // ─── State ───────────────────────────────────────────────────────────────────
 // Keyed by tabId. Persisted in chrome.storage.session so SW restarts recover.
