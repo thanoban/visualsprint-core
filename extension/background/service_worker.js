@@ -144,6 +144,9 @@ chrome.action.onClicked.addListener(async (tab) => {
     return;
   }
 
+  // Clear the "click to record" notification and reset badge title.
+  chrome.notifications.clear(`vs_meeting_${tabId}`);
+  chrome.action.setTitle({ tabId, title: "VisualSprint" }).catch(() => {});
   // Re-enable popup BEFORE startRecording so any subsequent icon click shows status.
   enablePopup(tabId);
   delete pending[tabId];
@@ -309,13 +312,28 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     case "MEETING_STARTED":
       if (tabId) {
         (async () => {
-          const recordings = await getActiveRecordings();
+          const [recordings, pending] = await Promise.all([
+            getActiveRecordings(), getPendingMeetings(),
+          ]);
+          // Skip if already recording this tab
           if (recordings[tabId]?.sessionId && !recordings[tabId]?.finalized) return;
-          const pending = await getPendingMeetings();
+          // Skip if already pending — content script polls every 3 s, dedupe here
+          if (pending[tabId]) return;
+
           pending[tabId] = { platform: msg.platform, url: msg.url, title: msg.title };
           await setPendingMeetings(pending);
           setBadge("●", "#F59E0B", tabId); // amber = click icon to start
+          chrome.action.setTitle({ tabId, title: "VisualSprint — click to start recording" }).catch(() => {});
           disablePopup(tabId);
+
+          // Notify the user — the amber badge is easy to miss
+          chrome.notifications.create(`vs_meeting_${tabId}`, {
+            type: "basic",
+            iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+            title: "VisualSprint: meeting detected",
+            message: "Click the VisualSprint icon in the toolbar to start recording.",
+            priority: 1,
+          });
           console.info("[VS] meeting detected, waiting for icon click", { tabId, platform: msg.platform });
         })();
       }
@@ -329,6 +347,8 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
             delete pending[tabId];
             await setPendingMeetings(pending);
             setBadge("", null, tabId);
+            chrome.action.setTitle({ tabId, title: "VisualSprint" }).catch(() => {});
+            chrome.notifications.clear(`vs_meeting_${tabId}`);
             enablePopup(tabId);
           }
         })();
@@ -421,6 +441,18 @@ async function checkEscalations() {
 }
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
+  // "Click to record" notification — focus the Meet tab so the amber badge is visible.
+  if (notificationId.startsWith("vs_meeting_")) {
+    const tabId = Number(notificationId.slice("vs_meeting_".length));
+    chrome.notifications.clear(notificationId);
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.tabs.update(tabId, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+    } catch { /* tab may have closed */ }
+    return;
+  }
+
   if (!notificationId.startsWith("vs_escalation_")) return;
   const botSessionId = notificationId.slice("vs_escalation_".length);
   const key = `vs_escalation_url_${botSessionId}`;
