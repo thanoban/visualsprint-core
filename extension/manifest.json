@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "VisualSprint Companion",
+  "version": "1.0.0",
+  "description": "Capture meetings from your browser tab — transcripts, insights, and screen evidence, all from inside your own meeting.",
+
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://app.zoom.us/*",
+    "https://teams.microsoft.com/*",
+    "http://localhost:8000/*",
+    "https://visualsprint-api-5ieahiycsa-uw.a.run.app/*",
+    "https://uktfgmvmtijqpzqnivvi.supabase.co/*"
+  ],
+
+  "background": {
+    "service_worker": "background/service_worker.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://app.zoom.us/*",
+        "https://teams.microsoft.com/*"
+      ],
+      "js": ["content/detector.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "VisualSprint"
+  },
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
