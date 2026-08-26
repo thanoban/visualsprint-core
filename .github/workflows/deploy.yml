@@ -90,6 +90,8 @@ jobs:
       - name: Build and push api image
         run: |
           docker build backend \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "${REGISTRY}/api:latest" \
             --build-arg INSTALL_EXTRAS=storage \
             -t "${REGISTRY}/api:${{ github.sha }}" \
             -t "${REGISTRY}/api:latest"
@@ -140,6 +142,8 @@ jobs:
       - name: Build and push agents image
         run: |
           docker build backend \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "${REGISTRY}/agents:latest" \
             --build-arg INSTALL_EXTRAS=asr,agents,screen,storage \
             -t "${REGISTRY}/agents:${{ github.sha }}" \
             -t "${REGISTRY}/agents:latest"
@@ -225,6 +229,8 @@ jobs:
       - name: Build and push bot image
         run: |
           docker build backend \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "${REGISTRY}/bot:latest" \
             --build-arg INSTALL_EXTRAS=bot \
             -t "${REGISTRY}/bot:${{ github.sha }}" \
             -t "${REGISTRY}/bot:latest"
@@ -238,11 +244,15 @@ jobs:
           BOT_SECRETS="${BOT_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
-          # Guest mode is the permanent production path for Meet bots.  It
-          # never reads a Google browser-cookie secret; browser sessions are
-          # intentionally not an operational dependency because Google can
-          # revoke them and OAuth refresh tokens cannot renew them.
-          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_GOOGLE_JOIN_MODE=guest"
+          # Mount the captured Google bot session as a file so the bot can join
+          # personal @gmail meetings that block anonymous guests. Session is kept
+          # fresh via capture_google_session + uploading a new secret version;
+          # the static outbound IP (Cloud NAT visualsprint-bot-nat-ip) prevents
+          # Google from invalidating the session on cold-start IP changes.
+          BOT_SECRETS="${BOT_SECRETS},/secrets/google-session.json=visualsprint-bot-google-session:latest"
+          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID}"
+          BOT_ENV="${BOT_ENV},VS_BOT_GOOGLE_JOIN_MODE=session"
+          BOT_ENV="${BOT_ENV},VS_BOT_GOOGLE_STORAGE_STATE_PATH=/secrets/google-session.json"
           BOT_ARGS="--image=${REGISTRY}/bot:${{ github.sha }}"
           BOT_ARGS="${BOT_ARGS} --region=${REGION} --project=${PROJECT_ID}"
           BOT_ARGS="${BOT_ARGS} --service-account=visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -356,6 +366,8 @@ jobs:
       - name: Build and push web image
         run: |
           docker build frontend \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "${REGISTRY}/web:latest" \
             --build-arg NEXT_PUBLIC_API_BASE_URL="${{ steps.api_url.outputs.url }}" \
             --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ vars.NEXT_PUBLIC_SUPABASE_URL }}" \
             --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
