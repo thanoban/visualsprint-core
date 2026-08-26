@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.adapters.bot_google_meet import GoogleMeetJoiner
+from app.config import Settings
 
 
 class FakeLocator:
@@ -73,3 +74,9 @@ async def test_click_recovers_after_transient_detach(joiner: GoogleMeetJoiner):
 async def test_click_gives_up_when_never_usable(joiner: GoogleMeetJoiner):
     loc = FakeLocator(never_succeeds=True)
     assert await joiner._click_when_stable(loc) is False
+
+
+def test_guest_mode_is_the_durable_default():
+    """A production deployment must not silently re-enable fragile cookies."""
+    settings = Settings(_env_file=None)
+    assert settings.bot_google_join_mode == "guest"

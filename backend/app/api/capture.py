@@ -41,8 +41,18 @@ class InstantCaptureResponse(BaseModel):
     admission_guidance: str | None = None
 
 
-def _admission_guidance(platform: str, bot_google_account_email: str | None) -> str | None:
+def _admission_guidance(
+    platform: str, bot_google_account_email: str | None, google_join_mode: str
+) -> str | None:
     if platform == "meet":
+        if google_join_mode.strip().lower() != "session":
+            return (
+                "Use a Google Workspace Meet that permits guest participants: invite the "
+                "VisualSprint bot account or allow guests/everyone with the link. This "
+                "durable mode does not use a Google browser login. For private personal "
+                "Gmail meetings, use the official recording/transcript capture path. "
+                "The bot cannot bypass host controls."
+            )
         account = (
             f"Invite {bot_google_account_email} to the calendar event"
             if bot_google_account_email
@@ -145,7 +155,9 @@ async def start_instant_capture(
         meeting_id=meeting.id,
         bot_session_id=bot.id,
         note=note,
-        admission_guidance=_admission_guidance(platform, settings.bot_google_account_email),
+        admission_guidance=_admission_guidance(
+            platform, settings.bot_google_account_email, settings.bot_google_join_mode
+        ),
     )
 
 

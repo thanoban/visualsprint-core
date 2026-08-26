@@ -37,25 +37,27 @@ limit. The logs showed three independent failures:
   preserves transcription, OCR, evidence, decisions, and reports; speaker
   attribution is shown as unknown rather than guessed.
 
-## One-time Google Meet setup
+## Permanent Google Meet access model
 
-Use a dedicated Google account for the bot. Set
-`VS_BOT_GOOGLE_ACCOUNT_EMAIL` to that account address at deployment so the UI
-can show the exact invite target. For each meeting that should auto-admit:
+The deployed default is `VS_BOT_GOOGLE_JOIN_MODE=guest`. It deliberately does
+**not** load a Google browser session, so there is no hourly cookie refresh or
+user re-login. For every meeting that should be captured by the bot:
 
-1. Invite that account in the calendar event, or set Meet access to **Everyone
-   with the link** if your organization permits it.
+1. Use a Google Workspace Meet and invite the dedicated bot account in the
+   calendar event, or set Meet access to **Everyone with the link** if your
+   Workspace policy permits it.
 2. Start the meeting as the organizer. If the meeting uses a lobby, allow the
    named **VisualSprint Notetaker** once; no browser bot can override a host's
    admission policy.
-3. If Google revokes the browser session, refresh only the dedicated bot
-   account's session with `python -m app.bot.capture_google_session` and upload
-   the resulting JSON as a new `visualsprint-bot-google-session` secret version.
+3. For private personal-Gmail meetings, do not use a browser bot. They require
+   an interactive Google account session, which Google may revoke. Use the
+   official Meet recording/transcript capture path (Workspace OAuth + Meet and
+   Drive permissions) or upload the recording instead.
 
-The existing Cloud Run VPC connector and Cloud NAT static address make bot job
-egress stable across runs. They reduce avoidable session invalidation after a
-successful cloud login, but Google still owns account-security decisions, so
-no safe code change can promise that a browser cookie will never expire.
+`VS_BOT_GOOGLE_JOIN_MODE=session` is retained only as a legacy emergency/test
+mode. It is not a production guarantee: Google owns browser-cookie lifetime,
+and OAuth refresh tokens cannot refresh a browser login. Do not configure a
+routine cookie-refresh job as a product workflow.
 
 ## Verification after deployment
 

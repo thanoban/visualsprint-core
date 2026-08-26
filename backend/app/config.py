@@ -203,14 +203,15 @@ class Settings(BaseSettings):
     bot_lobby_timeout_s: float | None = None
     bot_max_meeting_s: float | None = None
     bot_smoke_capture_seconds: float | None = None
-    # Path to a Playwright storage_state JSON (cookies) for a signed-in
-    # Google account the Meet bot joins as. Google refuses ANONYMOUS (not
-    # signed-in) users on meetings hosted by personal @gmail accounts, so a
-    # real logged-in session is the only way the Meet bot can join those --
-    # see app/bot/browser.py and app/bot/capture_google_session.py (the
-    # helper that produces this file). Unset => anonymous join (works only
-    # for Workspace-hosted meetings that allow guests); the bot degrades
-    # honestly rather than failing to start.
+    # The production-safe Meet mode is ``guest``: no Google browser cookie is
+    # loaded, so a Workspace meeting that permits invited guests / everyone
+    # with the link can be joined indefinitely without periodic re-login.
+    # ``session`` is an emergency legacy compatibility mode only. Google owns
+    # the lifetime of browser cookies and may revoke them at any time; OAuth
+    # refresh tokens cannot renew those browser cookies.
+    bot_google_join_mode: str = "guest"  # "guest" | "session"
+    # Path to Playwright storage_state JSON. Read only when
+    # bot_google_join_mode="session"; ignored in the durable guest mode.
     bot_google_storage_state_path: str | None = None
     # Non-secret identity of the dedicated bot account. The UI uses this to
     # tell organizers which account to invite before the meeting starts.

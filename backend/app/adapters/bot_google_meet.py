@@ -68,6 +68,13 @@ _SIGN_IN_REQUIRED_TEXTS = (
     "This call is for Google account holders",
 )
 
+_GUEST_ACCESS_REQUIRED_DETAIL = (
+    "This Google Meet does not permit guest bots. Use a Google Workspace meeting "
+    "where the VisualSprint bot is invited or guests are allowed, or use the official "
+    "Meet recording/transcript capture path. Personal Gmail Meet access cannot be made "
+    "permanent with browser cookies."
+)
+
 
 class GoogleMeetJoiner:
     platform = "meet"  # matches Meeting.platform / detect_conferencing's "meet"
@@ -212,12 +219,20 @@ class GoogleMeetJoiner:
     ) -> JoinOutcome:
         self._display_name = display_name
         self._join_url = join_url
-        # Join as the configured signed-in Google account when a session is
-        # available -- required for meetings hosted by personal @gmail
-        # accounts, which refuse anonymous users outright (the "You can't join
-        # this video call" screen). Falls back to anonymous guest-join when
-        # unset (works only for Workspace-hosted meetings that allow guests).
+        # Production always starts as an anonymous guest. Browser login
+        # cookies are not OAuth credentials and Google can revoke them without
+        # notice, so loading them as the default made a reliable bot depend on
+        # a recurring manual intervention. ``session`` remains an explicit
+        # compatibility escape hatch for controlled testing only.
         from app.config import get_settings
+        settings = get_settings()
+        join_mode = settings.bot_google_join_mode.strip().lower()
+        if join_mode not in {"guest", "session"}:
+            self.error_detail = (
+                f"Unsupported VS_BOT_GOOGLE_JOIN_MODE={join_mode!r}; use 'guest' or 'session'."
+            )
+            self._state = JoinOutcome.FAILED
+            return self._state
 
         # Extract the meeting room code (e.g. "abc-defg-hij") so poll_status
         # can detect URL drift when Meet navigates away on meeting end.
@@ -226,7 +241,9 @@ class GoogleMeetJoiner:
 
         await self._session.launch(
             display_name=display_name,
-            storage_state_path=get_settings().bot_google_storage_state_path,
+            storage_state_path=(
+                settings.bot_google_storage_state_path if join_mode == "session" else None
+            ),
         )
         page = self._session.page
         try:
@@ -399,12 +416,7 @@ class GoogleMeetJoiner:
                 try:
                     el = page.get_by_text(wall_text, exact=False)
                     if await el.count() > 0 and await el.first.is_visible(timeout=300):
-                        self.error_detail = (
-                            "Meeting requires a signed-in Google account — "
-                            "re-run `python -m app.bot.capture_google_session` "
-                            "and upload the JSON as Secret "
-                            "`visualsprint-bot-google-session`"
-                        )
+                        self.error_detail = _GUEST_ACCESS_REQUIRED_DETAIL
                         log.warning("bot.meet.anonymous_blocked",
                                     text=wall_text, hint=self.error_detail)
                         return False
