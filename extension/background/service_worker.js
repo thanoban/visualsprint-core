@@ -37,7 +37,7 @@ async function getOrgId() {
 // ─── Offscreen document ───────────────────────────────────────────────────────
 
 async function ensureOffscreenDocument() {
-  const existing = await chrome.offscreen.getContexts({
+  const existing = await chrome.runtime.getContexts({
     contextTypes: ["OFFSCREEN_DOCUMENT"],
   }).catch(() => []);
   if (existing.length > 0) return;
