@@ -14,7 +14,7 @@ const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
 
 function stateColor(state: string): [string, string] {
-  if (state === "resolved") return ["var(--accent-strong)", "var(--accent-bg)"];
+  if (state === "resolved") return ["var(--success)", "var(--success-bg)"];
   if (state === "reopened" || state === "recurring") return ["var(--evidence)", "var(--evidence-bg)"];
   if (state === "superseded") return ["var(--text-faint)", "var(--surface2)"];
   return ["var(--text-muted)", "var(--surface2)"];
@@ -84,7 +84,7 @@ function AnalysisGraphs({ analysis }: { analysis: PersonAnalysisOut }) {
             <EvidenceLink key={item.id} item={item}>
               <div style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 10, alignItems: "center", marginBottom: 6 }}>
                 <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{new Date(item.occurred_at).toLocaleDateString()}</span>
-                <span title={item.statement} style={{ display: "block", height: 16, width: `${Math.max(20, ((index + 1) / analysis.commitment_timeline.length) * 100)}%`, borderRadius: 4, background: item.coverage_gap ? "repeating-linear-gradient(45deg,var(--surface2),var(--surface2) 4px,var(--border) 4px,var(--border) 8px)" : item.lifecycle_state === "resolved" ? "var(--accent-strong)" : "var(--border-strong)" }} />
+                <span title={item.statement} style={{ display: "block", height: 16, width: `${Math.max(20, ((index + 1) / analysis.commitment_timeline.length) * 100)}%`, borderRadius: 4, background: item.coverage_gap ? "repeating-linear-gradient(45deg,var(--surface2),var(--surface2) 4px,var(--border) 4px,var(--border) 8px)" : item.lifecycle_state === "resolved" ? "var(--success)" : "var(--border-strong)" }} />
               </div>
             </EvidenceLink>
           ))}

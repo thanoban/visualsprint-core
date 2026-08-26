@@ -1,6 +1,6 @@
 const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const CONTACT_EMAIL = "thanobansk@gmail.com";
 
 const TOPICS = [

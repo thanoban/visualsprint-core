@@ -1,4 +1,4 @@
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 
 const LAST_UPDATED = "2026-08-15";
 const CONTACT_EMAIL = "thanobansk@gmail.com";

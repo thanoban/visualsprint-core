@@ -22,13 +22,13 @@ const LIGHT = {
   text: "#14171d",
   textMuted: "#6b6558",
   textFaint: "#948d7c",
-  accent: "#1f7a5c",
-  accentStrong: "#145c44",
+  accent: "#2563eb",
+  accentStrong: "#1d4ed8",
   gap: "#ab4a2f",
   gapBg: "#f6e6df",
 };
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 type Mode = "signin" | "signup";
@@ -364,7 +364,7 @@ export default function LoginPage() {
                 style={{
                   fontSize: 12.5,
                   color: LIGHT.accentStrong,
-                  background: "#e3f1ea",
+                  background: "#eef4ff",
                   border: `1px solid ${LIGHT.accent}`,
                   borderRadius: 6,
                   padding: "8px 10px",

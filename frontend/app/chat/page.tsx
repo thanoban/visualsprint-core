@@ -13,7 +13,7 @@ import { useAuth } from "@/lib/AuthProvider";
 import { mockAssistantReply } from "@/lib/mock-data";
 import type { ChatMessage, ChatRequest, ChatResponse, EvidenceChip } from "@/lib/types";
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const serif = "'Source Serif 4', serif";
 const mono = "'IBM Plex Mono', monospace";
 

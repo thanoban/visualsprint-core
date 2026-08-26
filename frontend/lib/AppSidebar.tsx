@@ -176,7 +176,7 @@ export function AppSidebar() {
             fontSize: 13,
             fontWeight: 500,
             color: "var(--text-muted)",
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            fontFamily: "'Plus Jakarta Sans', sans-serif",
           }}
         >
           <span>{theme === "dark" ? "Dark mode" : "Light mode"}</span>
