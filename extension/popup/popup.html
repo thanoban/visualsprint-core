@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>VisualSprint</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Sign-in view -->
+    <div id="view-signin" class="view hidden">
+      <div class="logo">VisualSprint</div>
+      <p class="tagline">Sign in to start capturing meetings</p>
+      <input id="email-input" type="email" placeholder="Email" autocomplete="email">
+      <input id="password-input" type="password" placeholder="Password">
+      <button id="signin-btn" class="btn-primary">Sign in</button>
+      <p id="signin-error" class="error hidden"></p>
+    </div>
+
+    <!-- Idle view (signed in, not recording) -->
+    <div id="view-idle" class="view hidden">
+      <div class="logo">VisualSprint</div>
+      <div id="status-idle" class="status status-idle">
+        <span class="dot"></span> Ready to capture
+      </div>
+      <p class="hint">Join a Google Meet, Zoom, or Teams meeting to start capturing automatically.</p>
+      <button id="signout-btn" class="btn-secondary">Sign out</button>
+    </div>
+
+    <!-- Recording view -->
+    <div id="view-recording" class="view hidden">
+      <div class="logo">VisualSprint</div>
+      <div class="status status-recording">
+        <span class="dot pulse"></span> Recording
+      </div>
+      <div id="meeting-title" class="meeting-title"></div>
+      <div class="stats">
+        <span id="elapsed-time">0:00</span> elapsed
+        &nbsp;·&nbsp;
+        <span id="chunk-count">0</span> chunks
+        &nbsp;·&nbsp;
+        <span id="frame-count">0</span> keyframes
+      </div>
+      <button id="stop-btn" class="btn-danger">Stop & process</button>
+    </div>
+
+    <!-- Processing view -->
+    <div id="view-processing" class="view hidden">
+      <div class="logo">VisualSprint</div>
+      <div class="status status-processing">
+        <span class="dot spin"></span> Processing…
+      </div>
+      <p class="hint">Transcript and insights will appear in the VisualSprint dashboard.</p>
+    </div>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
