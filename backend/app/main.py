@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.actions import router as actions_router
-from app.api.companion import router as companion_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
 from app.api.corrections import router as corrections_router
@@ -57,13 +56,9 @@ app = FastAPI(
 # browser -- without this, every fetch from app/**/page.tsx is blocked by the
 # browser's CORS check before it ever reaches a route handler, surfacing as
 # an opaque "Failed to fetch" with no server-side error to debug.
-_cors_origins = list(get_settings().cors_allowed_origins)
-if get_settings().companion_extension_id:
-    _cors_origins.append(f"chrome-extension://{get_settings().companion_extension_id}")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=get_settings().cors_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -90,7 +85,6 @@ app.include_router(people_router)
 app.include_router(speakers_router)
 app.include_router(ops_router)
 app.include_router(leads_router)
-app.include_router(companion_router)
 
 
 @app.get("/healthz", tags=["ops"])

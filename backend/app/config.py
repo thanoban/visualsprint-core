@@ -242,12 +242,6 @@ class Settings(BaseSettings):
     # pydantic-settings decodes list-typed env vars as JSON, e.g.
     # VS_CORS_ALLOWED_ORIGINS=["https://app.example.com","https://staging.example.com"]
     cors_allowed_origins: list[str] = ["https://visualsprint-web-5ieahiycsa-uw.a.run.app"]
-    # Chrome extension ID for the companion capture extension. When set,
-    # chrome-extension://{id} is added to cors_allowed_origins so the extension
-    # popup page (which runs on the extension's origin) can call the API.
-    # Background service-worker fetches bypass CORS via host_permissions and
-    # don't need this. Leave empty in dev (service worker handles it).
-    companion_extension_id: str = ""
 
 
 @lru_cache

@@ -624,11 +624,10 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
         select(AudioTrack.id).where(AudioTrack.capture_session_id == session.id).limit(1)
     ).scalar_one_or_none()
 
-    if session.mode in ("D", "B", "C"):
+    if session.mode in ("D", "B"):
         # Mode D: audio landed at upload time (api/upload.py). Mode B: audio
         # landed when app/bot/runner.py's _finalize_capture persisted it
-        # after the bot left the meeting. Mode C: audio assembled and persisted
-        # by api/companion.py's finalize endpoint. All three are already-complete
+        # after the bot left the meeting -- both are already-complete
         # CaptureArtifacts by the time this stage runs, so acquire's only
         # job is confirming that, same as Mode D.
         if has_track is None:
