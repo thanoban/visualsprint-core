@@ -98,6 +98,17 @@ class GoogleMeetJoiner:
     def page(self):
         return self._session.page
 
+    def _storage_state_path(self, settings) -> str | None:
+        """Return an opt-in legacy cookie only for explicit session mode."""
+        join_mode = settings.bot_google_join_mode.strip().lower()
+        if join_mode == "guest":
+            return None
+        if join_mode == "session":
+            return settings.bot_google_storage_state_path
+        raise ValueError(
+            f"Unsupported VS_BOT_GOOGLE_JOIN_MODE={join_mode!r}; use 'guest' or 'session'."
+        )
+
     async def _handle_google_auth_redirect(self, page) -> bool:
         """After goto(), Google may redirect to accounts.google.com for account
         selection before returning to Meet. Works its way through the known
@@ -226,11 +237,10 @@ class GoogleMeetJoiner:
         # compatibility escape hatch for controlled testing only.
         from app.config import get_settings
         settings = get_settings()
-        join_mode = settings.bot_google_join_mode.strip().lower()
-        if join_mode not in {"guest", "session"}:
-            self.error_detail = (
-                f"Unsupported VS_BOT_GOOGLE_JOIN_MODE={join_mode!r}; use 'guest' or 'session'."
-            )
+        try:
+            storage_state_path = self._storage_state_path(settings)
+        except ValueError as exc:
+            self.error_detail = str(exc)
             self._state = JoinOutcome.FAILED
             return self._state
 
@@ -241,9 +251,7 @@ class GoogleMeetJoiner:
 
         await self._session.launch(
             display_name=display_name,
-            storage_state_path=(
-                settings.bot_google_storage_state_path if join_mode == "session" else None
-            ),
+            storage_state_path=storage_state_path,
         )
         page = self._session.page
         try:

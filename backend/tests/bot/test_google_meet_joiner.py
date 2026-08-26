@@ -80,3 +80,17 @@ def test_guest_mode_is_the_durable_default():
     """A production deployment must not silently re-enable fragile cookies."""
     settings = Settings(_env_file=None)
     assert settings.bot_google_join_mode == "guest"
+
+
+def test_guest_mode_never_loads_legacy_google_cookie(joiner: GoogleMeetJoiner):
+    settings = Settings(_env_file=None, bot_google_storage_state_path="/secrets/old-cookie.json")
+    assert joiner._storage_state_path(settings) is None
+
+
+def test_session_mode_requires_explicit_opt_in(joiner: GoogleMeetJoiner):
+    settings = Settings(
+        _env_file=None,
+        bot_google_join_mode="session",
+        bot_google_storage_state_path="/secrets/old-cookie.json",
+    )
+    assert joiner._storage_state_path(settings) == "/secrets/old-cookie.json"
