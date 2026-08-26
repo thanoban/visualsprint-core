@@ -113,9 +113,12 @@ class FakeJoiner:
 
 
 class FakeAudioCapture:
+    instances: list["FakeAudioCapture"] = []
+
     def __init__(self, page) -> None:
         self.started = False
         self.stopped = False
+        self.__class__.instances.append(self)
 
     async def start(self):
         self.started = True
@@ -129,9 +132,12 @@ class FakeAudioCapture:
 
 
 class FakeScreenCapture:
+    instances: list["FakeScreenCapture"] = []
+
     def __init__(self, page) -> None:
         self.started = False
         self.stopped = False
+        self.__class__.instances.append(self)
 
     async def start(self):
         self.started = True
@@ -152,6 +158,8 @@ class ScreenFrameCapture(FakeScreenCapture):
 
 @pytest.fixture(autouse=True)
 def fake_capture_classes(monkeypatch):
+    FakeAudioCapture.instances.clear()
+    FakeScreenCapture.instances.clear()
     monkeypatch.setattr("app.bot.audio_capture.PlaywrightAudioCapture", FakeAudioCapture)
     monkeypatch.setattr("app.bot.screen_capture.PlaywrightScreenCapture", FakeScreenCapture)
     # Browser bytes are deliberately synthetic in this suite. Conversion is
@@ -217,6 +225,8 @@ async def test_live_join_captures_audio_and_finalizes_capture_session(db_session
         assert job.stage == "acquire"
 
     assert joiner.left is True
+    assert FakeAudioCapture.instances[-1].stopped is True
+    assert FakeScreenCapture.instances[-1].stopped is True
 
 
 async def test_lobby_timeout_never_admitted_is_not_a_hang(db_sessionmaker, monkeypatch):
