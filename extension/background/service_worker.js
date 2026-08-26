@@ -93,13 +93,14 @@ async function startRecording(tabId, { platform, url, title }) {
   await ensureOffscreenDocument();
   chrome.runtime.sendMessage({ type: "START_CAPTURE", streamId, sessionId });
 
-  // Persist state
+  // Persist state (title stored so popup can display meeting name)
   recordings[tabId] = {
     sessionId,
     orgId,
     chunkSeq: 0,
     keyframeSeq: 0,
     platform,
+    title,
     startedAt: Date.now(),
     finalized: false,
   };
@@ -216,9 +217,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       });
       break;
 
-    case "STOP_REQUESTED":
-      if (tabId) stopRecording(tabId, []);
+    case "STOP_REQUESTED": {
+      // Popup messages have no sender.tab; tabId is passed in the message body.
+      const stopTabId = msg.tabId ?? tabId;
+      if (stopTabId) stopRecording(stopTabId, []);
       break;
+    }
   }
 });
 
@@ -234,7 +238,12 @@ async function _handleAudioChunk(msg) {
   if (rec.finalized) return;
 
   try {
-    await uploadChunk(rec.orgId, rec.sessionId, msg.seq, msg.chunk);
+    // msg.chunk arrives as a plain Array (offscreen converts ArrayBuffer before
+    // sendMessage so it survives JSON serialization); reconstruct Uint8Array here.
+    const chunkBytes = msg.chunk instanceof Uint8Array
+      ? msg.chunk
+      : new Uint8Array(msg.chunk);
+    await uploadChunk(rec.orgId, rec.sessionId, msg.seq, chunkBytes);
     // Update chunkSeq to the highest seq we've uploaded (offscreen tracks its own seq)
     if (msg.seq + 1 > rec.chunkSeq) {
       recordings[tabId] = { ...rec, chunkSeq: msg.seq + 1 };

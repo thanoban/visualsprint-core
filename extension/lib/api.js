@@ -23,6 +23,7 @@ async function _apiFetch(path, init = {}) {
 export async function createSession(orgId, { title, meetingUrl, platform }) {
   return _apiFetch(`/api/v1/orgs/${orgId}/companion/sessions`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, meeting_url: meetingUrl, platform }),
   });
 }
@@ -61,6 +62,7 @@ export async function finalizeSession(orgId, sessionId, totalChunks, roster) {
     `/api/v1/orgs/${orgId}/companion/sessions/${sessionId}/finalize`,
     {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ total_chunks: totalChunks, roster }),
     }
   );

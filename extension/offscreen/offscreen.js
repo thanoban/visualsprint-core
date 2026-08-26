@@ -44,11 +44,14 @@ async function startCapture(streamId, sessionId) {
   recorder.ondataavailable = async (e) => {
     if (!e.data || e.data.size === 0) return;
     const arrayBuffer = await e.data.arrayBuffer();
+    // ArrayBuffer is not JSON-serializable — convert to plain Array so it
+    // survives the chrome.runtime.sendMessage JSON round-trip intact.
+    const chunkArray = Array.from(new Uint8Array(arrayBuffer));
     chrome.runtime.sendMessage({
       type: "AUDIO_CHUNK",
       sessionId,
       seq: chunkSeq++,
-      chunk: arrayBuffer,
+      chunk: chunkArray,
     });
   };
 

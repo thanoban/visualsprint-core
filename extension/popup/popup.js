@@ -103,7 +103,7 @@ $signoutBtn.addEventListener("click", async () => {
 $stopBtn.addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab) {
-    chrome.runtime.sendMessage({ type: "STOP_REQUESTED" }, { tabId: tab.id });
+    chrome.runtime.sendMessage({ type: "STOP_REQUESTED", tabId: tab.id });
   }
   showView("processing");
 });
