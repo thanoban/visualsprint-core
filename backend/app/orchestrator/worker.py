@@ -1309,8 +1309,18 @@ async def _handle_propose(db: object, job: PipelineJob) -> None:
 async def _handle_report(db: object, job: PipelineJob) -> None:
     from app.adapters.blobstore_s3 import get_blobstore
     from app.agents.report import run_report_intelligence
+    from app.db.models import CaptureSession
 
-    await run_report_intelligence(db, job.capture_session_id, _get_llm(), blobstore=get_blobstore())
+    _report_input, generated, _blob_uri = await run_report_intelligence(
+        db, job.capture_session_id, _get_llm(), blobstore=get_blobstore()
+    )
+    if not generated.abstained:
+        session = db.get(CaptureSession, job.capture_session_id)
+        if session is not None:
+            if generated.title:
+                session.report_title = generated.title
+            if generated.executive_summary:
+                session.report_summary = generated.executive_summary
 
 
 async def run_once() -> bool:

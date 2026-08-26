@@ -7,8 +7,8 @@ item with no `embedding` yet, this stage populates it from `item.statement` —
 this is the only writer of `KnowledgeItem.embedding` in the pipeline, which is
 also what makes chat's `_vector_candidates` (app/api/chat.py) find anything.
 
-Model tier: Opus (settings.model_memory) — this stage makes judgment calls
-across a growing corpus of history, worth the higher-cost tier.
+Model tier: gemini-2.5-pro (settings.model_memory) — this stage makes judgment
+calls across a growing corpus of history, worth the higher-quality tier.
 """
 
 import re

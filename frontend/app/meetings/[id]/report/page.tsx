@@ -8,9 +8,9 @@
 // hardcoded LIGHT set like login/welcome) since this page should follow the
 // sidebar's dark-mode toggle, same as every other authenticated page.
 
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { API_BASE_URL } from "@/lib/config";
+import { useAuth } from "@/lib/AuthProvider";
 import type {
   ConfidenceLevel,
   EvidenceRef,
@@ -18,13 +18,6 @@ import type {
   KnowledgeItemType,
   MeetingReport,
 } from "@/lib/types";
-
-async function fetchMeetingReport(captureSessionId: string): Promise<MeetingReport> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/meetings/${captureSessionId}/report`);
-  if (res.status === 404) throw new Error("No capture session found with this ID.");
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as MeetingReport;
-}
 
 const sans = "'IBM Plex Sans', sans-serif";
 const serif = "'Source Serif 4', serif";
@@ -238,17 +231,24 @@ function ItemCard({ item }: { item: FlatItem }) {
 
 export default function MeetingReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { authedFetch } = useAuth();
   const [report, setReport] = useState<MeetingReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<KnowledgeItemType | "all">("all");
 
+  const fetchReport = useCallback(async () => {
+    const res = await authedFetch(`/api/v1/meetings/${id}/report`);
+    if (res.status === 404) throw new Error("No capture session found with this ID.");
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return (await res.json()) as MeetingReport;
+  }, [authedFetch, id]);
+
   useEffect(() => {
     let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
-    fetchMeetingReport(id)
+    fetchReport()
       .then((data) => {
         if (!cancelled) setReport(data);
       })
@@ -261,7 +261,7 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [fetchReport]);
 
   if (loading) {
     return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading report…</p>;
@@ -345,6 +345,35 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
       </header>
 
       <main style={{ padding: "28px 32px 64px", maxWidth: 920 }}>
+        {report.executive_summary && (
+          <section
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              padding: "22px 24px",
+              marginBottom: 24,
+            }}
+          >
+            <p
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                color: "var(--text-faint)",
+                margin: "0 0 10px",
+                fontFamily: mono,
+              }}
+            >
+              Executive summary
+            </p>
+            <p style={{ fontFamily: serif, fontSize: 16, lineHeight: 1.65, color: "var(--text)", margin: 0 }}>
+              {report.executive_summary}
+            </p>
+          </section>
+        )}
+
         {allItems.length === 0 && (
           <p
             style={{

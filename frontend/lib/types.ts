@@ -196,6 +196,7 @@ export interface MeetingReport {
   meeting_id: string;
   capture_session_id: string;
   title: string;
+  executive_summary?: string | null; // LLM-generated; null until report stage completes
   occurred_at: string; // ISO date
   coverage_gaps: CoverageGap[];
   engagement: EngagementSummary;

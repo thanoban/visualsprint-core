@@ -24,6 +24,7 @@ from app.auth.dependency import require_session_member
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
+    Confidence,
     CoverageInterval,
     CoverageStatus,
     Keyframe,
@@ -98,6 +99,7 @@ class MeetingReport(BaseModel):
     meeting_id: str
     capture_session_id: str
     title: str
+    executive_summary: str | None = None  # LLM-generated; None until report stage completes
     occurred_at: str
     coverage_gaps: list[CoverageGap] = []
     engagement: EngagementSummary = EngagementSummary(total_talk_time_s=0.0, participants=[])
@@ -207,7 +209,12 @@ async def get_meeting_report(
 
     items = (
         db.query(KnowledgeItem)
-        .filter(KnowledgeItem.capture_session_id == capture_session_id)
+        .filter(
+            KnowledgeItem.capture_session_id == capture_session_id,
+            KnowledgeItem.confidence.in_(
+                [Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED]
+            ),
+        )
         .order_by(KnowledgeItem.created_at)
         .all()
     )
@@ -264,10 +271,15 @@ async def get_meeting_report(
     occurred_at = (meeting.scheduled_start or meeting.created_at).isoformat()
     engagement = _build_engagement(db, capture_session_id)
 
+    # Use the LLM-generated title if the report stage has run; fall back to
+    # the meeting's calendar/platform title.
+    display_title = session.report_title or meeting.title or "Untitled meeting"
+
     return MeetingReport(
         meeting_id=meeting.id,
         capture_session_id=capture_session_id,
-        title=meeting.title or "Untitled meeting",
+        title=display_title,
+        executive_summary=session.report_summary or None,
         occurred_at=occurred_at,
         coverage_gaps=coverage_gaps,
         engagement=engagement,

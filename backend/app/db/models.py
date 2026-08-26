@@ -264,6 +264,9 @@ class CaptureSession(TimestampMixin, Base):
     # normal case, not a failure (docs/03-capture.md: no silent degradation,
     # but honest absence is not degradation).
     video_uri: Mapped[str | None] = mapped_column(String(1000), default=None)
+    # Written by the report pipeline stage after run_report_intelligence.
+    report_title: Mapped[str | None] = mapped_column(String(500), default=None)
+    report_summary: Mapped[str | None] = mapped_column(Text, default=None)
 
     meeting: Mapped[Meeting] = relationship()
 
