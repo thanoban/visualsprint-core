@@ -64,6 +64,10 @@ class ConnectionOut(BaseModel):
     provider: str
     account_label: str
     connected_at: str
+    # Microsoft only -- see CalendarConnection.teams_scope_granted. Always
+    # False for every other provider (OrgConnection rows have no such flag;
+    # a "google" CalendarConnection row is never Teams-relevant).
+    teams_scope_granted: bool = False
 
 
 @router.get("/api/v1/orgs/{org_id}/connections", response_model=list[ConnectionOut])
@@ -77,7 +81,10 @@ async def list_connections(
     org_connections = db.query(OrgConnection).filter(OrgConnection.org_id == org_id).all()
     return [
         ConnectionOut(
-            provider=c.provider, account_label=c.account_email, connected_at=c.created_at.isoformat()
+            provider=c.provider,
+            account_label=c.account_email,
+            connected_at=c.created_at.isoformat(),
+            teams_scope_granted=c.teams_scope_granted,
         )
         for c in calendar_connections
     ] + [
@@ -229,6 +236,8 @@ async def oauth_callback(
             await _finish_zoom_connection(db, org_id, token_set, http_client)
         elif provider == "microsoft":
             await _finish_microsoft_connection(db, org_id, token_set, http_client)
+        elif provider == "microsoft_teams":
+            await _finish_microsoft_teams_connection(db, org_id, token_set, http_client)
         else:
             logger.error("oauth callback: no finish handler for %r", provider)
             return error_redirect
@@ -325,6 +334,36 @@ async def _finish_microsoft_connection(
     if not account_email:
         raise HTTPException(502, "Microsoft Graph /me response did not include mail/userPrincipalName")
     await _upsert_calendar_connection(db, org_id, "microsoft", account_email, token_set)
+
+
+async def _finish_microsoft_teams_connection(
+    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+) -> None:
+    """Incremental-consent completion for Teams Mode A2 capture. Writes to
+    the SAME CalendarConnection row/secret_ref as _finish_microsoft_connection
+    (both are provider="microsoft" -- see microsoft_teams_config's docstring
+    for why overwriting the stored token here is correct, not a collision),
+    then marks teams_scope_granted so the frontend and worker have a durable
+    signal that this org's Microsoft grant actually covers
+    OnlineMeetings.Read.All, not just that Teams calendar sync works."""
+    resp = await http_client.get(
+        GRAPH_ME_URL, headers={"Authorization": f"Bearer {token_set.access_token}"}
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    account_email = data.get("mail") or data.get("userPrincipalName")
+    if not account_email:
+        raise HTTPException(502, "Microsoft Graph /me response did not include mail/userPrincipalName")
+    await _upsert_calendar_connection(db, org_id, "microsoft", account_email, token_set)
+
+    connection = (
+        db.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == "microsoft")
+        .one_or_none()
+    )
+    if connection is not None:
+        connection.teams_scope_granted = True
+        db.commit()
 
 
 async def _finish_github_connection(

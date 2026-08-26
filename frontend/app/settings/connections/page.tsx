@@ -21,6 +21,14 @@ const VENDORS = [
 const sans = "'IBM Plex Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
+// microsoft_teams is a real OAuth provider key (incremental-consent step,
+// app/oauth/providers.py) but isn't its own row in VENDORS -- it writes to
+// the same "microsoft" CalendarConnection. Only its redirect banner needs a
+// human label.
+function friendlyProviderLabel(provider: string): string {
+  return provider === "microsoft_teams" ? "Teams recording" : provider;
+}
+
 function pillButtonStyle(active: boolean): React.CSSProperties {
   return active
     ? {
@@ -108,7 +116,7 @@ export default function ConnectionsPage() {
       window.history.replaceState({}, "", window.location.pathname);
     }
     if (oauthError) {
-      setConnectError(`Failed to connect ${oauthError}. Please try again.`);
+      setConnectError(`Failed to connect ${friendlyProviderLabel(oauthError)}. Please try again.`);
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
@@ -177,7 +185,7 @@ export default function ConnectionsPage() {
               marginBottom: 16,
             }}
           >
-            Connected {justConnected}.
+            Connected {friendlyProviderLabel(justConnected)}.
           </div>
         )}
         {connectError && (
@@ -371,6 +379,48 @@ export default function ConnectionsPage() {
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {vendor.provider === "microsoft" && showConnected && (
+                    connection?.teams_scope_granted ? (
+                      <span
+                        className="font-mono-brand"
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 600,
+                          color: "var(--accent-strong)",
+                          border: "1px solid var(--accent)",
+                          background: "var(--accent-bg)",
+                          padding: "2px 8px",
+                          borderRadius: 4,
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                        }}
+                      >
+                        Teams enabled
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleConnect("microsoft_teams")}
+                        disabled={connecting === "microsoft_teams"}
+                        title="Grants OnlineMeetings.Read.All so VisualSprint can pull Teams cloud recordings/transcripts (Mode A2). Only meaningful for a work/school account -- personal Microsoft accounts don't have this permission."
+                        style={{
+                          fontFamily: sans,
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "var(--text-muted)",
+                          background: "transparent",
+                          border: "1px solid var(--border-strong)",
+                          padding: "8px 16px",
+                          borderRadius: 7,
+                          cursor: connecting === "microsoft_teams" ? "default" : "pointer",
+                          flexShrink: 0,
+                          opacity: connecting === "microsoft_teams" ? 0.6 : 1,
+                        }}
+                      >
+                        {connecting === "microsoft_teams" ? "Redirecting…" : "Enable Teams recording"}
+                      </button>
+                    )
+                  )}
                   {showConnected && (
                     <button
                       type="button"

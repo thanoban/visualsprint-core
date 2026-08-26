@@ -21,6 +21,7 @@ def _settings(**overrides) -> Settings:
         ("linear", "linear_oauth_client_id", "linear_oauth_client_secret"),
         ("zoom", "zoom_oauth_client_id", "zoom_oauth_client_secret"),
         ("microsoft", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
+        ("microsoft_teams", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
     ],
 )
 def test_provider_raises_when_unconfigured(provider, id_field, secret_field):
@@ -40,6 +41,7 @@ def test_provider_raises_when_unconfigured(provider, id_field, secret_field):
         ("linear", "linear_oauth_client_id", "linear_oauth_client_secret"),
         ("zoom", "zoom_oauth_client_id", "zoom_oauth_client_secret"),
         ("microsoft", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
+        ("microsoft_teams", "microsoft_oauth_client_id", "microsoft_oauth_client_secret"),
     ],
 )
 def test_provider_builds_when_configured(provider, id_field, secret_field):
@@ -68,3 +70,27 @@ def test_google_requests_offline_access_so_a_refresh_token_is_issued():
     config = get_provider_config("google", settings)
 
     assert config.extra_authorize_params["access_type"] == "offline"
+
+
+def test_microsoft_base_scope_omits_online_meetings_permission():
+    """OnlineMeetings.Read.All doesn't exist for personal Microsoft accounts
+    -- requesting it in the base connect flow would reject the entire grant
+    for those users, not just degrade Teams capture. It must only ever be
+    requested via the separate microsoft_teams incremental-consent config."""
+    settings = _settings(microsoft_oauth_client_id="cid", microsoft_oauth_client_secret="csecret")
+
+    config = get_provider_config("microsoft", settings)
+
+    assert "OnlineMeetings.Read.All" not in config.scope
+
+
+def test_microsoft_teams_requests_the_online_meetings_scope():
+    settings = _settings(microsoft_oauth_client_id="cid", microsoft_oauth_client_secret="csecret")
+
+    config = get_provider_config("microsoft_teams", settings)
+
+    assert "OnlineMeetings.Read.All" in config.scope
+    # Same app registration as the base microsoft flow -- incremental
+    # consent only works within one app's client_id.
+    assert config.client_id == "cid"
+    assert config.extra_authorize_params.get("prompt") == "consent"

@@ -183,10 +183,44 @@ def microsoft_config(settings: Settings) -> OAuthProviderConfig:
         # personal/consumer Microsoft accounts, so requesting it up front
         # makes Microsoft reject the *entire* grant with invalid_scope for
         # any personal account, not just degrade that one capability.
-        # Teams Mode A2 capture is unavailable until this is requested via a
-        # separate incremental-consent step scoped to work/school accounts
-        # only -- not yet built.
+        # Teams Mode A2 capture needs the separate microsoft_teams_config
+        # incremental-consent step below instead.
         scope="offline_access User.Read Calendars.Read",
+    )
+
+
+def microsoft_teams_config(settings: Settings) -> OAuthProviderConfig:
+    """Incremental consent for Teams Mode A2 capture (teams_adapter.py) --
+    same app registration (same client_id/client_secret) as microsoft_config,
+    requested as a SEPARATE authorize step so a personal-account connect
+    never sees OnlineMeetings.Read.All and never risks the invalid_scope
+    rejection microsoft_config's own comment explains. Microsoft's identity
+    platform records consent per user+app, so a token minted from this
+    second grant legitimately covers every scope ever granted to this app
+    for this user -- the callback (_finish_microsoft_teams_connection in
+    app/api/oauth.py) stores it under the same provider="microsoft"
+    CalendarConnection row/secret_ref, simply replacing the narrower token.
+    Only meaningful for work/school accounts; a personal account that
+    completes this flow anyway just gets a Graph 403 on Teams calls, same
+    non-fatal-degrade shape (TeamsAccessGatedError) as every other optional
+    capability in this codebase -- not a reason to gate the flow itself."""
+    return OAuthProviderConfig(
+        provider="microsoft_teams",
+        client_id=_require(
+            settings.microsoft_oauth_client_id, setting_name="VS_MICROSOFT_OAUTH_CLIENT_ID"
+        ),
+        client_secret=_require(
+            settings.microsoft_oauth_client_secret, setting_name="VS_MICROSOFT_OAUTH_CLIENT_SECRET"
+        ),
+        authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        # Full desired scope set requested again (not just the delta) so the
+        # resulting token set is self-sufficient and directly replaces the
+        # narrower one -- no separate "merge scopes" logic needed anywhere.
+        scope="offline_access User.Read Calendars.Read OnlineMeetings.Read.All",
+        # prompt=consent -- surface the new permission explicitly rather
+        # than silently expanding access on a token refresh.
+        extra_authorize_params={"prompt": "consent"},
     )
 
 
@@ -198,6 +232,7 @@ PROVIDERS = {
     "linear": linear_config,
     "zoom": zoom_config,
     "microsoft": microsoft_config,
+    "microsoft_teams": microsoft_teams_config,
 }
 
 

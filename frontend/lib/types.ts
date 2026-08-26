@@ -512,4 +512,5 @@ export interface ConnectionOut {
   provider: string;
   account_label: string;
   connected_at: string;
+  teams_scope_granted: boolean;
 }

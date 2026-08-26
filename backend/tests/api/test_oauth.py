@@ -636,6 +636,87 @@ def test_callback_falls_back_to_user_principal_name_when_mail_is_null(client, db
     assert connection.account_email == "ops@acme.onmicrosoft.com"
 
 
+def test_callback_grants_teams_scope_onto_the_existing_microsoft_connection(client, db_session):
+    """microsoft_teams is incremental consent, not a separate vendor: it must
+    write to the SAME CalendarConnection row as a prior "microsoft" connect,
+    not create a second one, and flip teams_scope_granted so the frontend/
+    worker know OnlineMeetings.Read.All was actually authorized."""
+    org = _seed_org(db_session)
+
+    def base_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/common/oauth2/v2.0/token":
+            return httpx.Response(
+                200, json={"access_token": "ms-token-1", "refresh_token": "rt-1", "expires_in": 3600}
+            )
+        return httpx.Response(200, json={"mail": "ops@acme.test"})
+
+    app.dependency_overrides[get_http_client] = _override_http_client(base_handler)
+    try:
+        state = sign_state(org_id=org.id, provider="microsoft", secret="test-signing-secret")
+        client.get(
+            "/api/v1/oauth/microsoft/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    base_connection = (
+        db_session.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org.id, CalendarConnection.provider == "microsoft")
+        .one()
+    )
+    assert base_connection.teams_scope_granted is False
+
+    def teams_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/common/oauth2/v2.0/token":
+            return httpx.Response(
+                200, json={"access_token": "ms-token-2", "refresh_token": "rt-2", "expires_in": 3600}
+            )
+        return httpx.Response(200, json={"mail": "ops@acme.test"})
+
+    app.dependency_overrides[get_http_client] = _override_http_client(teams_handler)
+    try:
+        state = sign_state(org_id=org.id, provider="microsoft_teams", secret="test-signing-secret")
+        resp = client.get(
+            "/api/v1/oauth/microsoft_teams/callback", params={"code": "c", "state": state},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_http_client, None)
+
+    assert resp.status_code in (302, 307)
+    connections = (
+        db_session.query(CalendarConnection)
+        .filter(CalendarConnection.org_id == org.id, CalendarConnection.provider == "microsoft")
+        .all()
+    )
+    assert len(connections) == 1  # not a duplicate row
+    db_session.refresh(base_connection)
+    assert base_connection.teams_scope_granted is True
+    assert base_connection.id == connections[0].id
+
+
+def test_list_connections_surfaces_teams_scope_granted(client, db_session):
+    org = _seed_org(db_session)
+    db_session.add(
+        CalendarConnection(
+            org_id=org.id,
+            provider="microsoft",
+            account_email="ops@acme.test",
+            secret_ref="oauth/microsoft/x",
+            teams_scope_granted=True,
+        )
+    )
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/connections")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    microsoft_row = next(c for c in body if c["provider"] == "microsoft")
+    assert microsoft_row["teams_scope_granted"] is True
+
+
 def test_google_and_microsoft_connections_coexist_for_the_same_org(client, db_session):
     """CalendarConnection's provider column distinguishes them -- an org
     connecting both must get two rows, not one overwriting the other."""

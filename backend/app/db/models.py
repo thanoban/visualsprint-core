@@ -152,6 +152,15 @@ class CalendarConnection(TimestampMixin, Base):
     # OAuth tokens live in a secret store, not here; this row holds the reference.
     secret_ref: Mapped[str] = mapped_column(String(255))
     watch_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Microsoft only: set once the org has completed the separate
+    # incremental-consent step (provider="microsoft_teams" in
+    # app/oauth/providers.py) that grants OnlineMeetings.Read.All --
+    # requesting that scope in the base "microsoft" connect flow would
+    # reject the entire grant for personal Microsoft accounts, so it's
+    # requested here instead, only for orgs that explicitly opt in. False
+    # for every "google" row; irrelevant there but simpler than a second
+    # nullable-vs-not split for one platform-specific flag.
+    teams_scope_granted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class OrgConnection(TimestampMixin, Base):
