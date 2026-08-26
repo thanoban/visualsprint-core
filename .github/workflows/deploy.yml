@@ -32,9 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Keep the authentication action current: v3 runs on the supported
+      # Node 24 runtime and performs the current GitHub OIDC/WIF exchange.
+      # This remains keyless; never replace it with a service-account key.
       - id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
@@ -65,9 +69,13 @@ jobs:
         run: |
           BUCKET="gs://visualsprint-blobs-${PROJECT_ID}"
           # storage.objectAdmin: agents + bot read/write recordings and screenshots.
-          gsutil iam ch \
-            "serviceAccount:visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com:roles/storage.objectAdmin" \
-            "${BUCKET}"
+          # gsutil does not consistently consume WIF credentials exported by
+          # google-github-actions/auth. gcloud storage does, so this stays
+          # keyless and works on clean GitHub-hosted runners.
+          gcloud storage buckets add-iam-policy-binding "${BUCKET}" \
+            --member="serviceAccount:visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/storage.objectAdmin" \
+            --quiet
           # serviceAccountTokenCreator on itself: required for GCS V4 signed
           # URLs without a local key file (the SignBlob IAM API signs via ADC).
           gcloud iam service-accounts add-iam-policy-binding \
