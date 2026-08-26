@@ -54,84 +54,76 @@ async function closeOffscreenDocument() {
 
 // ─── Core start/stop ─────────────────────────────────────────────────────────
 
-async function startRecording(tabId, { platform, url, title }) {
-  const orgId = await getOrgId();
-  if (!orgId) {
-    console.warn("[VS] cannot start recording: no org_id stored (sign in via popup)");
-    return;
-  }
+// In-memory guard: prevents a second startRecording call during the async setup
+// window (content script polls every 3 s). Lost on SW restart, but setup
+// completes in well under 3 s so the race window is negligible.
+const _settingUp = new Set();
 
-  const recordings = await getActiveRecordings();
-  if (recordings[tabId]?.sessionId && !recordings[tabId]?.finalized) {
-    console.warn("[VS] already recording tab", tabId);
-    return;
-  }
-
-  let sessionId;
+// IMPORTANT: streamIdPromise MUST be created synchronously in the onMessage
+// handler (before any await). Chrome's "extension invoked for this tab"
+// activation window — opened when the content-script message arrives —
+// closes after the first await. Calling getMediaStreamId after that window
+// closes produces "Extension has not been invoked for the current page."
+async function startRecording(tabId, { platform, url, title }, streamIdPromise) {
+  if (_settingUp.has(tabId)) return;
+  _settingUp.add(tabId);
   try {
-    const resp = await createSession(orgId, { title, meetingUrl: url, platform });
-    sessionId = resp.session_id;
-  } catch (e) {
-    console.error("[VS] createSession failed:", e);
-    return;
-  }
-
-  // Reserve this tab immediately so the next 3-second detection tick doesn't
-  // create a duplicate session while tabCapture or offscreen setup is in progress.
-  recordings[tabId] = {
-    sessionId,
-    orgId,
-    chunkSeq: 0,
-    keyframeSeq: 0,
-    platform,
-    title,
-    startedAt: Date.now(),
-    finalized: false,
-  };
-  await setActiveRecordings(recordings);
-
-  // tabCapture requires the target tab to be the active tab in a focused window.
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (!tab.active) await chrome.tabs.update(tabId, { active: true });
-    await chrome.windows.update(tab.windowId, { focused: true });
-  } catch (_) {}
-
-  // Tab capture → offscreen doc
-  let streamId;
-  try {
-    streamId = await new Promise((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(id);
-      });
-    });
-  } catch (e) {
-    const errMsg = e?.message ?? String(e);
-    console.error("[VS] tabCapture.getMediaStreamId failed:", errMsg);
-    // Mark finalized so further detection ticks don't keep retrying.
-    const cur = await getActiveRecordings();
-    if (cur[tabId]) {
-      cur[tabId] = { ...cur[tabId], finalized: true };
-      await setActiveRecordings(cur);
+    const orgId = await getOrgId();
+    if (!orgId) {
+      console.warn("[VS] cannot start recording: no org_id stored (sign in via popup)");
+      return;
     }
-    chrome.notifications.create("vs_capture_error", {
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
-      title: "VisualSprint: Audio capture failed",
-      message: "Tab audio could not start: " + errMsg + ". Refresh the meeting tab and try again.",
-      priority: 2,
-    });
-    return;
+
+    const recordings = await getActiveRecordings();
+    if (recordings[tabId]?.sessionId && !recordings[tabId]?.finalized) {
+      console.warn("[VS] already recording tab", tabId);
+      return;
+    }
+
+    // Run createSession and tabCapture resolution in parallel — streamIdPromise
+    // was already started synchronously before this function was awaited.
+    let sessionId, streamId;
+    try {
+      const [resp, sid] = await Promise.all([
+        createSession(orgId, { title, meetingUrl: url, platform }),
+        streamIdPromise,
+      ]);
+      sessionId = resp.session_id;
+      streamId = sid;
+    } catch (e) {
+      const errMsg = e?.message ?? String(e);
+      console.error("[VS] capture setup failed:", errMsg);
+      chrome.notifications.create("vs_capture_error", {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+        title: "VisualSprint: Capture failed",
+        message: errMsg,
+        priority: 2,
+      });
+      return;
+    }
+
+    // Both session and stream ready — persist state and begin recording.
+    recordings[tabId] = {
+      sessionId,
+      orgId,
+      chunkSeq: 0,
+      keyframeSeq: 0,
+      platform,
+      title,
+      startedAt: Date.now(),
+      finalized: false,
+    };
+    await setActiveRecordings(recordings);
+
+    await ensureOffscreenDocument();
+    chrome.runtime.sendMessage({ type: "START_CAPTURE", streamId, sessionId });
+
+    _startKeyframeLoop(tabId);
+    console.info("[VS] recording started", { tabId, sessionId, platform });
+  } finally {
+    _settingUp.delete(tabId);
   }
-
-  await ensureOffscreenDocument();
-  chrome.runtime.sendMessage({ type: "START_CAPTURE", streamId, sessionId });
-
-  // Start keyframe loop
-  _startKeyframeLoop(tabId);
-
-  console.info("[VS] recording started", { tabId, sessionId, platform });
 }
 
 async function stopRecording(tabId, roster = []) {
@@ -220,7 +212,22 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 
   switch (msg.type) {
     case "MEETING_STARTED":
-      if (tabId) startRecording(tabId, msg);
+      if (tabId) {
+        // Call getMediaStreamId SYNCHRONOUSLY here — before any await — so
+        // Chrome's "extension invoked for this tab" activation window (opened
+        // when the content-script message arrived from meet.google.com) is
+        // still open. The window closes after the first await boundary.
+        const streamIdPromise = new Promise((resolve, reject) => {
+          chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(id);
+            }
+          });
+        });
+        startRecording(tabId, msg, streamIdPromise);
+      }
       break;
 
     case "MEETING_ENDED":

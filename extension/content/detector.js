@@ -122,33 +122,51 @@
       .filter(Boolean);
   }
 
+  // Wrapper that stops the poll if the extension context is invalidated
+  // (happens when the extension reloads while a Meet tab is open).
+  function safeSend(msg) {
+    try {
+      chrome.runtime.sendMessage(msg);
+    } catch (e) {
+      if (e?.message?.includes("Extension context invalidated")) {
+        clearInterval(checkInterval);
+      }
+    }
+  }
+
   function checkMeetingState() {
-    const p = detectPlatform();
-    if (!p) {
-      if (inMeeting) sendEnded();
-      return;
-    }
-    platform = p;
+    try {
+      const p = detectPlatform();
+      if (!p) {
+        if (inMeeting) sendEnded();
+        return;
+      }
+      platform = p;
 
-    // Check if meeting ended
-    const endedEl = document.querySelector(ENDED_SELECTORS[platform]);
-    if (endedEl && inMeeting) {
-      sendEnded();
-      return;
-    }
+      // Check if meeting ended
+      const endedEl = document.querySelector(ENDED_SELECTORS[platform]);
+      if (endedEl && inMeeting) {
+        sendEnded();
+        return;
+      }
 
-    // Check if we just entered
-    const activeEl = document.querySelector(IN_MEETING_SELECTORS[platform]);
-    if (activeEl && !inMeeting) {
-      inMeeting = true;
-      meetingTitle = document.title.replace(/ – Google Meet$| – Zoom$/, "").trim();
-      chrome.runtime.sendMessage({
-        type: "MEETING_STARTED",
-        platform,
-        url: location.href,
-        title: meetingTitle,
-      });
-      injectConsentMessage();
+      // Check if we just entered
+      const activeEl = document.querySelector(IN_MEETING_SELECTORS[platform]);
+      if (activeEl && !inMeeting) {
+        inMeeting = true;
+        meetingTitle = document.title.replace(/ – Google Meet$| – Zoom$/, "").trim();
+        safeSend({
+          type: "MEETING_STARTED",
+          platform,
+          url: location.href,
+          title: meetingTitle,
+        });
+        injectConsentMessage();
+      }
+    } catch (e) {
+      if (e?.message?.includes("Extension context invalidated")) {
+        clearInterval(checkInterval);
+      }
     }
   }
 
@@ -156,7 +174,7 @@
     inMeeting = false;
     consentSent = false;
     sessionStorage.removeItem(VS_CONSENT_KEY);
-    chrome.runtime.sendMessage({
+    safeSend({
       type: "MEETING_ENDED",
       platform,
       roster: getParticipants(),
