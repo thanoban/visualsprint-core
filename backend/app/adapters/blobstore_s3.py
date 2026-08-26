@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
 from app.config import get_settings
+from app.interfaces.blobstore import BlobStore
 
 SCHEME = "blob://"
 
@@ -149,7 +150,7 @@ class S3BlobStore:
         )
 
 
-def get_blobstore():
+def get_blobstore() -> BlobStore:
     """Factory honouring settings.blob_backend."""
     s = get_settings()
     if s.blob_backend == "s3":

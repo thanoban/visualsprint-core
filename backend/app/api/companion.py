@@ -125,7 +125,7 @@ async def upload_chunk(
     data: UploadFile = File(...),
     db: Session = Depends(get_db),
     session: CaptureSession = Depends(require_session_member),
-) -> dict:
+) -> dict[str, object]:
     if session.mode != "C":
         raise HTTPException(400, "not a companion session")
     if seq < 0 or seq > MAX_CHUNKS:
@@ -156,7 +156,7 @@ async def upload_keyframe(
     data: UploadFile = File(...),
     db: Session = Depends(get_db),
     session: CaptureSession = Depends(require_session_member),
-) -> dict:
+) -> dict[str, object]:
     if session.mode != "C":
         raise HTTPException(400, "not a companion session")
 

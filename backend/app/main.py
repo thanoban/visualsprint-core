@@ -7,9 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.actions import router as actions_router
-from app.api.companion import router as companion_router
 from app.api.capture import router as capture_router
 from app.api.chat import router as chat_router
+from app.api.companion import router as companion_router
 from app.api.corrections import router as corrections_router
 from app.api.data_rights import router as data_rights_router
 from app.api.leads import router as leads_router
