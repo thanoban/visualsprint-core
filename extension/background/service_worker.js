@@ -1,31 +1,28 @@
 /**
  * Background service worker — the brain of the companion extension.
  *
- * Responsibilities:
- *  - Listen for MEETING_STARTED / MEETING_ENDED from content scripts
- *  - Manage one CaptureSession per meeting tab
- *  - Forward audio chunks from the offscreen document to the backend
- *  - Capture tab screenshots (keyframes) every 30 seconds
- *  - Call finalize on meeting end or tab close
- *  - Handle service worker restarts (recover state from chrome.storage.session)
+ * Tab-capture architecture (MV3):
+ *   chrome.tabCapture.getMediaStreamId requires user invocation. Content-script
+ *   messages do NOT count. The only reliable approach is chrome.action.onClicked,
+ *   which fires when the user clicks the icon AND no popup is set for that tab.
  *
- * Tab-capture architecture (MV3 constraint):
- *  chrome.tabCapture.getMediaStreamId is blocked from a service worker unless
- *  the extension was "invoked" for that tab by a real user gesture (clicking
- *  the extension icon / popup). Content-script messages do NOT count.
- *  Solution: on MEETING_STARTED, store a pending-meeting record and badge the
- *  icon. The popup calls getMediaStreamId (popup IS a user-gesture context) and
- *  sends STREAM_ID_READY back. This SW then sets up the session + offscreen doc.
+ *   Flow:
+ *     1. MEETING_STARTED  → store pending record, amber badge, disable popup for tab
+ *     2. User clicks icon → onClicked fires in SW (user-gesture invocation)
+ *     3. SW calls getMediaStreamId, re-enables popup, starts recording
+ *     4. MEETING_ENDED / tab close → finalize, clear state, re-enable popup
  */
 
 import { createSession, uploadChunk, uploadKeyframe, finalizeSession, getEscalations } from "../lib/api.js";
+import { getAuthHeaders } from "../lib/auth.js";
+import { VS_API_BASE_URL } from "../lib/config.js";
 
 console.info("[VS] service worker loaded");
 
-// ─── State ───────────────────────────────────────────────────────────────────
+// ─── Storage helpers ──────────────────────────────────────────────────────────
 
-const ACTIVE_KEY   = "vs_active_recordings";
-const PENDING_KEY  = "vs_pending_meetings";   // meeting detected, not yet recording
+const ACTIVE_KEY  = "vs_active_recordings";
+const PENDING_KEY = "vs_pending_meetings";
 
 async function getActiveRecordings() {
   const r = await chrome.storage.session.get(ACTIVE_KEY);
@@ -41,9 +38,47 @@ async function getPendingMeetings() {
 async function setPendingMeetings(map) {
   await chrome.storage.session.set({ [PENDING_KEY]: map });
 }
-async function getOrgId() {
+
+// Reads cached org_id; if missing, fetches it from /api/v1/me and caches it.
+async function ensureOrgId() {
   const r = await chrome.storage.local.get("vs_org_id");
-  return r.vs_org_id ?? null;
+  if (r.vs_org_id) return r.vs_org_id;
+  const headers = await getAuthHeaders().catch(() => null);
+  if (!headers) return null;
+  try {
+    const resp = await fetch(`${VS_API_BASE_URL}/api/v1/me`, {
+      headers: { Authorization: headers.Authorization },
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const orgId = data.org?.id;
+    if (orgId) await chrome.storage.local.set({ vs_org_id: orgId });
+    return orgId ?? null;
+  } catch { return null; }
+}
+
+// ─── Popup enable/disable per tab ─────────────────────────────────────────────
+
+const POPUP_URL = "popup/popup.html";
+
+function enablePopup(tabId) {
+  chrome.action.setPopup({ tabId, popup: POPUP_URL }).catch(() => {});
+}
+function disablePopup(tabId) {
+  // Disabling the popup for this tab makes clicks fire chrome.action.onClicked
+  // in the service worker instead of opening the popup window.
+  chrome.action.setPopup({ tabId, popup: "" }).catch(() => {});
+}
+
+// ─── Badge helpers ────────────────────────────────────────────────────────────
+
+function setBadge(text, color, tabId) {
+  const opts = tabId ? { text, tabId } : { text };
+  chrome.action.setBadgeText(opts).catch(() => {});
+  if (color) {
+    const copts = tabId ? { color, tabId } : { color };
+    chrome.action.setBadgeBackgroundColor(copts).catch(() => {});
+  }
 }
 
 // ─── Offscreen document ───────────────────────────────────────────────────────
@@ -64,35 +99,83 @@ async function closeOffscreenDocument() {
   await chrome.offscreen.closeDocument().catch(() => {});
 }
 
-// ─── Badge helpers ────────────────────────────────────────────────────────────
+// ─── User clicks icon (popup disabled for this tab) ───────────────────────────
+//
+// chrome.action.onClicked fires only when no popup is set for the active tab.
+// We disable the popup when a meeting is pending so this handler can call
+// chrome.tabCapture.getMediaStreamId — which requires user invocation and IS
+// satisfied by this event.
 
-function setBadge(text, color, tabId) {
-  const opts = tabId ? { text, tabId } : { text };
-  chrome.action.setBadgeText(opts).catch(() => {});
-  if (color) {
-    const copts = tabId ? { color, tabId } : { color };
-    chrome.action.setBadgeBackgroundColor(copts).catch(() => {});
+chrome.action.onClicked.addListener(async (tab) => {
+  const tabId = tab.id;
+  if (!tabId) return;
+
+  const pending = await getPendingMeetings();
+  const meeting = pending[tabId];
+  if (!meeting) {
+    // Unexpected — restore popup so future clicks work normally.
+    enablePopup(tabId);
+    return;
   }
-}
+
+  // Get the stream ID — valid here because onClicked is a user invocation.
+  let streamId;
+  try {
+    streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(id);
+        }
+      });
+    });
+  } catch (e) {
+    console.error("[VS] tabCapture.getMediaStreamId failed:", e.message);
+    enablePopup(tabId);
+    setBadge("!", "#EF4444", tabId);
+    chrome.notifications.create("vs_capture_error_tab", {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: "VisualSprint: Audio capture failed",
+      message: e.message,
+      priority: 2,
+    });
+    return;
+  }
+
+  // Re-enable popup BEFORE startRecording so any subsequent icon click shows status.
+  enablePopup(tabId);
+  delete pending[tabId];
+  await setPendingMeetings(pending);
+  await startRecording(tabId, meeting, streamId);
+});
 
 // ─── Core start/stop ─────────────────────────────────────────────────────────
 
 const _settingUp = new Set();
 
-// streamId arrives from the popup (the only MV3-safe context for tabCapture).
 async function startRecording(tabId, { platform, url, title }, streamId) {
   if (_settingUp.has(tabId)) return;
   _settingUp.add(tabId);
   try {
-    const orgId = await getOrgId();
-    if (!orgId) {
-      console.warn("[VS] cannot start recording: no org_id stored");
-      return;
-    }
-
     const recordings = await getActiveRecordings();
     if (recordings[tabId]?.sessionId && !recordings[tabId]?.finalized) {
       console.warn("[VS] already recording tab", tabId);
+      return;
+    }
+
+    const orgId = await ensureOrgId();
+    if (!orgId) {
+      console.warn("[VS] cannot start recording: not signed in");
+      setBadge("!", "#EF4444", tabId);
+      chrome.notifications.create("vs_signin_required", {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+        title: "VisualSprint: Sign-in required",
+        message: "Open the VisualSprint icon and sign in to start capturing meetings.",
+        priority: 2,
+      });
       return;
     }
 
@@ -103,7 +186,7 @@ async function startRecording(tabId, { platform, url, title }, streamId) {
     } catch (e) {
       const errMsg = e?.message ?? String(e);
       console.error("[VS] createSession failed:", errMsg);
-      chrome.notifications.create("vs_capture_error", {
+      chrome.notifications.create("vs_session_error", {
         type: "basic",
         iconUrl: chrome.runtime.getURL("icons/icon128.png"),
         title: "VisualSprint: Session creation failed",
@@ -157,10 +240,11 @@ async function stopRecording(tabId, roster = []) {
     console.error("[VS] finalize failed:", e);
   }
 
-  recordings[tabId] = { ...latestRec, finalized: true };
-  await setActiveRecordings(recordings);
+  latest[tabId] = { ...latestRec, finalized: true };
+  await setActiveRecordings(latest);
   await closeOffscreenDocument();
   setBadge("", null, tabId);
+  enablePopup(tabId);
 }
 
 // ─── Keyframe loop ───────────────────────────────────────────────────────────
@@ -204,8 +288,9 @@ async function _captureKeyframe(tabId) {
 
   try {
     await uploadKeyframe(rec.orgId, rec.sessionId, seq, timestampS, bytes);
-    recordings[tabId] = { ...rec, keyframeSeq: seq + 1 };
-    await setActiveRecordings(recordings);
+    const updated = await getActiveRecordings();
+    updated[tabId] = { ...updated[tabId], keyframeSeq: seq + 1 };
+    await setActiveRecordings(updated);
   } catch (e) {
     console.warn("[VS] keyframe upload failed:", e);
   }
@@ -218,50 +303,33 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
 
   switch (msg.type) {
 
-    // Content script detected a meeting. Store as "pending" and badge the icon
-    // so the user knows to click it. The popup will call getMediaStreamId (the
-    // only MV3-permitted context for tabCapture) and send STREAM_ID_READY.
+    // Content script detected a meeting. Store as pending, badge the icon,
+    // and disable the popup for this tab so clicking fires onClicked (the
+    // only MV3-safe context for chrome.tabCapture.getMediaStreamId).
     case "MEETING_STARTED":
       if (tabId) {
         (async () => {
-          const pending = await getPendingMeetings();
           const recordings = await getActiveRecordings();
-          // Don't overwrite an active recording
           if (recordings[tabId]?.sessionId && !recordings[tabId]?.finalized) return;
+          const pending = await getPendingMeetings();
           pending[tabId] = { platform: msg.platform, url: msg.url, title: msg.title };
           await setPendingMeetings(pending);
-          setBadge("●", "#F59E0B", tabId); // amber = waiting for user to click icon
+          setBadge("●", "#F59E0B", tabId); // amber = click icon to start
+          disablePopup(tabId);
+          console.info("[VS] meeting detected, waiting for icon click", { tabId, platform: msg.platform });
         })();
       }
       break;
 
-    // Popup opened (user gesture) → popup called getMediaStreamId → sends here.
-    case "STREAM_ID_READY": {
-      const { tabId: streamTabId, streamId } = msg;
-      if (!streamTabId || !streamId) break;
-      (async () => {
-        const pending = await getPendingMeetings();
-        const meeting = pending[streamTabId];
-        if (!meeting) {
-          console.warn("[VS] STREAM_ID_READY for unknown tab", streamTabId);
-          return;
-        }
-        delete pending[streamTabId];
-        await setPendingMeetings(pending);
-        await startRecording(streamTabId, meeting, streamId);
-      })();
-      break;
-    }
-
     case "MEETING_ENDED":
       if (tabId) {
-        // Clear pending if meeting ended before user clicked icon
         (async () => {
           const pending = await getPendingMeetings();
           if (pending[tabId]) {
             delete pending[tabId];
             await setPendingMeetings(pending);
             setBadge("", null, tabId);
+            enablePopup(tabId);
           }
         })();
         stopRecording(tabId, msg.roster ?? []);
@@ -272,26 +340,20 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       _handleAudioChunk(msg);
       break;
 
-    case "GET_STATUS":
-      getActiveRecordings().then((r) => {
-        const rec = tabId ? r[tabId] : null;
-        chrome.runtime.sendMessage({ type: "STATUS_RESPONSE", recording: rec });
-      });
-      break;
-
-    case "CONSENT_INJECTED":
-      if (msg.ok) {
-        console.info("[VS] consent notice posted to meeting chat");
-      } else {
-        console.warn("[VS] consent chat injection failed (DB-level record still written):", msg.error);
-      }
-      break;
-
     case "STOP_REQUESTED": {
       const stopTabId = msg.tabId ?? tabId;
       if (stopTabId) stopRecording(stopTabId, []);
       break;
     }
+
+    case "CONSENT_INJECTED":
+      if (msg.ok) {
+        console.info("[VS] consent notice posted to meeting chat");
+      } else {
+        // Non-fatal — DB-level consent record is written regardless.
+        console.info("[VS] consent chat injection skipped (chat panel not available):", msg.error);
+      }
+      break;
   }
 });
 
@@ -310,9 +372,10 @@ async function _handleAudioChunk(msg) {
       ? msg.chunk
       : new Uint8Array(msg.chunk);
     await uploadChunk(rec.orgId, rec.sessionId, msg.seq, chunkBytes);
-    if (msg.seq + 1 > rec.chunkSeq) {
-      recordings[tabId] = { ...rec, chunkSeq: msg.seq + 1 };
-      await setActiveRecordings(recordings);
+    const updated = await getActiveRecordings();
+    if (msg.seq + 1 > (updated[tabId]?.chunkSeq ?? 0)) {
+      updated[tabId] = { ...updated[tabId], chunkSeq: msg.seq + 1 };
+      await setActiveRecordings(updated);
     }
   } catch (e) {
     console.error("[VS] chunk upload failed (seq", msg.seq, "):", e);
@@ -325,21 +388,16 @@ const ESCALATION_ALARM = "vs_escalation_poll";
 const SEEN_ESCALATIONS_KEY = "vs_seen_escalations";
 
 chrome.alarms.create(ESCALATION_ALARM, { periodInMinutes: 1 });
-
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ESCALATION_ALARM) checkEscalations();
 });
 
 async function checkEscalations() {
-  const orgId = await getOrgId();
+  const r = await chrome.storage.local.get("vs_org_id");
+  const orgId = r.vs_org_id;
   if (!orgId) return;
-
   let resp;
-  try {
-    resp = await getEscalations(orgId);
-  } catch (e) {
-    return;
-  }
+  try { resp = await getEscalations(orgId); } catch { return; }
 
   const seenStore = await chrome.storage.local.get(SEEN_ESCALATIONS_KEY);
   const seen = new Set(seenStore[SEEN_ESCALATIONS_KEY] ?? []);
@@ -352,7 +410,7 @@ async function checkEscalations() {
       type: "basic",
       iconUrl: chrome.runtime.getURL("icons/icon128.png"),
       title: "Meeting bot blocked in lobby",
-      message: `"${esc.title}" — the automated bot couldn't get in. Click to capture from your browser instead.`,
+      message: `"${esc.title}" — the bot couldn't get in. Click to capture from your browser instead.`,
       priority: 2,
     });
     await chrome.storage.session.set({
@@ -370,7 +428,6 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   const url = stored[key];
   chrome.notifications.clear(notificationId);
   if (!url) return;
-
   try {
     const tabs = await chrome.tabs.query({ url: `${url}*` });
     if (tabs.length > 0) {
@@ -387,13 +444,11 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
 // ─── Tab close → auto-finalize ────────────────────────────────────────────────
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  // Clear any pending-meeting state for the closed tab
   const pending = await getPendingMeetings();
   if (pending[tabId]) {
     delete pending[tabId];
     await setPendingMeetings(pending);
   }
-
   const recordings = await getActiveRecordings();
   const rec = recordings[tabId];
   if (rec && !rec.finalized) {
@@ -418,8 +473,8 @@ chrome.runtime.onStartup.addListener(async () => {
       const latestRec = latest[tabId];
       if (latestRec && !latestRec.finalized) {
         await finalizeSession(rec.orgId, rec.sessionId, rec.chunkSeq, []).catch(console.error);
-        recordings[tabId] = { ...latestRec, finalized: true };
-        await setActiveRecordings(recordings);
+        latest[tabId] = { ...latestRec, finalized: true };
+        await setActiveRecordings(latest);
       }
     }
   }
