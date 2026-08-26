@@ -43,7 +43,10 @@
   let inMeeting = false;
   let meetingTitle = "";
   let checkInterval = null;
-  let consentSent = false;
+  // Use sessionStorage (persists across Meet's same-tab SPA URL changes) so
+  // we don't re-attempt consent injection on every micro-navigation.
+  const VS_CONSENT_KEY = "vs_consent_sent";
+  let consentSent = sessionStorage.getItem(VS_CONSENT_KEY) === "1";
 
   const CONSENT_MESSAGE =
     "VisualSprint is recording this meeting for notes and transcript. " +
@@ -58,18 +61,38 @@
   async function injectConsentMessage() {
     if (platform !== "meet" || consentSent) return;
     consentSent = true;
+    sessionStorage.setItem(VS_CONSENT_KEY, "1");
+
+    // Wait for Meet's in-call UI to fully render before probing the DOM.
+    await new Promise((r) => setTimeout(r, 2000));
+
     try {
+      // Chat toggle — Meet uses several different aria-labels across versions.
       const chatToggle = document.querySelector(
-        'button[aria-label="Chat with everyone"], button[aria-label="Show everyone chat"]'
+        'button[aria-label="Chat with everyone"],'
+        + 'button[aria-label="Show everyone chat"],'
+        + 'button[data-tooltip="Chat with everyone"],'
+        + 'button[jsname="CQylAd"]'
       );
       if (chatToggle && chatToggle.getAttribute("aria-pressed") !== "true") {
         chatToggle.click();
-        await new Promise((r) => setTimeout(r, 800)); // panel opens with animation
+        await new Promise((r) => setTimeout(r, 1200));
       }
 
-      const input = document.querySelector(
-        'textarea[aria-label="Send a message"], textarea[placeholder="Send a message"]'
+      // Chat textarea — try several selectors; retry once after another second.
+      let input = document.querySelector(
+        'textarea[aria-label="Send a message"],'
+        + 'textarea[placeholder="Send a message"],'
+        + 'textarea[jsname="YPqjbf"]'
       );
+      if (!input) {
+        await new Promise((r) => setTimeout(r, 1000));
+        input = document.querySelector(
+          'textarea[aria-label="Send a message"],'
+          + 'textarea[placeholder="Send a message"],'
+          + 'textarea[jsname="YPqjbf"]'
+        );
+      }
       if (!input) throw new Error("chat input not found");
 
       const nativeSetter = Object.getOwnPropertyDescriptor(
@@ -86,7 +109,7 @@
 
       chrome.runtime.sendMessage({ type: "CONSENT_INJECTED", ok: true });
     } catch (e) {
-      console.warn("[VS] consent chat injection failed:", e.message);
+      // Non-fatal — DB-level consent record is written regardless.
       chrome.runtime.sendMessage({ type: "CONSENT_INJECTED", ok: false, error: e.message });
     }
   }
@@ -132,6 +155,7 @@
   function sendEnded() {
     inMeeting = false;
     consentSent = false;
+    sessionStorage.removeItem(VS_CONSENT_KEY);
     chrome.runtime.sendMessage({
       type: "MEETING_ENDED",
       platform,

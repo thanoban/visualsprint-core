@@ -76,24 +76,8 @@ async function startRecording(tabId, { platform, url, title }) {
     return;
   }
 
-  // Tab capture → offscreen doc
-  let streamId;
-  try {
-    streamId = await new Promise((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(id);
-      });
-    });
-  } catch (e) {
-    console.error("[VS] tabCapture.getMediaStreamId failed:", e);
-    return;
-  }
-
-  await ensureOffscreenDocument();
-  chrome.runtime.sendMessage({ type: "START_CAPTURE", streamId, sessionId });
-
-  // Persist state (title stored so popup can display meeting name)
+  // Reserve this tab immediately so the next 3-second detection tick doesn't
+  // create a duplicate session while tabCapture or offscreen setup is in progress.
   recordings[tabId] = {
     sessionId,
     orgId,
@@ -105,6 +89,44 @@ async function startRecording(tabId, { platform, url, title }) {
     finalized: false,
   };
   await setActiveRecordings(recordings);
+
+  // tabCapture requires the target tab to be the active tab in a focused window.
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.active) await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (_) {}
+
+  // Tab capture → offscreen doc
+  let streamId;
+  try {
+    streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(id);
+      });
+    });
+  } catch (e) {
+    const errMsg = e?.message ?? String(e);
+    console.error("[VS] tabCapture.getMediaStreamId failed:", errMsg);
+    // Mark finalized so further detection ticks don't keep retrying.
+    const cur = await getActiveRecordings();
+    if (cur[tabId]) {
+      cur[tabId] = { ...cur[tabId], finalized: true };
+      await setActiveRecordings(cur);
+    }
+    chrome.notifications.create("vs_capture_error", {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+      title: "VisualSprint: Audio capture failed",
+      message: "Tab audio could not start: " + errMsg + ". Refresh the meeting tab and try again.",
+      priority: 2,
+    });
+    return;
+  }
+
+  await ensureOffscreenDocument();
+  chrome.runtime.sendMessage({ type: "START_CAPTURE", streamId, sessionId });
 
   // Start keyframe loop
   _startKeyframeLoop(tabId);
