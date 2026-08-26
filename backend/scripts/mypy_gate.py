@@ -50,7 +50,7 @@ STRICT_PATHS = ["app/interfaces", "app/agents", "app/db", "app/auth"]
 # of the pipeline dispatch contract, not a drive-by fix. Raising the baseline
 # here rather than rushing that refactor in unrelated to why this file was
 # touched today.
-BASELINE_ERRORS = 383  # 2026-08-26: +2 for delete_raw_audio/delete_raw_video calls in worker.py
+BASELINE_ERRORS = 358  # 2026-08-26: locked gain from CI run (383→358)
 # stage handlers — same pre-existing db: object pattern as the 373→381 raise above.
 
 _COUNT = re.compile(r"Found (\d+) error", re.MULTILINE)
