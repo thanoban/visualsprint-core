@@ -230,7 +230,11 @@ jobs:
           BOT_SECRETS="${BOT_SECRETS},VS_GOOGLE_OAUTH_CLIENT_SECRET=visualsprint-google-oauth-client-secret:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_ID=visualsprint-microsoft-oauth-client-id:latest"
           BOT_SECRETS="${BOT_SECRETS},VS_MICROSOFT_OAUTH_CLIENT_SECRET=visualsprint-microsoft-oauth-client-secret:latest"
-          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID}"
+          # Guest mode is the permanent production path for Meet bots.  It
+          # never reads a Google browser-cookie secret; browser sessions are
+          # intentionally not an operational dependency because Google can
+          # revoke them and OAuth refresh tokens cannot renew them.
+          BOT_ENV="VS_SECRETSTORE_BACKEND=gcp,VS_BLOB_BACKEND=gcs,VS_GCS_BUCKET=visualsprint-blobs-${PROJECT_ID},VS_BOT_GOOGLE_JOIN_MODE=guest"
           BOT_ARGS="--image=${REGISTRY}/bot:${{ github.sha }}"
           BOT_ARGS="${BOT_ARGS} --region=${REGION} --project=${PROJECT_ID}"
           BOT_ARGS="${BOT_ARGS} --service-account=visualsprint-backend-service-a@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -257,27 +261,6 @@ jobs:
           else
             # shellcheck disable=SC2086
             gcloud run jobs create visualsprint-bot ${BOT_ARGS}
-          fi
-          # Mount the signed-in Google session for the Meet bot. Done as a
-          # separate --update-secrets step (additive) rather than mixing the
-          # file-path entry into --set-secrets (which replaces), so a future
-          # --set-secrets call never silently strips the mount. Uses
-          # `gcloud secrets versions access` for the existence check because
-          # the CI SA has secretmanager.secretVersions.access (sufficient to
-          # inject secrets into Cloud Run) but may not have the broader
-          # secretmanager.secrets.get that `gcloud secrets describe` requires.
-          # To enable: run `python -m app.bot.capture_google_session`, upload
-          # the JSON with `gcloud secrets versions add
-          #   visualsprint-bot-google-session --data-file=bot_google_session.json`
-          # and redeploy. Refresh whenever Google invalidates the session.
-          if gcloud secrets versions access latest \
-               --secret=visualsprint-bot-google-session \
-               --project="${PROJECT_ID}" >/dev/null 2>&1; then
-            gcloud run jobs update visualsprint-bot \
-              --region="${REGION}" --project="${PROJECT_ID}" \
-              --update-secrets="/secrets/bot-google-session.json=visualsprint-bot-google-session:latest" \
-              --update-env-vars="VS_BOT_GOOGLE_STORAGE_STATE_PATH=/secrets/bot-google-session.json" \
-              --quiet
           fi
 
       # Grant the agents runtime SA permission to invoke the bot job.

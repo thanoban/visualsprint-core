@@ -202,6 +202,15 @@ def _should_keep_screen_frame(
 
 def _host_admission_error(platform: str) -> str:
     if platform == "meet":
+        google_join_mode = getattr(get_settings(), "bot_google_join_mode", "guest").strip().lower()
+        if google_join_mode == "guest":
+            return (
+                "The organizer denied the anonymous VisualSprint Notetaker lobby request. "
+                "This meeting does not auto-admit guests, so it cannot provide unattended "
+                "bot capture. Use a Google Workspace Meet configured to let guests join "
+                "directly (without a lobby), or use the official recording/transcript "
+                "capture path. The bot cannot bypass Meet host controls."
+            )
         return (
             "The organizer denied the Google Meet lobby request. A bot cannot bypass Meet "
             "host controls: invite the dedicated bot Google account to the event and allow "

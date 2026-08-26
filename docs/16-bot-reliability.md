@@ -43,12 +43,13 @@ The deployed default is `VS_BOT_GOOGLE_JOIN_MODE=guest`. It deliberately does
 **not** load a Google browser session, so there is no hourly cookie refresh or
 user re-login. For every meeting that should be captured by the bot:
 
-1. Use a Google Workspace Meet and invite the dedicated bot account in the
-   calendar event, or set Meet access to **Everyone with the link** if your
-   Workspace policy permits it.
-2. Start the meeting as the organizer. If the meeting uses a lobby, allow the
-   named **VisualSprint Notetaker** once; no browser bot can override a host's
-   admission policy.
+1. Use a Google Workspace Meet with guest access enabled and **no guest
+   lobby** (for example, **Everyone with the link** where the Workspace policy
+   permits it). Inviting an email address alone does not authorize the bot in
+   guest mode because it intentionally does not sign in as that account.
+2. If a meeting keeps a lobby, an organizer must allow **VisualSprint
+   Notetaker** for that individual call. That is not unattended capture and no
+   browser bot can override a host's admission policy.
 3. For private personal-Gmail meetings, do not use a browser bot. They require
    an interactive Google account session, which Google may revoke. Use the
    official Meet recording/transcript capture path (Workspace OAuth + Meet and

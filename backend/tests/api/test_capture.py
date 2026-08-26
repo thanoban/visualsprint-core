@@ -39,6 +39,7 @@ def test_instant_capture_meet_creates_scheduled_bot_session(client, db_session):
     assert body["meeting_id"] is not None
     assert body["bot_session_id"] is not None
     assert "cannot bypass host controls" in body["admission_guidance"]
+    assert "account invitation alone" in body["admission_guidance"]
 
     meeting = db_session.get(Meeting, body["meeting_id"])
     assert meeting is not None

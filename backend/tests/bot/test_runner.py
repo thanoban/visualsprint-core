@@ -248,6 +248,7 @@ async def test_denied_join_marks_failed_without_capturing(db_sessionmaker, monke
         assert bot.status == BotStatus.FAILED
         assert bot.capture_session_id is None
         assert "cannot bypass" in bot.error
+        assert "anonymous VisualSprint Notetaker" in bot.error
 
 
 async def test_denied_join_preserves_google_session_warning(db_sessionmaker, monkeypatch):
@@ -262,7 +263,7 @@ async def test_denied_join_preserves_google_session_warning(db_sessionmaker, mon
         bot = db.get(BotSession, bot_id)
         assert bot.status == BotStatus.FAILED
         assert bot.error.startswith("The stored Google bot session expired before join.")
-        assert "Also: The organizer denied the Google Meet lobby request" in bot.error
+        assert "Also: The organizer denied the anonymous VisualSprint Notetaker" in bot.error
 
 
 async def test_smoke_capture_cap_finalizes_without_waiting_for_meeting_end(

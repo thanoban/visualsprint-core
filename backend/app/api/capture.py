@@ -48,10 +48,11 @@ def _admission_guidance(
         if google_join_mode.strip().lower() != "session":
             return (
                 "Use a Google Workspace Meet that permits guest participants: invite the "
-                "VisualSprint bot account or allow guests/everyone with the link. This "
-                "durable mode does not use a Google browser login. For private personal "
-                "Gmail meetings, use the official recording/transcript capture path. "
-                "The bot cannot bypass host controls."
+                "VisualSprint bot only if you explicitly use legacy session mode; otherwise "
+                "allow guests/everyone with the link and remove the lobby. The durable guest "
+                "mode does not use a Google browser login, so an account invitation alone "
+                "does not grant it access. For private personal Gmail meetings, use the "
+                "official recording/transcript capture path. The bot cannot bypass host controls."
             )
         account = (
             f"Invite {bot_google_account_email} to the calendar event"
@@ -141,14 +142,16 @@ async def start_instant_capture(
     db.commit()
 
     settings = get_settings()
-    note = (
-        'Bot queued as "VisualSprint Notetaker" — will join within ~2 minutes.'
-        if settings.bot_dispatch_enabled
-        else (
-            "Bot capture is queued but not yet dispatched — live bot join isn't turned on "
-            "for this deployment yet."
-        )
-    )
+    if settings.bot_dispatch_enabled:
+        if platform == "meet" and settings.bot_google_join_mode.strip().lower() != "session":
+            note = (
+                'Bot queued as "VisualSprint Notetaker" — it will request guest entry within '
+                "~2 minutes and captures automatically only when the meeting has no guest lobby."
+            )
+        else:
+            note = 'Bot queued as "VisualSprint Notetaker" — will join within ~2 minutes.'
+    else:
+        note = "Bot capture is queued but not yet dispatched — live bot join isn't turned on for this deployment yet."
     return InstantCaptureResponse(
         platform=platform,
         dispatched=settings.bot_dispatch_enabled,
