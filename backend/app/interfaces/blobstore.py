@@ -1,10 +1,15 @@
-"""BlobStore swap point — S3-compatible (Cloudflare R2) in prod, local dir in dev.
+"""BlobStore swap point — GCS in prod (VS_BLOB_BACKEND=gcs), local dir in dev.
 
-Stores FLAC audio (kept forever by default — re-transcribable as ASR
-improves; the corpus is the moat) and keyframe images. The forever-by-default
-stance is an org-level default, not an absolute: app/orchestrator/retention.py
-purges raw audio/keyframe blobs for orgs that set Org.retention_days,
-per-org opt-in only -- never the platform default.
+Two-tier deletion model:
+
+Tier 1 — automatic after pipeline (app/orchestrator/raw_cleanup.py):
+    Raw audio (AudioTrack.uri WAV/FLAC) deleted after `transcribe` stage.
+    Raw video (CaptureSession.video_uri) deleted after `screen` stage.
+    Keyframe images are derived artifacts — they are KEPT permanently.
+
+Tier 2 — opt-in per org (app/orchestrator/retention.py):
+    Transcript text, keyframe images, and knowledge rationale are purged
+    only when Org.retention_days is set (PDPA / compliance use cases).
 """
 
 from collections.abc import AsyncIterator

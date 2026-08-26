@@ -1052,6 +1052,11 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     db.flush()
     log.info("transcribe.done", session=session_id, tracks=len(tracks))
 
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.orchestrator.raw_cleanup import delete_raw_audio
+
+    await delete_raw_audio(db, session_id, get_blobstore())
+
 
 _ocr_engine = None
 _keyframe_detect_fn = None
@@ -1265,6 +1270,11 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
             )
     db.flush()
     log.info("screen.done", session=session_id, keyframes=len(created))
+
+    from app.adapters.blobstore_s3 import get_blobstore
+    from app.orchestrator.raw_cleanup import delete_raw_video
+
+    await delete_raw_video(db, session_id, video_uri, get_blobstore())
 
 
 @stage_handler("understand")
