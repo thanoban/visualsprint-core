@@ -9,7 +9,9 @@ that account starts, scheduled or not. Meet/Teams have no equivalent
 account-level hook, so this is the paste-a-link path the plan calls
 "Capture now" -- it creates the same BotSession row the scheduler would have
 created from a calendar event, just with scheduled_start=now instead of a
-future time.
+future time. Google Meet is deliberately excluded by default: a guest browser
+cannot meet ordinary host-access policies reliably, so its normal capture path
+is the calendar-discovered official-artifact flow.
 """
 
 from datetime import UTC, datetime
@@ -115,6 +117,16 @@ async def start_instant_capture(
     if platform not in BOT_ELIGIBLE_PLATFORMS:
         raise HTTPException(422, f"instant capture isn't supported for platform {platform!r}")
 
+    settings = get_settings()
+    if platform == "meet" and not settings.bot_google_guest_enabled:
+        raise HTTPException(
+            409,
+            "Google Meet guest bots are disabled because normal Meet access policies reject "
+            "them. Connect Google Calendar and use the official recording/transcript capture "
+            "path; enable VS_BOT_GOOGLE_GUEST_ENABLED only for an organization that deliberately "
+            "uses Open guest access.",
+        )
+
     join_url = bot_join_url(platform, platform_meeting_id)
     if join_url is None:
         raise HTTPException(422, f"couldn't build a join URL for platform {platform!r}")
@@ -141,7 +153,6 @@ async def start_instant_capture(
     db.add(bot)
     db.commit()
 
-    settings = get_settings()
     if settings.bot_dispatch_enabled:
         if platform == "meet" and settings.bot_google_join_mode.strip().lower() != "session":
             note = (

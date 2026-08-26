@@ -227,8 +227,9 @@ export default function UploadPage() {
         <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
           <p style={{ fontSize: 14.5, fontWeight: 600, color: "var(--text)", margin: 0 }}>Capture a meeting happening right now</p>
           <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "5px 0 16px" }}>
-            No calendar entry needed. Zoom meetings on a connected host account capture automatically —
-            for Google Meet or Teams, paste the meeting link to join now.
+            Zoom captures automatically on a connected host account. Google Meet uses its connected
+            Workspace calendar and official recording/transcript path after the meeting; paste a Teams
+            link only when your organization has enabled its guest bot.
           </p>
           <form onSubmit={handleInstantCapture} style={{ display: "flex", gap: 10 }}>
             <input

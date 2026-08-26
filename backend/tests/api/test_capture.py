@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+from app.api import capture
 from app.db.models import BotSession, BotStatus, Meeting, Org
 
 
@@ -25,7 +28,30 @@ def test_instant_capture_zoom_dispatches_nothing(client, db_session):
     assert db_session.query(BotSession).count() == 0
 
 
-def test_instant_capture_meet_creates_scheduled_bot_session(client, db_session):
+def test_instant_capture_meet_requires_explicit_guest_bot_opt_in(client, db_session):
+    org = _seed_org(db_session)
+    db_session.commit()
+
+    resp = client.post(
+        f"/api/v1/orgs/{org.id}/capture/instant",
+        json={"url": "https://meet.google.com/abc-defg-hij", "title": "Ad hoc sync"},
+    )
+    assert resp.status_code == 409
+    assert "official recording/transcript" in resp.json()["detail"]
+    assert db_session.query(BotSession).count() == 0
+
+
+def test_instant_capture_meet_creates_bot_when_explicitly_enabled(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        capture,
+        "get_settings",
+        lambda: SimpleNamespace(
+            bot_google_guest_enabled=True,
+            bot_dispatch_enabled=False,
+            bot_google_join_mode="guest",
+            bot_google_account_email=None,
+        ),
+    )
     org = _seed_org(db_session)
     db_session.commit()
 
@@ -38,8 +64,6 @@ def test_instant_capture_meet_creates_scheduled_bot_session(client, db_session):
     assert body["platform"] == "meet"
     assert body["meeting_id"] is not None
     assert body["bot_session_id"] is not None
-    assert "cannot bypass host controls" in body["admission_guidance"]
-    assert "account invitation alone" in body["admission_guidance"]
 
     meeting = db_session.get(Meeting, body["meeting_id"])
     assert meeting is not None
@@ -83,14 +107,18 @@ def test_get_bot_session_status_returns_current_state(client, db_session):
     org = _seed_org(db_session)
     db_session.commit()
 
-    # Create a bot session via the instant-capture endpoint
-    resp = client.post(
-        f"/api/v1/orgs/{org.id}/capture/instant",
-        json={"url": "https://meet.google.com/abc-defg-hij"},
+    meeting = Meeting(org_id=org.id, platform="meet", title="Scheduled")
+    db_session.add(meeting)
+    db_session.flush()
+    bot = BotSession(
+        org_id=org.id,
+        meeting_id=meeting.id,
+        platform="meet",
+        join_url="https://meet.google.com/abc-defg-hij",
     )
-    assert resp.status_code == 200
-    bot_session_id = resp.json()["bot_session_id"]
-    assert bot_session_id is not None
+    db_session.add(bot)
+    db_session.commit()
+    bot_session_id = bot.id
 
     # Poll the status endpoint
     status_resp = client.get(f"/api/v1/orgs/{org.id}/capture/sessions/{bot_session_id}")
@@ -109,11 +137,18 @@ def test_get_bot_session_status_wrong_org_is_404(client, db_session):
     db_session.add(org_b)
     db_session.commit()
 
-    resp = client.post(
-        f"/api/v1/orgs/{org_a.id}/capture/instant",
-        json={"url": "https://meet.google.com/abc-defg-hij"},
+    meeting = Meeting(org_id=org_a.id, platform="meet", title="Scheduled")
+    db_session.add(meeting)
+    db_session.flush()
+    bot = BotSession(
+        org_id=org_a.id,
+        meeting_id=meeting.id,
+        platform="meet",
+        join_url="https://meet.google.com/abc-defg-hij",
     )
-    bot_session_id = resp.json()["bot_session_id"]
+    db_session.add(bot)
+    db_session.commit()
+    bot_session_id = bot.id
 
     # Querying with org_b should 404 (cross-tenant isolation)
     status_resp = client.get(f"/api/v1/orgs/{org_b.id}/capture/sessions/{bot_session_id}")

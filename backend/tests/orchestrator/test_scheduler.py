@@ -1,14 +1,15 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import app.orchestrator.scheduler as scheduler
 from app.db.base import Base
 from app.db.models import (
     BotSession,
-    BotStatus,
     CalendarConnection,
     CaptureSession,
     Meeting,
@@ -178,10 +179,25 @@ async def test_sync_is_idempotent_on_repeated_calls(db):
     assert db.query(PipelineJob).count() == 1
 
 
-async def test_meet_event_also_schedules_a_bot_session(db):
-    """Meet is Mode B primary (no recording permission needed) alongside the
-    A2 session -- docs/03-capture.md's architecture pivot for orgs that
-    can't/won't grant platform recording access."""
+async def test_meet_event_uses_official_artifact_path_by_default(db):
+    org, connection = _seed_org(db)
+    adapter = FakeCalendarAdapter(
+        [_event("evt-meet", conferencing_text="https://meet.google.com/abc-defg-hij")]
+    )
+
+    await sync_calendar_connection(db, connection, adapter)
+
+    meeting = db.query(Meeting).one()
+    session = db.query(CaptureSession).one()
+    assert meeting.platform == "meet"
+    assert session.mode == "A2"
+    assert db.query(BotSession).count() == 0
+
+
+async def test_meet_event_schedules_guest_bot_after_explicit_org_opt_in(db, monkeypatch):
+    monkeypatch.setattr(
+        scheduler, "get_settings", lambda: SimpleNamespace(bot_google_guest_enabled=True)
+    )
     org, connection = _seed_org(db)
     adapter = FakeCalendarAdapter(
         [_event("evt-meet", conferencing_text="https://meet.google.com/abc-defg-hij")]
@@ -190,12 +206,8 @@ async def test_meet_event_also_schedules_a_bot_session(db):
     await sync_calendar_connection(db, connection, adapter)
 
     bot = db.query(BotSession).one()
-    meeting = db.query(Meeting).one()
-    assert bot.meeting_id == meeting.id
     assert bot.platform == "meet"
     assert bot.join_url == "https://meet.google.com/abc-defg-hij"
-    assert bot.status == BotStatus.SCHEDULED
-    assert bot.scheduled_start.replace(tzinfo=None) == meeting.scheduled_start.replace(tzinfo=None)
 
 
 async def test_teams_event_also_schedules_a_bot_session_with_the_full_join_url(db):

@@ -39,9 +39,20 @@ limit. The logs showed three independent failures:
 
 ## Permanent Google Meet access model
 
-The deployed default is `VS_BOT_GOOGLE_JOIN_MODE=guest`. It deliberately does
-**not** load a Google browser session, so there is no hourly cookie refresh or
-user re-login. For every meeting that should be captured by the bot:
+Google Meet's normal path is now **official artifacts (Mode A2)**, not a
+browser bot. Once an organization connects Google Calendar and configures its
+Workspace recording/transcript policy, VisualSprint discovers meetings and
+processes the official recording after the call. Individual attendees do not
+need to open a meeting to guests or paste a link.
+
+`VS_BOT_GOOGLE_GUEST_ENABLED` is off by default. Enable it only for a
+Workspace organization that intentionally uses **Open** meeting access for the
+VisualSprint guest bot.
+
+`VS_BOT_GOOGLE_JOIN_MODE=guest` remains the only supported browser-bot setting
+when the explicit guest-bot opt-in is enabled. It deliberately does **not**
+load a Google browser session, so there is no hourly cookie refresh or user
+re-login. For the small class of meetings that deliberately use the bot:
 
 1. Use a Google Workspace Meet with guest access enabled and **no guest
    lobby** (for example, **Everyone with the link** where the Workspace policy
@@ -64,7 +75,7 @@ routine cookie-refresh job as a product workflow.
 
 For one short real Meet call, confirm these log events in order:
 
-1. `bot.browser.launched signed_in=True`
+1. `bot.browser.launched signed_in=False`
 2. `bot.meet.join_outcome outcome=live`
 3. `bot.audio.started` and `bot.screen.started`
 4. `bot.runner.audio_converted_to_wav`

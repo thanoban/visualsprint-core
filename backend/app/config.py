@@ -210,6 +210,11 @@ class Settings(BaseSettings):
     # the lifetime of browser cookies and may revoke them at any time; OAuth
     # refresh tokens cannot renew those browser cookies.
     bot_google_join_mode: str = "guest"  # "guest" | "session"
+    # Meet guest bots are not a universal capture mechanism: ordinary
+    # Trusted/Restricted meetings reject anonymous guests. Mode A2 official
+    # artifacts is the normal Meet path. Enable browser bots only for an org
+    # that deliberately standardizes on Open guest access.
+    bot_google_guest_enabled: bool = False
     # Path to Playwright storage_state JSON. Read only when
     # bot_google_join_mode="session"; ignored in the durable guest mode.
     bot_google_storage_state_path: str | None = None

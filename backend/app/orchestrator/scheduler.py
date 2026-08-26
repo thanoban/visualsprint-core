@@ -19,6 +19,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.adapters.calendar_common import BOT_ELIGIBLE_PLATFORMS, bot_join_url, detect_conferencing
+from app.config import get_settings
 from app.db.models import BotSession, BotStatus, CalendarConnection, CaptureSession, Meeting, Org
 from app.interfaces.calendar import CalendarAdapter
 from app.orchestrator.queue import enqueue_pipeline
@@ -115,7 +116,14 @@ async def sync_calendar_connection(
             run_at=(event.end_at + processing_delay).isoformat(),
         )
 
-        if platform in BOT_ELIGIBLE_PLATFORMS:
+        # Default Google Meet capture is official post-meeting artifacts (A2).
+        # Scheduling an anonymous bot for every ordinary Meet invitation only
+        # creates predictable guest-access failures. Guest bots require an
+        # explicit organization-level opt-in for Open-access meetings.
+        bot_enabled_for_platform = platform in BOT_ELIGIBLE_PLATFORMS and (
+            platform != "meet" or get_settings().bot_google_guest_enabled
+        )
+        if bot_enabled_for_platform:
             join_url = bot_join_url(platform, platform_meeting_id)
             if join_url:
                 db.add(
