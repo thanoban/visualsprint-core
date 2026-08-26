@@ -253,8 +253,6 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
     // when the component first renders before Supabase getSession() completes.
     if (authLoading || !session) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     fetchReport()
       .then((data) => {
         if (!cancelled) setReport(data);
