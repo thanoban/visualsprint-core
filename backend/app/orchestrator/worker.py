@@ -1312,10 +1312,10 @@ async def _handle_report(db: object, job: PipelineJob) -> None:
     from app.db.models import CaptureSession
 
     _report_input, generated, _blob_uri = await run_report_intelligence(
-        db, job.capture_session_id, _get_llm(), blobstore=get_blobstore()
+        db, job.capture_session_id, _get_llm(), blobstore=get_blobstore()  # type: ignore[arg-type]
     )
     if not generated.abstained:
-        session = db.get(CaptureSession, job.capture_session_id)
+        session = db.get(CaptureSession, job.capture_session_id)  # type: ignore[union-attr]
         if session is not None:
             if generated.title:
                 session.report_title = generated.title

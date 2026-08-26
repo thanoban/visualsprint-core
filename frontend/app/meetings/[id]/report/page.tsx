@@ -231,7 +231,7 @@ function ItemCard({ item }: { item: FlatItem }) {
 
 export default function MeetingReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { authedFetch } = useAuth();
+  const { authedFetch, session, loading: authLoading } = useAuth();
   const [report, setReport] = useState<MeetingReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -240,11 +240,18 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
   const fetchReport = useCallback(async () => {
     const res = await authedFetch(`/api/v1/meetings/${id}/report`);
     if (res.status === 404) throw new Error("No capture session found with this ID.");
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      let detail = `${res.status}`;
+      try { const body = await res.json(); detail = body?.detail?.[0]?.msg ?? body?.detail ?? detail; } catch { /* ignore */ }
+      throw new Error(detail);
+    }
     return (await res.json()) as MeetingReport;
   }, [authedFetch, id]);
 
   useEffect(() => {
+    // Don't fetch until auth is resolved — avoids 422 from missing Authorization header
+    // when the component first renders before Supabase getSession() completes.
+    if (authLoading || !session) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -261,7 +268,11 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
     return () => {
       cancelled = true;
     };
-  }, [fetchReport]);
+  }, [fetchReport, authLoading, session]);
+
+  if (authLoading) {
+    return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading…</p>;
+  }
 
   if (loading) {
     return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading report…</p>;
