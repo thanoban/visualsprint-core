@@ -198,6 +198,11 @@ class Settings(BaseSettings):
     # parsing, only at runtime inside the adapter.
     bot_cloud_run_project: str | None = None
     bot_cloud_run_region: str | None = None
+    # Optional runtime shortenings for production smoke tests. Leave unset for
+    # normal meetings; set on the Cloud Run Job only when validating the bot.
+    bot_lobby_timeout_s: float | None = None
+    bot_max_meeting_s: float | None = None
+    bot_smoke_capture_seconds: float | None = None
     # Path to a Playwright storage_state JSON (cookies) for a signed-in
     # Google account the Meet bot joins as. Google refuses ANONYMOUS (not
     # signed-in) users on meetings hosted by personal @gmail accounts, so a

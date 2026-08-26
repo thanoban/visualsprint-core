@@ -85,6 +85,7 @@ class GoogleMeetJoiner:
         self._meeting_code: str | None = None
         self._join_url: str | None = None
         self._session_cleared: bool = False  # cleared once when session expires; never loop
+        self.warning_detail: str | None = None
 
     @property
     def page(self):
@@ -128,6 +129,12 @@ class GoogleMeetJoiner:
                             hint="Google session expired (password prompt) — clearing "
                             "session and retrying as anonymous guest. Re-run "
                             "`python -m app.bot.capture_google_session` to restore.",
+                        )
+                        self.warning_detail = (
+                            "The stored Google bot session expired before join. Refresh "
+                            "the dedicated bot account session with "
+                            "`python -m app.bot.capture_google_session` and upload a new "
+                            "`visualsprint-bot-google-session` secret version."
                         )
                         self._session_cleared = True
                         await page.context.clear_cookies()
@@ -363,6 +370,12 @@ class GoogleMeetJoiner:
                         hint="Google session expired — clearing session and retrying as "
                         "anonymous guest. Re-run `python -m app.bot.capture_google_session` "
                         "to restore signed-in join for personal Gmail meetings.",
+                    )
+                    self.warning_detail = (
+                        "The stored Google bot session expired before join. Refresh the "
+                        "dedicated bot account session with "
+                        "`python -m app.bot.capture_google_session` and upload a new "
+                        "`visualsprint-bot-google-session` secret version."
                     )
                     # Clear expired Google cookies so the next navigation lands
                     # on Meet's anonymous pre-join screen instead of the sign-out

@@ -94,6 +94,7 @@ class FakeJoiner:
         self._roster = roster or []
         self.left = False
         self.join_calls = 0
+        self.warning_detail = None
 
     async def join(self, join_url, *, display_name="VisualSprint Notetaker"):
         self.join_calls += 1
@@ -247,6 +248,47 @@ async def test_denied_join_marks_failed_without_capturing(db_sessionmaker, monke
         assert bot.status == BotStatus.FAILED
         assert bot.capture_session_id is None
         assert "cannot bypass" in bot.error
+
+
+async def test_denied_join_preserves_google_session_warning(db_sessionmaker, monkeypatch):
+    bot_id = _seed_bot_session(db_sessionmaker)
+    joiner = FakeJoiner(join_outcome=JoinOutcome.DENIED)
+    joiner.warning_detail = "The stored Google bot session expired before join."
+    monkeypatch.setattr(runner, "_joiner_factories", {"meet": lambda: joiner})
+
+    await runner.run_bot_session(bot_id)
+
+    with db_sessionmaker() as db:
+        bot = db.get(BotSession, bot_id)
+        assert bot.status == BotStatus.FAILED
+        assert bot.error.startswith("The stored Google bot session expired before join.")
+        assert "Also: The organizer denied the Google Meet lobby request" in bot.error
+
+
+async def test_smoke_capture_cap_finalizes_without_waiting_for_meeting_end(
+    db_sessionmaker, monkeypatch
+):
+    settings = type(
+        "Settings",
+        (),
+        {
+            "bot_lobby_timeout_s": None,
+            "bot_max_meeting_s": None,
+            "bot_smoke_capture_seconds": 0.02,
+        },
+    )()
+    monkeypatch.setattr(runner, "get_settings", lambda: settings)
+
+    bot_id = _seed_bot_session(db_sessionmaker)
+    joiner = FakeJoiner(join_outcome=JoinOutcome.LIVE, poll_outcomes=[])
+    monkeypatch.setattr(runner, "_joiner_factories", {"meet": lambda: joiner})
+
+    await runner.run_bot_session(bot_id)
+
+    with db_sessionmaker() as db:
+        bot = db.get(BotSession, bot_id)
+        assert bot.status == BotStatus.ENDED
+        assert bot.capture_session_id is not None
 
 
 async def test_lobby_then_admitted_transitions_to_live_and_captures(db_sessionmaker, monkeypatch):

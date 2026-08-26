@@ -29,6 +29,7 @@ from typing import Any
 
 import structlog
 
+from app.config import get_settings
 from app.db.base import get_sessionmaker
 from app.db.models import BotSession, BotStatus
 from app.interfaces.meeting_bot import JoinOutcome, MeetingJoiner
@@ -101,7 +102,8 @@ async def _safe_leave(joiner: MeetingJoiner) -> None:
 async def _wait_out_lobby(joiner: MeetingJoiner) -> JoinOutcome:
     loop = asyncio.get_event_loop()
     started = loop.time()
-    while loop.time() - started < LOBBY_TIMEOUT_S:
+    timeout_s = get_settings().bot_lobby_timeout_s or LOBBY_TIMEOUT_S
+    while loop.time() - started < timeout_s:
         await asyncio.sleep(_LOBBY_POLL_INTERVAL_S)
         outcome = await joiner.poll_status()
         if outcome != JoinOutcome.IN_LOBBY:
@@ -213,6 +215,18 @@ def _host_admission_error(platform: str) -> str:
     return "The organizer denied the bot's lobby request."
 
 
+def _joiner_warning(joiner: MeetingJoiner) -> str | None:
+    warning = getattr(joiner, "warning_detail", None)
+    if isinstance(warning, str) and warning.strip():
+        return warning.strip()
+    return None
+
+
+def _with_joiner_warning(error: str, joiner: MeetingJoiner) -> str:
+    warning = _joiner_warning(joiner)
+    return f"{warning} Also: {error}" if warning else error
+
+
 async def run_bot_session(bot_session_id: str) -> None:
     """Entry point for one background bot task -- owns its own DB sessions
     for each state transition (mirrors app/orchestrator/worker.py's
@@ -250,7 +264,11 @@ async def run_bot_session(bot_session_id: str) -> None:
         await _safe_leave(joiner)
         return
     if outcome == JoinOutcome.DENIED:
-        _mark_status(bot_session_id, BotStatus.FAILED, error=_host_admission_error(platform))
+        _mark_status(
+            bot_session_id,
+            BotStatus.FAILED,
+            error=_with_joiner_warning(_host_admission_error(platform), joiner),
+        )
         await _safe_leave(joiner)
         return
 
@@ -258,7 +276,11 @@ async def run_bot_session(bot_session_id: str) -> None:
         _mark_status(bot_session_id, BotStatus.IN_LOBBY)
         outcome = await _wait_out_lobby(joiner)
         if outcome == JoinOutcome.DENIED:
-            _mark_status(bot_session_id, BotStatus.FAILED, error=_host_admission_error(platform))
+            _mark_status(
+                bot_session_id,
+                BotStatus.FAILED,
+                error=_with_joiner_warning(_host_admission_error(platform), joiner),
+            )
             await _safe_leave(joiner)
             return
         if outcome != JoinOutcome.LIVE:
@@ -266,9 +288,12 @@ async def run_bot_session(bot_session_id: str) -> None:
                 bot_session_id,
                 BotStatus.LOBBY_TIMEOUT,
                 lobby_timeout_at=datetime.now(UTC),
-                error=(
-                    "Lobby admission timed out. The organizer must allow the bot through "
-                    "the meeting's host controls; the bot cannot bypass that policy."
+                error=_with_joiner_warning(
+                    (
+                        "Lobby admission timed out. The organizer must allow the bot through "
+                        "the meeting's host controls; the bot cannot bypass that policy."
+                    ),
+                    joiner,
                 ),
             )
             await _safe_leave(joiner)
@@ -331,10 +356,27 @@ async def run_bot_session(bot_session_id: str) -> None:
         install_sigterm_handler(bot_session_id, _shutdown)
 
         try:
+            max_meeting_s = get_settings().bot_max_meeting_s or MAX_MEETING_S
+            smoke_capture_s = get_settings().bot_smoke_capture_seconds
             while loop.time() - started < MAX_MEETING_S:
                 await asyncio.sleep(_POLL_INTERVAL_S)
                 if _shutdown.is_set():
                     log.warning("bot.runner.shutdown_flag", bot_session=bot_session_id)
+                    break
+                elapsed_s = loop.time() - started
+                if smoke_capture_s is not None and elapsed_s >= smoke_capture_s:
+                    log.info(
+                        "bot.runner.smoke_capture_complete",
+                        bot_session=bot_session_id,
+                        elapsed_s=round(elapsed_s, 1),
+                    )
+                    break
+                if elapsed_s >= max_meeting_s:
+                    log.warning(
+                        "bot.runner.max_meeting_reached",
+                        bot_session=bot_session_id,
+                        elapsed_s=round(elapsed_s, 1),
+                    )
                     break
                 outcome = await joiner.poll_status()
                 if outcome in (JoinOutcome.ENDED, JoinOutcome.FAILED, JoinOutcome.DENIED):

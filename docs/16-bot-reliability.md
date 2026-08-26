@@ -73,3 +73,27 @@ Then open the report and confirm the transcript, screenshot evidence, and
 evidence-grounded decisions are present. Existing failed WebM sessions cannot
 be repaired reliably because their original browser chunks were not preserved
 as a valid concat set; capture a new short meeting after deployment instead.
+
+## Fast smoke-test mode
+
+For low-time validation, do not change OAuth callback URLs or provider app
+setup. Keep every provider pointed at the production backend URL and shorten
+only the bot job runtime knobs:
+
+```powershell
+gcloud run jobs update visualsprint-bot `
+  --project=visualsprint-agent `
+  --region=us-west1 `
+  --update-env-vars="VS_BOT_LOBBY_TIMEOUT_S=90,VS_BOT_SMOKE_CAPTURE_SECONDS=45"
+```
+
+That mode proves the critical live path quickly: join/admission, audio capture,
+screen capture, WAV conversion, keyframe upload, CaptureSession creation, and
+pipeline enqueue. After the smoke test, remove the cap for normal meetings:
+
+```powershell
+gcloud run jobs update visualsprint-bot `
+  --project=visualsprint-agent `
+  --region=us-west1 `
+  --remove-env-vars="VS_BOT_LOBBY_TIMEOUT_S,VS_BOT_SMOKE_CAPTURE_SECONDS"
+```

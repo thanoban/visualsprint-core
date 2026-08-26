@@ -314,7 +314,7 @@ export default function UploadPage() {
                   {botStatus.status === "ended" && "✅ Meeting ended — processing recording."}
                   {botStatus.status === "failed" && `❌ Bot failed to join${botStatus.error ? `: ${botStatus.error}` : "."}`}
                   {botStatus.status === "missed" && "⚠️ Session missed — the meeting may have already ended before the bot could join."}
-                  {botStatus.status === "lobby_timeout" && "⏱ Lobby timeout — the organizer didn't admit the bot within 10 minutes."}
+                  {botStatus.status === "lobby_timeout" && `⏱ Lobby timeout${botStatus.error ? `: ${botStatus.error}` : " — the organizer did not admit the bot in time."}`}
                 </p>
               )}
             </div>
