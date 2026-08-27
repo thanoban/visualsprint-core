@@ -13,8 +13,8 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/AuthProvider";
 import type { ProposedActionOut } from "@/lib/types";
 
-const sans = "'IBM Plex Sans', sans-serif";
-const serif = "'Source Serif 4', serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 const KIND_LABELS: Record<string, string> = {
@@ -25,6 +25,18 @@ const KIND_LABELS: Record<string, string> = {
   escalation: "Escalation",
   reminder: "Reminder",
 };
+
+// [fg, bg] -- escalation reads as urgent (red), a created task as a
+// deadline-bearing commitment (amber), everything else as a routine
+// informational send (blue).
+const KIND_COLOR: Record<string, [string, string]> = {
+  escalation: ["var(--red)", "var(--red-soft)"],
+  task_create: ["var(--amber)", "var(--amber-soft)"],
+  calendar_followup: ["var(--amber)", "var(--amber-soft)"],
+};
+function kindColor(kind: string): [string, string] {
+  return KIND_COLOR[kind] ?? ["var(--blue-strong)", "var(--blue-soft)"];
+}
 
 function statusLabel(status: ProposedActionOut["status"]): string {
   return { pending_approval: "Pending", approved: "Approved", rejected: "Rejected", executed: "Executed", failed: "Failed" }[status] ?? status;
@@ -86,9 +98,10 @@ function PendingCard({
   }
 
   const targetLines = Object.entries(action.target).map(([k, v]) => `${k}: ${v}`);
+  const [kindFg, kindBg] = kindColor(action.kind);
 
   return (
-    <article style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
+    <article style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <span
@@ -98,8 +111,8 @@ function PendingCard({
               fontWeight: 600,
               letterSpacing: "0.02em",
               textTransform: "uppercase",
-              color: "var(--accent-strong)",
-              background: "var(--accent-bg)",
+              color: kindFg,
+              background: kindBg,
               padding: "3px 9px",
               borderRadius: 4,
             }}
@@ -107,14 +120,14 @@ function PendingCard({
             {KIND_LABELS[action.kind] ?? action.kind}
           </span>
           <p style={{ fontFamily: serif, fontSize: 17, color: "var(--text)", margin: "12px 0 6px" }}>{action.title}</p>
-          <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-muted)", margin: 0, whiteSpace: "pre-wrap" }}>{action.body}</p>
+          <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--muted)", margin: 0, whiteSpace: "pre-wrap" }}>{action.body}</p>
           {targetLines.length > 0 && (
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-              <p style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.02em", margin: "0 0 6px" }}>
+              <p style={{ fontSize: 11.5, fontWeight: 600, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.02em", margin: "0 0 6px" }}>
                 Target
               </p>
               {targetLines.map((line) => (
-                <p key={line} style={{ fontFamily: mono, fontSize: 12, color: "var(--text-muted)", margin: "0 0 4px" }}>
+                <p key={line} style={{ fontFamily: mono, fontSize: 12, color: "var(--muted)", margin: "0 0 4px" }}>
                   {line}
                 </p>
               ))}
@@ -127,8 +140,8 @@ function PendingCard({
                 borderRadius: 6,
                 padding: "8px 12px",
                 fontSize: 13,
-                background: result.status === "executed" ? "var(--accent-bg)" : "var(--evidence-bg)",
-                color: result.status === "executed" ? "var(--accent-strong)" : "var(--evidence)",
+                background: result.status === "executed" ? "var(--green-soft)" : "var(--amber-soft)",
+                color: result.status === "executed" ? "var(--green)" : "var(--amber)",
               }}
             >
               {result.status === "executed" ? (
@@ -145,7 +158,7 @@ function PendingCard({
               )}
             </div>
           )}
-          {error && <p style={{ fontSize: 12.5, color: "var(--gap)", marginTop: 8 }}>{error}</p>}
+          {error && <p style={{ fontSize: 12.5, color: "var(--red)", marginTop: 8 }}>{error}</p>}
         </div>
         {!result && (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
@@ -153,7 +166,7 @@ function PendingCard({
               type="button"
               onClick={handleApprove}
               disabled={busy !== null}
-              style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--accent-strong)", border: "none", padding: "8px 18px", borderRadius: 7, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+              style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: "#fff", background: "var(--blue)", border: "none", padding: "8px 18px", borderRadius: 999, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
             >
               {busy === "approve" ? "Approving…" : "Approve"}
             </button>
@@ -161,7 +174,7 @@ function PendingCard({
               type="button"
               onClick={handleReject}
               disabled={busy !== null}
-              style={{ fontFamily: sans, fontSize: 13, fontWeight: 600, color: "var(--text-muted)", background: "transparent", border: "1px solid var(--border-strong)", padding: "8px 18px", borderRadius: 7, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
+              style={{ fontFamily: sans, fontSize: 13, fontWeight: 700, color: "var(--muted)", background: "var(--soft)", border: "1px solid var(--border)", padding: "8px 18px", borderRadius: 999, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}
             >
               {busy === "reject" ? "Rejecting…" : "Reject"}
             </button>
@@ -199,12 +212,12 @@ export default function ActionsPage() {
   }
 
   if (loading) {
-    return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading proposed actions…</p>;
+    return <p style={{ fontSize: 14, color: "var(--muted)", padding: 32 }}>Loading proposed actions…</p>;
   }
 
   if (error || !actions) {
     return (
-      <p style={{ margin: 32, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 14, color: "var(--gap)" }}>
+      <p style={{ margin: 32, borderRadius: 6, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 14, color: "var(--red)" }}>
         {error ?? "Failed to load."}
       </p>
     );
@@ -218,20 +231,20 @@ export default function ActionsPage() {
   return (
     <div>
       <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
-        <p style={{ fontFamily: serif, fontSize: 20, color: "var(--text)", margin: 0 }}>Actions</p>
-        <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+        <p style={{ fontFamily: sans, fontWeight: 800, fontSize: 19, letterSpacing: "-0.02em", color: "var(--text)", margin: 0 }}>Actions</p>
+        <p style={{ fontSize: 13, color: "var(--faint)", margin: "6px 0 0" }}>
           Proposed by verified knowledge — nothing sends until you approve it.
         </p>
       </header>
 
       <main style={{ padding: "28px 32px 64px", maxWidth: 820 }}>
         <section>
-          <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+          <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--faint)", margin: "0 0 14px" }}>
             Awaiting your approval ({pending.length})
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {pending.length === 0 ? (
-              <p style={{ fontSize: 14, color: "var(--text-faint)", padding: "20px 0" }}>
+              <p style={{ fontSize: 14, color: "var(--faint)", padding: "20px 0" }}>
                 All caught up — no actions waiting on you.
               </p>
             ) : (
@@ -242,7 +255,7 @@ export default function ActionsPage() {
 
         {history.length > 0 && (
           <section style={{ marginTop: 32 }}>
-            <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+            <p style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--faint)", margin: "0 0 14px" }}>
               History
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -256,8 +269,8 @@ export default function ActionsPage() {
                       fontFamily: mono,
                       fontSize: 10.5,
                       fontWeight: 600,
-                      color: "var(--text-faint)",
-                      border: "1px solid var(--border-strong)",
+                      color: "var(--faint)",
+                      border: "1px solid var(--border-2)",
                       padding: "2px 7px",
                       borderRadius: 4,
                       width: "fit-content",
@@ -265,7 +278,7 @@ export default function ActionsPage() {
                   >
                     {KIND_LABELS[h.kind] ?? h.kind}
                   </span>
-                  <span style={{ fontSize: 13, color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <span style={{ fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {h.title}
                   </span>
                   <span
@@ -276,8 +289,8 @@ export default function ActionsPage() {
                       borderRadius: 20,
                       width: "fit-content",
                       justifySelf: "end",
-                      color: statusIsPositive(h.status) ? "var(--accent-strong)" : "var(--gap)",
-                      background: statusIsPositive(h.status) ? "var(--accent-bg)" : "var(--gap-bg)",
+                      color: statusIsPositive(h.status) ? "var(--green)" : "var(--red)",
+                      background: statusIsPositive(h.status) ? "var(--green-soft)" : "var(--red-soft)",
                     }}
                   >
                     {statusLabel(h.status)}

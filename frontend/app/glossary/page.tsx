@@ -1,8 +1,21 @@
 "use client";
 
+// Restyled to the Claude Design project "VisualSprint landing redesign" ->
+// VisualSprint App.dc.html (Vocabulary screen, renamed from Glossary --
+// route and API stay /glossary). Dropped the mockup's "kind" taxonomy
+// (Person/Project/Ticket/Technical) and its filter tabs: GlossaryTermOut has
+// no `kind` field and inventing a classifier here is out of scope. The
+// "heard often, spelled unsurely" suggestions queue is deferred entirely --
+// no backend query exists for it (glossary.py only does add/list/delete of
+// terms a human already typed), and building one is a real scoped feature,
+// not a restyle.
+
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/AuthProvider";
 import type { GlossaryTermOut } from "@/lib/types";
+
+const sans = "'Plus Jakarta Sans', sans-serif";
+const mono = "'IBM Plex Mono', monospace";
 
 export default function GlossaryPage() {
   const { me, authedFetch } = useAuth();
@@ -66,64 +79,113 @@ export default function GlossaryPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Org glossary</h1>
-        <p className="mt-1 text-sm text-slate-600">
+    <div>
+      <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
+        <p style={{ fontFamily: sans, fontWeight: 800, fontSize: 19, letterSpacing: "-0.02em", color: "var(--text)", margin: 0 }}>
+          Vocabulary
+        </p>
+        <p style={{ fontSize: 13, color: "var(--faint)", margin: "6px 0 0", maxWidth: 620 }}>
           Ticket IDs, names, and technical terms the transcription repair pass should recognize —
           fixes made on a meeting&apos;s transcript can add terms here too.
         </p>
-      </div>
+      </header>
 
-      <form onSubmit={handleAdd} className="flex gap-2">
-        <input
-          type="text"
-          value={newTerm}
-          onChange={(e) => setNewTerm(e.target.value)}
-          placeholder="e.g. PAY-442, Udula Wickramasinghe, JWT"
-          className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-        />
-        <button
-          type="submit"
-          disabled={adding || !newTerm.trim() || !me}
-          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {adding ? "Adding…" : "Add"}
-        </button>
-      </form>
-
-      {error && (
-        <p className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
-      )}
-
-      {loading ? (
-        <p className="text-sm text-slate-500">Loading…</p>
-      ) : terms && terms.length > 0 ? (
-        <ul className="space-y-2">
-          {terms.map((t) => (
-            <li
-              key={t.id}
-              className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-2.5"
+      <main style={{ padding: "28px 32px 64px", maxWidth: 880 }}>
+        <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 18, padding: "20px 22px", marginBottom: 20 }}>
+          <form onSubmit={handleAdd} style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <label
+              style={{
+                flex: "1 1 260px",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                background: "var(--soft)",
+                border: "1px solid var(--border)",
+                borderRadius: 999,
+                padding: "11px 18px",
+              }}
             >
-              <div>
-                <span className="text-sm font-medium text-slate-900">{t.term}</span>
-                {t.added_by && <span className="ml-2 text-xs text-slate-400">added by {t.added_by}</span>}
-              </div>
-              <button
-                type="button"
-                onClick={() => handleDelete(t.id)}
-                className="text-xs font-medium text-slate-400 hover:text-red-600"
+              <span style={{ color: "var(--faint)", fontSize: 13 }}>+</span>
+              <input
+                type="text"
+                value={newTerm}
+                onChange={(e) => setNewTerm(e.target.value)}
+                placeholder="e.g. PAY-442, Udula Wickramasinghe, pgvector"
+                style={{ flex: 1, border: "none", outline: "none", background: "transparent", fontFamily: sans, fontSize: 13.5, color: "var(--text)" }}
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={adding || !newTerm.trim() || !me}
+              style={{
+                fontFamily: sans,
+                fontSize: 13.5,
+                fontWeight: 700,
+                color: "#fff",
+                background: "var(--blue)",
+                border: "none",
+                borderRadius: 999,
+                padding: "12px 24px",
+                cursor: adding ? "default" : "pointer",
+                opacity: adding ? 0.7 : 1,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {adding ? "Adding…" : "Add word"}
+            </button>
+          </form>
+        </section>
+
+        {error && (
+          <p style={{ borderRadius: 8, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 13, color: "var(--red)", marginBottom: 16 }}>
+            {error}
+          </p>
+        )}
+
+        {loading ? (
+          <p style={{ fontSize: 14, color: "var(--faint)" }}>Loading…</p>
+        ) : terms && terms.length > 0 ? (
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 18, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+              <p style={{ fontSize: 14.5, fontWeight: 700, margin: 0 }}>
+                Your words{" "}
+                <span style={{ fontFamily: mono, fontSize: 12, fontWeight: 600, color: "var(--faint)" }}>{terms.length}</span>
+              </p>
+            </div>
+            {terms.map((t) => (
+              <div
+                key={t.id}
+                style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", padding: "14px 20px", borderBottom: "1px solid var(--border)" }}
               >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          No glossary terms yet.
-        </p>
-      )}
+                <span style={{ flex: "1 1 200px", minWidth: 0, fontSize: 14, fontWeight: 700, color: "var(--text)" }}>{t.term}</span>
+                {t.added_by && (
+                  <span style={{ fontFamily: mono, fontSize: 11, color: "var(--faint)" }}>added by {t.added_by}</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleDelete(t.id)}
+                  style={{
+                    fontFamily: sans,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    color: "var(--faint)",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "6px 4px",
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ borderRadius: 12, border: "1px solid var(--border)", background: "var(--soft)", padding: "12px 16px", fontSize: 14, color: "var(--muted)" }}>
+            No vocabulary terms yet.
+          </p>
+        )}
+      </main>
     </div>
   );
 }

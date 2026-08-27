@@ -18,12 +18,13 @@ import type {
   CaptureSessionState,
   CaptureSessionStatus,
   InstantCaptureResponse,
+  OrgSettingsOut,
   UploadResponse,
 } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 2000;
-const sans = "'IBM Plex Sans', sans-serif";
-const serif = "'Source Serif 4', serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 const STAGE_DEFS: { label: string; states: CaptureSessionState[] }[] = [
@@ -59,6 +60,7 @@ export default function UploadPage() {
   const [instantResult, setInstantResult] = useState<InstantCaptureResponse | null>(null);
   const [botStatus, setBotStatus] = useState<BotSessionStatusResponse | null>(null);
   const botPollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [orgSettings, setOrgSettings] = useState<OrgSettingsOut | null>(null);
 
   useEffect(() => {
     return () => {
@@ -66,6 +68,16 @@ export default function UploadPage() {
       if (botPollHandle.current) clearInterval(botPollHandle.current);
     };
   }, []);
+
+  // Real retention setting, shown in the sidebar panel below -- not the
+  // mockup's hardcoded "90 days" copy.
+  useEffect(() => {
+    if (!me) return;
+    authedFetch(`/api/v1/orgs/${me.org.id}/settings`)
+      .then((res) => (res.ok ? (res.json() as Promise<OrgSettingsOut>) : null))
+      .then(setOrgSettings)
+      .catch(() => setOrgSettings(null));
+  }, [me, authedFetch]);
 
   async function pollSession(sessionId: string) {
     try {
@@ -218,15 +230,16 @@ export default function UploadPage() {
     <div>
       <header style={{ padding: "20px 32px", borderBottom: "1px solid var(--border)" }}>
         <p style={{ fontFamily: serif, fontSize: 20, color: "var(--text)", margin: 0 }}>Upload a meeting</p>
-        <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+        <p style={{ fontSize: 13, color: "var(--faint)", margin: "6px 0 0" }}>
           Direct upload — Mode D, best for onboarding, backfill, and demos
         </p>
       </header>
 
-      <main style={{ padding: "28px 32px 64px", maxWidth: 840, display: "flex", flexDirection: "column", gap: 22 }}>
-        <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
+      <main style={{ padding: "28px 32px 64px", maxWidth: 1080, display: "grid", gridTemplateColumns: "minmax(300px,1.25fr) minmax(240px,1fr)", gap: 22, alignItems: "start" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+        <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
           <p style={{ fontSize: 14.5, fontWeight: 600, color: "var(--text)", margin: 0 }}>Capture a meeting happening right now</p>
-          <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "5px 0 16px" }}>
+          <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "5px 0 16px" }}>
             Zoom captures automatically on a connected host account. Google Meet uses its connected
             Workspace calendar and official recording/transcript path after the meeting; paste a Teams
             link only when your organization has enabled its guest bot.
@@ -237,7 +250,7 @@ export default function UploadPage() {
               value={instantUrl}
               onChange={(e) => setInstantUrl(e.target.value)}
               placeholder="https://meet.google.com/xxx-xxxx-xxx or a Teams/Zoom link"
-              style={{ flex: 1, fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--bg)", border: "1px solid var(--border-strong)", borderRadius: 8, padding: "10px 13px" }}
+              style={{ flex: 1, fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--soft)", border: "1px solid var(--border-2)", borderRadius: 8, padding: "10px 13px" }}
             />
             <button
               type="submit"
@@ -247,7 +260,7 @@ export default function UploadPage() {
                 fontSize: 13.5,
                 fontWeight: 600,
                 color: "#fff",
-                background: "var(--accent-strong)",
+                background: "var(--blue-strong)",
                 padding: "10px 20px",
                 borderRadius: 7,
                 border: "none",
@@ -261,7 +274,7 @@ export default function UploadPage() {
           </form>
 
           {instantError && (
-            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 13, color: "var(--red)" }}>
               {instantError}
             </p>
           )}
@@ -273,15 +286,15 @@ export default function UploadPage() {
                   padding: "8px 12px",
                   fontSize: 13,
                   margin: 0,
-                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-bg)" : "var(--evidence-bg)",
-                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent-strong)" : "var(--evidence)",
-                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--accent)" : "var(--evidence)"}`,
+                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green-soft)" : "var(--amber-soft)",
+                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green)" : "var(--amber)",
+                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green)" : "var(--amber)"}`,
                 }}
               >
                 {instantResult.note}
               </p>
               {instantResult.admission_guidance && (
-                <p style={{ margin: "8px 0 0", borderRadius: 6, background: "var(--evidence-bg)", border: "1px solid var(--evidence)", padding: "8px 12px", fontSize: 12.5, color: "var(--evidence)" }}>
+                <p style={{ margin: "8px 0 0", borderRadius: 6, background: "var(--amber-soft)", border: "1px solid var(--amber)", padding: "8px 12px", fontSize: 12.5, color: "var(--amber)" }}>
                   Before the bot joins: {instantResult.admission_guidance}
                 </p>
               )}
@@ -294,17 +307,17 @@ export default function UploadPage() {
                     fontSize: 13,
                     margin: "8px 0 0",
                     background:
-                      botStatus.status === "live" ? "var(--accent-bg)" :
-                      botStatus.status === "ended" ? "var(--surface)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap-bg)" :
-                      "var(--surface)",
+                      botStatus.status === "live" ? "var(--blue-soft)" :
+                      botStatus.status === "ended" ? "var(--bg)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--red-soft)" :
+                      "var(--bg)",
                     color:
-                      botStatus.status === "live" ? "var(--accent-strong)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--gap)" :
-                      "var(--text-faint)",
+                      botStatus.status === "live" ? "var(--blue-strong)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--red)" :
+                      "var(--faint)",
                     border:
-                      botStatus.status === "live" ? "1px solid var(--accent)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "1px solid var(--gap)" :
+                      botStatus.status === "live" ? "1px solid var(--blue)" :
+                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "1px solid var(--red)" :
                       "1px solid var(--border)",
                   }}
                 >
@@ -325,18 +338,18 @@ export default function UploadPage() {
         <form onSubmit={handleSubmit}>
           <div
             style={{
-              border: "2px dashed var(--border-strong)",
+              border: "2px dashed var(--border-2)",
               borderRadius: 14,
               padding: 44,
               textAlign: "center",
-              background: "var(--surface)",
+              background: "var(--bg)",
             }}
           >
-            <p style={{ fontFamily: mono, fontSize: 22, color: "var(--accent)", margin: "0 0 10px" }}>↑</p>
+            <p style={{ fontFamily: mono, fontSize: 22, color: "var(--blue)", margin: "0 0 10px" }}>↑</p>
             <p style={{ fontSize: 15.5, fontWeight: 500, color: "var(--text)", margin: "0 0 6px" }}>
               {file ? file.name : "Drop an audio or video file, or choose one below"}
             </p>
-            <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "0 0 20px" }}>
+            <p style={{ fontSize: 13, color: "var(--faint)", margin: "0 0 20px" }}>
               MP4, MOV, WAV, MP3 · up to 4 hours · Sinhala, Tamil, English, or mixed
             </p>
             <input
@@ -350,21 +363,21 @@ export default function UploadPage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 600, color: "#fff", background: "var(--accent-strong)", padding: "10px 20px", borderRadius: 7, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
+              style={{ fontFamily: sans, fontSize: 13.5, fontWeight: 600, color: "#fff", background: "var(--blue-strong)", padding: "10px 20px", borderRadius: 7, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
             >
               Choose file
             </button>
           </div>
 
           <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "flex-end" }}>
-            <label style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: 7 }}>
+            <label style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 7 }}>
               Title (optional)
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Infra sync — Jul 28"
-                style={{ fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 8, padding: "10px 13px" }}
+                style={{ fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--bg)", border: "1px solid var(--border-2)", borderRadius: 8, padding: "10px 13px" }}
               />
             </label>
             <button
@@ -375,7 +388,7 @@ export default function UploadPage() {
                 fontSize: 13.5,
                 fontWeight: 600,
                 color: "#fff",
-                background: "var(--accent-strong)",
+                background: "var(--blue-strong)",
                 padding: "11px 20px",
                 borderRadius: 7,
                 border: "none",
@@ -389,14 +402,14 @@ export default function UploadPage() {
           </div>
 
           {submitError && (
-            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 13, color: "var(--red)" }}>
               {submitError}
             </p>
           )}
         </form>
 
         {uploadResult && (
-          <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px 26px" }}>
+          <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "24px 26px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", margin: 0 }}>
                 {title || uploadResult.meeting_id}
@@ -404,7 +417,7 @@ export default function UploadPage() {
               {status?.state === "done" && (
                 <Link
                   href={`/meetings/${uploadResult.capture_session_id}/report`}
-                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--accent-strong)", background: "var(--accent-bg)", border: "1px solid var(--accent)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
+                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
                 >
                   View report →
                 </Link>
@@ -412,18 +425,18 @@ export default function UploadPage() {
               {status?.state && status.state !== "done" && !failed && (
                 <Link
                   href={`/meetings/${uploadResult.capture_session_id}/correct`}
-                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--accent-strong)", background: "var(--accent-bg)", border: "1px solid var(--accent)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
+                  style={{ fontFamily: sans, fontSize: 12.5, fontWeight: 600, color: "var(--blue-strong)", background: "var(--blue-soft)", border: "1px solid var(--blue)", padding: "7px 13px", borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0 }}
                 >
                   Fix transcript →
                 </Link>
               )}
             </div>
-            <p style={{ fontFamily: mono, fontSize: 12.5, color: "var(--text-faint)", margin: "6px 0 0" }}>
+            <p style={{ fontFamily: mono, fontSize: 12.5, color: "var(--faint)", margin: "6px 0 0" }}>
               {status?.state ?? uploadResult.state} · session {uploadResult.capture_session_id}
             </p>
 
             {failed ? (
-              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--gap-bg)", border: "1px solid var(--gap)", padding: "8px 12px", fontSize: 13, color: "var(--gap)" }}>
+              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 13, color: "var(--red)" }}>
                 Pipeline failed{status?.error ? `: ${status.error}` : "."}
               </p>
             ) : (
@@ -444,14 +457,14 @@ export default function UploadPage() {
                           fontFamily: mono,
                           fontSize: 14,
                           fontWeight: 600,
-                          background: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence-bg)" : "var(--surface2)",
-                          color: isDone ? "#fff" : isActive ? "var(--evidence)" : "var(--text-faint)",
-                          border: isActive ? "2px solid var(--evidence)" : "1px solid var(--border-strong)",
+                          background: isDone ? "var(--green)" : isActive ? "var(--amber-soft)" : "var(--soft)",
+                          color: isDone ? "#fff" : isActive ? "var(--amber)" : "var(--faint)",
+                          border: isActive ? "2px solid var(--amber)" : "1px solid var(--border-2)",
                         }}
                       >
                         {isDone ? "✓" : i + 1}
                       </div>
-                      <p style={{ fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive || isDone ? "var(--text)" : "var(--text-faint)", margin: "10px 0 0" }}>
+                      <p style={{ fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive || isDone ? "var(--text)" : "var(--faint)", margin: "10px 0 0" }}>
                         {s.label}
                       </p>
                       <p
@@ -459,7 +472,7 @@ export default function UploadPage() {
                           fontSize: 12,
                           margin: "6px 0 0",
                           fontWeight: isActive ? 600 : 400,
-                          color: isDone ? "var(--accent-strong)" : isActive ? "var(--evidence)" : "var(--text-faint)",
+                          color: isDone ? "var(--green)" : isActive ? "var(--amber)" : "var(--faint)",
                         }}
                       >
                         {isDone ? "Done" : isActive ? "In progress" : "Queued"}
@@ -471,12 +484,30 @@ export default function UploadPage() {
             )}
 
             {pollError && (
-              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--evidence-bg)", border: "1px solid var(--evidence)", padding: "8px 12px", fontSize: 12.5, color: "var(--evidence)" }}>
+              <p style={{ marginTop: 16, borderRadius: 6, background: "var(--amber-soft)", border: "1px solid var(--amber)", padding: "8px 12px", fontSize: 12.5, color: "var(--amber)" }}>
                 Lost contact with status endpoint: {pollError}. Retrying every {POLL_INTERVAL_MS / 1000}s…
               </p>
             )}
           </section>
         )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px" }}>
+          <p style={{ fontFamily: mono, fontSize: 10.5, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", color: "var(--faint)", margin: "0 0 12px" }}>
+            Retention
+          </p>
+          <p style={{ fontSize: 13, lineHeight: 1.55, color: "var(--muted)", margin: "0 0 4px" }}>
+            {orgSettings?.retention_days
+              ? `Derived artifacts (transcripts, keyframes) are kept ${orgSettings.retention_days} days, then deleted, per this org's retention policy.`
+              : "This org has no retention limit configured -- derived artifacts (transcripts, keyframes) are kept indefinitely."}
+          </p>
+          <p style={{ fontSize: 12, lineHeight: 1.5, color: "var(--faint)", margin: 0 }}>
+            Raw audio and video are deleted automatically once the pipeline finishes processing them --
+            not opt-in, and not affected by this setting.
+          </p>
+        </section>
+      </div>
       </main>
     </div>
   );

@@ -1,15 +1,19 @@
 "use client";
 
-// Ported from the Claude Design project "VisualSprint landing redesign" ->
-// VisualSprint Landing v1.dc.html. Public marketing page, not part of the
-// authenticated app shell -- see lib/AuthProvider.tsx's PUBLIC_PATHS.
+// Restyled to the Claude Design project "VisualSprint landing redesign" ->
+// VisualSprint Landing.dc.html (blue/Plus-Jakarta-Sans), superseding the
+// earlier, different export "VisualSprint Landing v1.dc.html" (lime/cream)
+// this page was originally built from. Tokens below now match the same
+// blue palette as globals.css and the rest of the authenticated app --
+// this page keeps its own local token object rather than reading the CSS
+// custom properties because it needs its own independent light/dark toggle
+// (a logged-out visitor has no sidebar to read a theme preference from).
 //
-// This design uses its own token set (lime accent, warm cream ground) that
-// is DIFFERENT from the authenticated app's teal/green design tokens in
-// globals.css -- that divergence is preserved as-is from the source design
-// rather than silently reconciled, since the marketing site and the product
-// UI are allowed to be distinct surfaces. Flag to design owner if that's
-// unintentional.
+// The real, specific content this page already had (the pipeline stages,
+// the four proof screenshots, the MongoDB/pgvector evidence-anatomy
+// example, the compare table, actual tiered pricing) is richer than the
+// mockup's generic placeholder copy for the same sections, so it's kept
+// as-is -- only the visual system (color, type, radii) is ported over.
 //
 // CTAs that in the source design point at placeholder anchors are mapped to
 // real destinations: "Sign in" goes to the actual working signup at /login.
@@ -26,63 +30,63 @@ import { useState } from "react";
 import { API_BASE_URL } from "@/lib/config";
 
 const LIGHT = {
-  bg: "#f7f6f2",
+  bg: "#ffffff",
   surface: "#ffffff",
-  surface2: "#f0eee7",
-  border: "#e4e1d8",
-  borderStrong: "#cdc9bd",
-  text: "#15171b",
-  muted: "#5d6270",
-  faint: "#8a8f9c",
-  accent: "#c6f24e",
-  accentText: "#46620a",
-  accentSoft: "#eef7cf",
-  btnBg: "#15171b",
-  btnFg: "#f7f6f2",
-  evidence: "#a8720c",
-  evidenceBg: "#fbf0d8",
-  gap: "#b34724",
-  gapBg: "#fae8e0",
-  lang: "#3b5bd0",
-  langBg: "#e7ebfb",
-  band: "#111318",
-  bandSurface: "#191c23",
-  bandText: "#f4f2ec",
-  bandMuted: "#9aa0ac",
-  bandBorder: "#282c35",
-  shadow: "rgba(20,23,29,.09)",
+  surface2: "#f4f7fd",
+  border: "#e7ecf5",
+  borderStrong: "#dbe3f0",
+  text: "#0f1729",
+  muted: "#5a6478",
+  faint: "#909cb0",
+  accent: "#2563eb",
+  accentText: "#1d4ed8",
+  accentSoft: "#eef4ff",
+  btnBg: "#2563eb",
+  btnFg: "#ffffff",
+  evidence: "#b3790f",
+  evidenceBg: "#fdf3de",
+  gap: "#c2410c",
+  gapBg: "#fdece3",
+  lang: "#1d4ed8",
+  langBg: "#eef4ff",
+  band: "#0f1729",
+  bandSurface: "#1a2740",
+  bandText: "#ffffff",
+  bandMuted: "#9aa6bf",
+  bandBorder: "#28324a",
+  shadow: "rgba(15,23,41,.09)",
 };
 
 const DARK = {
-  bg: "#0a0b0f",
-  surface: "#12141a",
-  surface2: "#191c23",
-  border: "#242832",
-  borderStrong: "#343a46",
-  text: "#f1efea",
-  muted: "#9ba0ac",
-  faint: "#6e7381",
-  accent: "#c6f24e",
-  accentText: "#c6f24e",
-  accentSoft: "rgba(198,242,78,.13)",
-  btnBg: "#c6f24e",
-  btnFg: "#0a0b0f",
-  evidence: "#f0b23c",
-  evidenceBg: "rgba(240,178,60,.15)",
-  gap: "#ff8a66",
-  gapBg: "rgba(255,138,102,.15)",
-  lang: "#9db2ff",
-  langBg: "rgba(157,178,255,.14)",
-  band: "#0f1116",
-  bandSurface: "#161a21",
-  bandText: "#f1efea",
-  bandMuted: "#9ba0ac",
-  bandBorder: "#22262f",
+  bg: "#0c0f14",
+  surface: "#10141c",
+  surface2: "#151a22",
+  border: "#232a36",
+  borderStrong: "#2e3644",
+  text: "#eaeef6",
+  muted: "#99a2b3",
+  faint: "#616b7d",
+  accent: "#5b8ff9",
+  accentText: "#7ea6fb",
+  accentSoft: "rgba(91,143,249,.14)",
+  btnBg: "#5b8ff9",
+  btnFg: "#ffffff",
+  evidence: "#e0a83e",
+  evidenceBg: "rgba(224,168,62,.16)",
+  gap: "#dd8563",
+  gapBg: "rgba(221,133,99,.16)",
+  lang: "#7ea6fb",
+  langBg: "rgba(91,143,249,.16)",
+  band: "#080a0e",
+  bandSurface: "#12151c",
+  bandText: "#eaeef6",
+  bandMuted: "#8891a3",
+  bandBorder: "#1e232d",
   shadow: "rgba(0,0,0,.5)",
 };
 
-const serif = "'Source Serif 4', serif";
-const sans = "'IBM Plex Sans', sans-serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 const PIPELINE = [

@@ -1,61 +1,104 @@
-@import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Sinhala:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Sinhala:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Design tokens -- from the Claude Design project "Visualsprint core
-   development" (Settings.dc.html / AppSidebar.dc.html), ported verbatim
-   rather than re-derived, so every page built against that project stays
-   pixel-consistent with this one. */
+/* Design tokens -- from the Claude Design project "VisualSprint landing
+   redesign" (VisualSprint App.dc.html / EvidenceCite.dc.html), ported
+   verbatim rather than re-derived, so every page built against that project
+   stays pixel-consistent with this one. Supersedes the older teal/green
+   tokens from "Visualsprint core development" -- those names are retired,
+   not aliased, since a couple of them (--accent) conflated two different
+   visual roles (brand blue vs. verified/positive green) that this system
+   splits into --blue and --green.
+
+   Dark-mode values aren't in the source .dc.html files (they only declare
+   color-scheme:light) -- derived here the same way the previous dark block
+   was: invert lightness, keep each hue family, boost the accent for
+   contrast on a dark ground. */
 :root {
-  --bg: #f6f4ee;
-  --surface: #ffffff;
-  --surface2: #efece2;
-  --border: #e1ddd0;
-  --border-strong: #cfc9b8;
-  --text: #14171d;
-  --text-muted: #6b6558;
-  --text-faint: #948d7c;
-  --accent: #1f7a5c;
-  --accent-bg: #e3f1ea;
-  --accent-strong: #145c44;
-  --evidence: #b3790f;
-  --evidence-bg: #f8edd6;
-  --gap: #ab4a2f;
-  --gap-bg: #f6e6df;
-  --shadow: rgba(20, 23, 29, 0.07);
+  --bg: #ffffff;
+  --soft: #f4f7fd;
+  --rail: #f8fafd;
+  --border: #e7ecf5;
+  --border-2: #dbe3f0;
+  --text: #0f1729;
+  --muted: #5a6478;
+  --faint: #909cb0;
+  --blue: #2563eb;
+  --blue-strong: #1d4ed8;
+  --blue-soft: #eef4ff;
+  --blue-tint: #dce9ff;
+  --amber: #b3790f;
+  --amber-soft: #fdf3de;
+  --green: #0d7a5f;
+  --green-soft: #e4f6ef;
+  --red: #c2410c;
+  --red-soft: #fdece3;
+  --shadow: rgba(15, 23, 41, 0.07);
+  --shadow-2: rgba(15, 23, 41, 0.12);
   color-scheme: light;
+}
+
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    --bg: #0c0f14;
+    --soft: #10141c;
+    --rail: #151a22;
+    --border: #232a36;
+    --border-2: #2e3644;
+    --text: #eaeef6;
+    --muted: #99a2b3;
+    --faint: #616b7d;
+    --blue: #5b8ff9;
+    --blue-strong: #7ea6fb;
+    --blue-soft: rgba(91, 143, 249, 0.14);
+    --blue-tint: rgba(91, 143, 249, 0.24);
+    --amber: #e0a83e;
+    --amber-soft: rgba(224, 168, 62, 0.16);
+    --green: #3ab892;
+    --green-soft: rgba(58, 184, 146, 0.16);
+    --red: #dd8563;
+    --red-soft: rgba(221, 133, 99, 0.16);
+    --shadow: rgba(0, 0, 0, 0.4);
+    --shadow-2: rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
 }
 
 :root[data-theme="dark"] {
   --bg: #0c0f14;
-  --surface: #151a22;
-  --surface2: #1b212b;
-  --border: #272e3a;
-  --border-strong: #333c4a;
-  --text: #eae6dc;
-  --text-muted: #a39c8a;
-  --text-faint: #726c5c;
-  --accent: #3ab892;
-  --accent-bg: rgba(58, 184, 146, 0.14);
-  --accent-strong: #5cd1ab;
-  --evidence: #e0a83e;
-  --evidence-bg: rgba(224, 168, 62, 0.16);
-  --gap: #dd8563;
-  --gap-bg: rgba(221, 133, 99, 0.16);
+  --soft: #10141c;
+  --rail: #151a22;
+  --border: #232a36;
+  --border-2: #2e3644;
+  --text: #eaeef6;
+  --muted: #99a2b3;
+  --faint: #616b7d;
+  --blue: #5b8ff9;
+  --blue-strong: #7ea6fb;
+  --blue-soft: rgba(91, 143, 249, 0.14);
+  --blue-tint: rgba(91, 143, 249, 0.24);
+  --amber: #e0a83e;
+  --amber-soft: rgba(224, 168, 62, 0.16);
+  --green: #3ab892;
+  --green-soft: rgba(58, 184, 146, 0.16);
+  --red: #dd8563;
+  --red-soft: rgba(221, 133, 99, 0.16);
   --shadow: rgba(0, 0, 0, 0.4);
+  --shadow-2: rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 
 body {
-  background: var(--bg);
+  background: var(--soft);
   color: var(--text);
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: "Plus Jakarta Sans", sans-serif;
 }
 
 a {
-  color: var(--accent-strong);
+  color: var(--blue-strong);
   text-decoration: none;
 }
 a:hover {
@@ -63,7 +106,9 @@ a:hover {
 }
 
 .font-display {
-  font-family: "Source Serif 4", serif;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 .font-mono-brand {
   font-family: "IBM Plex Mono", monospace;

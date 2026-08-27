@@ -19,8 +19,8 @@ import type {
   MeetingReport,
 } from "@/lib/types";
 
-const sans = "'IBM Plex Sans', sans-serif";
-const serif = "'Source Serif 4', serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 const TYPE_LABELS: Record<KnowledgeItemType, string> = {
@@ -39,20 +39,22 @@ const CONF_LABELS: Record<ConfidenceLevel, string> = {
   unsupported: "Unsupported",
 };
 
-// [fg, bg, dot]
-const CONF_COLOR: Record<ConfidenceLevel, [string, string, string]> = {
-  verified: ["var(--accent-strong)", "var(--accent-bg)", "var(--accent)"],
-  partially_supported: ["var(--evidence)", "var(--evidence-bg)", "var(--evidence)"],
-  ambiguous: ["var(--text-faint)", "var(--surface2)", "var(--text-faint)"],
-  unsupported: ["var(--gap)", "var(--gap-bg)", "var(--gap)"],
+// [fg, bg, segments-lit] -- segments render as the mockup's 4-bar confidence
+// meter (EvidenceCite.dc.html's CONF map), a firmer visual read than a
+// single dot.
+const CONF_COLOR: Record<ConfidenceLevel, [string, string, number]> = {
+  verified: ["var(--green)", "var(--green-soft)", 4],
+  partially_supported: ["var(--amber)", "var(--amber-soft)", 3],
+  ambiguous: ["var(--faint)", "var(--soft)", 2],
+  unsupported: ["var(--red)", "var(--red-soft)", 1],
 };
 
 const LANG_COLOR: Record<string, [string, string]> = {
-  si: ["var(--accent-strong)", "var(--accent-bg)"],
-  ta: ["var(--evidence)", "var(--evidence-bg)"],
+  si: ["var(--blue-strong)", "var(--blue-soft)"],
+  ta: ["var(--amber)", "var(--amber-soft)"],
 };
 function langColor(lang: string): [string, string] {
-  return LANG_COLOR[lang] ?? ["var(--text-faint)", "var(--surface2)"];
+  return LANG_COLOR[lang] ?? ["var(--faint)", "var(--soft)"];
 }
 
 function formatTimestamp(seconds: number): string {
@@ -77,34 +79,100 @@ function flattenItems(report: MeetingReport): FlatItem[] {
   return groups.flatMap(([type, items]) => items.map((item) => ({ ...item, type })));
 }
 
-const PARTICIPANT_PALETTE = ["var(--accent)", "var(--evidence)", "var(--text-muted)", "var(--text-faint)"];
+const PARTICIPANT_PALETTE = ["var(--blue)", "var(--amber)", "var(--muted)", "var(--faint)"];
 
-function EvidenceRow({ ev }: { ev: EvidenceRef }) {
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase() || "?";
+}
+
+// Restyled to EvidenceCite.dc.html's card pattern: a numbered marker, the
+// keyframe thumbnail with a timestamp overlay, then speaker/quote/caption.
+function EvidenceRow({ ev, n }: { ev: EvidenceRef; n: number }) {
   const [langFg, langBg] = ev.quote_lang_tags?.[0] ? langColor(ev.quote_lang_tags[0]) : ["", ""];
   return (
     <div style={{ display: "flex", gap: 12 }}>
+      <span
+        style={{
+          fontFamily: mono,
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--blue-strong)",
+          background: "var(--blue-soft)",
+          border: "1px solid var(--blue-tint)",
+          borderRadius: 6,
+          width: 20,
+          height: 20,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {n}
+      </span>
       {ev.keyframe_thumbnail_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={ev.keyframe_thumbnail_url}
-          alt={ev.keyframe_caption ?? `Screen evidence at ${formatTimestamp(ev.timestamp_s)}`}
-          style={{ width: 76, height: 52, flexShrink: 0, background: "#232830", borderRadius: 6, border: "1px solid var(--border)", objectFit: "cover" }}
-        />
+        <div style={{ position: "relative", width: 92, height: 60, flexShrink: 0, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border-2)" }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={ev.keyframe_thumbnail_url}
+            alt={ev.keyframe_caption ?? `Screen evidence at ${formatTimestamp(ev.timestamp_s)}`}
+            style={{ width: "100%", height: "100%", background: "#232830", objectFit: "cover", display: "block" }}
+          />
+          <span
+            style={{
+              position: "absolute",
+              left: 4,
+              bottom: 4,
+              fontFamily: mono,
+              fontSize: 9,
+              fontWeight: 600,
+              color: "#fff",
+              background: "rgba(15,23,41,.78)",
+              borderRadius: 4,
+              padding: "2px 5px",
+              pointerEvents: "none",
+            }}
+          >
+            {formatTimestamp(ev.timestamp_s)}
+          </span>
+        </div>
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontFamily: mono, fontSize: 11.5, color: "var(--text-faint)", margin: "0 0 4px" }}>
-          {ev.speaker} · {formatTimestamp(ev.timestamp_s)}
+        <p style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "0 0 6px" }}>
+          <span
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: "50%",
+              background: "var(--soft)",
+              border: "1px solid var(--border)",
+              fontFamily: mono,
+              fontSize: 9,
+              fontWeight: 600,
+              color: "var(--muted)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            {initials(ev.speaker)}
+          </span>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--text)" }}>{ev.speaker}</span>
+          <span style={{ fontFamily: mono, fontSize: 11, color: "var(--faint)" }}>{formatTimestamp(ev.timestamp_s)}</span>
           {ev.quote_lang_tags && ev.quote_lang_tags.length > 0 && (
             <span
               style={{
                 fontFamily: mono,
-                fontSize: 10,
+                fontSize: 9.5,
                 fontWeight: 600,
                 color: langFg,
                 background: langBg,
-                padding: "1px 6px",
-                borderRadius: 3,
-                marginLeft: 6,
+                padding: "2px 6px",
+                borderRadius: 4,
               }}
             >
               {ev.quote_lang_tags.join("+").toUpperCase()}
@@ -112,10 +180,12 @@ function EvidenceRow({ ev }: { ev: EvidenceRef }) {
           )}
         </p>
         {ev.quote && (
-          <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-muted)", margin: 0 }}>&quot;{ev.quote}&quot;</p>
+          <p style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text)", margin: 0, paddingLeft: 10, borderLeft: "2px solid var(--blue-tint)" }}>
+            &#8220;{ev.quote}&#8221;
+          </p>
         )}
         {ev.keyframe_caption && (
-          <p style={{ fontSize: 12, color: "var(--text-faint)", margin: "4px 0 0" }}>{ev.keyframe_caption}</p>
+          <p style={{ fontSize: 11.5, color: "var(--faint)", margin: "6px 0 0" }}>{ev.keyframe_caption}</p>
         )}
       </div>
     </div>
@@ -123,12 +193,12 @@ function EvidenceRow({ ev }: { ev: EvidenceRef }) {
 }
 
 function ItemCard({ item }: { item: FlatItem }) {
-  const [confFg, confBg, confDot] = CONF_COLOR[item.confidence];
+  const [confFg, confBg, confLit] = CONF_COLOR[item.confidence];
   return (
     <article
       style={{
-        background: "var(--surface)",
-        border: `1px solid ${item.coverage_gap ? "var(--gap)" : "var(--border)"}`,
+        background: "var(--bg)",
+        border: `1px solid ${item.coverage_gap ? "var(--red)" : "var(--border)"}`,
         borderRadius: 10,
         padding: "22px 24px",
       }}
@@ -142,8 +212,8 @@ function ItemCard({ item }: { item: FlatItem }) {
               fontWeight: 600,
               letterSpacing: "0.03em",
               textTransform: "uppercase",
-              color: "var(--text-faint)",
-              border: "1px solid var(--border-strong)",
+              color: "var(--faint)",
+              border: "1px solid var(--border-2)",
               padding: "3px 9px",
               borderRadius: 4,
             }}
@@ -156,16 +226,16 @@ function ItemCard({ item }: { item: FlatItem }) {
               fontWeight: 500,
               color:
                 item.lifecycle_state === "recurring"
-                  ? "var(--evidence)"
+                  ? "var(--amber)"
                   : item.lifecycle_state === "resolved"
-                    ? "var(--accent-strong)"
-                    : "var(--text-faint)",
+                    ? "var(--green)"
+                    : "var(--faint)",
               background:
                 item.lifecycle_state === "recurring"
-                  ? "var(--evidence-bg)"
+                  ? "var(--amber-soft)"
                   : item.lifecycle_state === "resolved"
-                    ? "var(--accent-bg)"
-                    : "var(--surface2)",
+                    ? "var(--green-soft)"
+                    : "var(--soft)",
               padding: "3px 9px",
               borderRadius: 4,
             }}
@@ -178,8 +248,8 @@ function ItemCard({ item }: { item: FlatItem }) {
                 fontFamily: mono,
                 fontSize: 11,
                 fontWeight: 600,
-                color: "var(--gap)",
-                background: "var(--gap-bg)",
+                color: "var(--red)",
+                background: "var(--red-soft)",
                 padding: "3px 9px",
                 borderRadius: 4,
               }}
@@ -190,28 +260,41 @@ function ItemCard({ item }: { item: FlatItem }) {
         </div>
         <span
           style={{
-            display: "flex",
+            display: "inline-flex",
             alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            fontWeight: 600,
-            color: confFg,
+            gap: 8,
+            border: `1px solid ${confBg === "var(--soft)" ? "var(--border-2)" : confFg}`,
             background: confBg,
-            padding: "4px 10px",
-            borderRadius: 20,
+            borderRadius: 999,
+            padding: "5px 10px 5px 11px",
             flexShrink: 0,
           }}
         >
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: confDot, display: "inline-block" }} />
-          {CONF_LABELS[item.confidence]}
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: confFg, whiteSpace: "nowrap" }}>
+            {CONF_LABELS[item.confidence]}
+          </span>
+          <span style={{ display: "flex", gap: 2, alignItems: "flex-end" }}>
+            {[0, 1, 2, 3].map((i) => (
+              <span
+                key={i}
+                style={{
+                  width: 4,
+                  height: 10,
+                  borderRadius: 1,
+                  background: i < confLit ? confFg : "var(--border-2)",
+                  display: "block",
+                }}
+              />
+            ))}
+          </span>
         </span>
       </div>
 
-      <p style={{ fontFamily: serif, fontSize: 18, lineHeight: 1.4, color: "var(--text)", margin: "14px 0 4px" }}>
+      <p style={{ fontFamily: sans, fontWeight: 700, fontSize: 17.5, lineHeight: 1.42, letterSpacing: "-0.015em", color: "var(--text)", margin: "14px 0 4px" }}>
         {item.statement}
       </p>
       {(item.owner || item.due) && (
-        <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "0 0 14px" }}>
+        <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "0 0 14px" }}>
           {item.owner && `Owner: ${item.owner}`}
           {item.owner && item.due && " · "}
           {item.due && `Due: ${item.due}`}
@@ -219,9 +302,9 @@ function ItemCard({ item }: { item: FlatItem }) {
       )}
 
       {item.evidence.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-          {item.evidence.map((ev) => (
-            <EvidenceRow key={ev.id} ev={ev} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+          {item.evidence.map((ev, i) => (
+            <EvidenceRow key={ev.id} ev={ev} n={i + 1} />
           ))}
         </div>
       )}
@@ -269,11 +352,11 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
   }, [fetchReport, authLoading, session]);
 
   if (authLoading) {
-    return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading…</p>;
+    return <p style={{ fontSize: 14, color: "var(--muted)", padding: 32 }}>Loading…</p>;
   }
 
   if (loading) {
-    return <p style={{ fontSize: 14, color: "var(--text-muted)", padding: 32 }}>Loading report…</p>;
+    return <p style={{ fontSize: 14, color: "var(--muted)", padding: 32 }}>Loading report…</p>;
   }
 
   if (error || !report) {
@@ -282,11 +365,11 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
         style={{
           margin: 32,
           borderRadius: 6,
-          background: "var(--gap-bg)",
-          border: "1px solid var(--gap)",
+          background: "var(--red-soft)",
+          border: "1px solid var(--red)",
           padding: "8px 12px",
           fontSize: 14,
-          color: "var(--gap)",
+          color: "var(--red)",
         }}
       >
         {error ?? "Report not found."}
@@ -318,21 +401,21 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
         }}
       >
         <div>
-          <p style={{ fontSize: 13, color: "var(--text-faint)", margin: 0 }}>
+          <p style={{ fontSize: 13, color: "var(--faint)", margin: 0 }}>
             Meetings / {report.title}
           </p>
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 6 }}>
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>
               {new Date(report.occurred_at).toLocaleDateString()}
             </span>
-            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--text-faint)", display: "inline-block" }} />
-            <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Meeting {report.meeting_id}</span>
+            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--faint)", display: "inline-block" }} />
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>Meeting {report.meeting_id}</span>
           </div>
         </div>
         <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
           <Link
             href={`/meetings/${report.capture_session_id}/correct`}
-            style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text-muted)" }}
+            style={{ fontSize: 13.5, fontWeight: 500, color: "var(--muted)" }}
           >
             Fix transcript →
           </Link>
@@ -341,11 +424,11 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
             style={{
               fontFamily: sans,
               fontSize: 13.5,
-              fontWeight: 600,
+              fontWeight: 700,
               color: "#fff",
-              background: "var(--accent-strong)",
-              padding: "9px 16px",
-              borderRadius: 7,
+              background: "var(--blue)",
+              padding: "9px 18px",
+              borderRadius: 999,
             }}
           >
             Ask about this meeting →
@@ -357,7 +440,7 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
         {report.executive_summary && (
           <section
             style={{
-              background: "var(--surface)",
+              background: "var(--bg)",
               border: "1px solid var(--border)",
               borderRadius: 10,
               padding: "22px 24px",
@@ -370,7 +453,7 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
                 fontWeight: 700,
                 textTransform: "uppercase",
                 letterSpacing: "0.06em",
-                color: "var(--text-faint)",
+                color: "var(--faint)",
                 margin: "0 0 10px",
                 fontFamily: mono,
               }}
@@ -388,10 +471,10 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
             style={{
               borderRadius: 10,
               border: "1px solid var(--border)",
-              background: "var(--surface2)",
+              background: "var(--soft)",
               padding: "12px 16px",
               fontSize: 14,
-              color: "var(--text-muted)",
+              color: "var(--muted)",
               marginBottom: 20,
             }}
           >
@@ -403,20 +486,20 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
         {report.coverage_gaps.map((gap) => (
           <div
             key={gap.id}
-            style={{ background: "var(--gap-bg)", border: "1px solid var(--gap)", borderRadius: 10, padding: "16px 20px", marginBottom: 20 }}
+            style={{ background: "var(--red-soft)", border: "1px solid var(--red)", borderRadius: 10, padding: "16px 20px", marginBottom: 20 }}
           >
-            <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: "var(--gap)" }}>
+            <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: "var(--red)" }}>
               ⚠ Coverage gap · {formatTimestamp(gap.start_s)}–{formatTimestamp(gap.end_s)}
             </span>
-            <p style={{ fontSize: 13.5, color: "var(--text-muted)", margin: "6px 0 0", lineHeight: 1.55 }}>
+            <p style={{ fontSize: 13.5, color: "var(--muted)", margin: "6px 0 0", lineHeight: 1.55 }}>
               {gap.modality} {gap.status} — {gap.reason}
             </p>
           </div>
         ))}
 
         {report.engagement.participants.length > 0 && (
-          <section style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "22px 24px" }}>
-            <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.03em", margin: "0 0 16px" }}>
+          <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "22px 24px" }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: "var(--faint)", textTransform: "uppercase", letterSpacing: "0.03em", margin: "0 0 16px" }}>
               Speech captured per speaker
             </p>
             <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 18 }}>
@@ -445,11 +528,11 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
                     <p style={{ fontSize: 13.5, fontWeight: 500, color: "var(--text)", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {p.display_name}
                     </p>
-                    <p style={{ fontFamily: mono, fontSize: 12, color: "var(--text-faint)", margin: "2px 0 0" }}>
+                    <p style={{ fontFamily: mono, fontSize: 12, color: "var(--faint)", margin: "2px 0 0" }}>
                       {formatTimestamp(p.talk_time_s)} captured · {p.utterance_count} utterances
                     </p>
                   </div>
-                  <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: "var(--text-muted)" }}>
+                  <span style={{ fontFamily: mono, fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>
                     {p.talk_time_pct.toFixed(0)}%
                   </span>
                 </div>
@@ -469,12 +552,12 @@ export default function MeetingReportPage({ params }: { params: Promise<{ id: st
                   onClick={() => setFilter(key)}
                   style={
                     isActive
-                      ? { fontFamily: sans, fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--accent-strong)", border: "1px solid var(--accent-strong)", padding: "7px 13px", borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap" }
-                      : { fontFamily: sans, fontSize: 13, fontWeight: 500, color: "var(--text-muted)", background: "var(--surface)", border: "1px solid var(--border)", padding: "7px 13px", borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap" }
+                      ? { fontFamily: sans, fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--blue-strong)", border: "1px solid var(--blue-strong)", padding: "7px 13px", borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap" }
+                      : { fontFamily: sans, fontSize: 13, fontWeight: 500, color: "var(--muted)", background: "var(--bg)", border: "1px solid var(--border)", padding: "7px 13px", borderRadius: 20, cursor: "pointer", whiteSpace: "nowrap" }
                   }
                 >
                   {label}{" "}
-                  <span style={{ fontFamily: mono, fontSize: 11, color: isActive ? "rgba(255,255,255,.75)" : "var(--text-faint)" }}>
+                  <span style={{ fontFamily: mono, fontSize: 11, color: isActive ? "rgba(255,255,255,.75)" : "var(--faint)" }}>
                     {counts[key] ?? 0}
                   </span>
                 </button>

@@ -13,8 +13,8 @@ import { useAuth } from "@/lib/AuthProvider";
 import { mockAssistantReply } from "@/lib/mock-data";
 import type { ChatMessage, ChatRequest, ChatResponse, EvidenceChip } from "@/lib/types";
 
-const sans = "'IBM Plex Sans', sans-serif";
-const serif = "'Source Serif 4', serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 const SUGGESTIONS = ["Prep me for tomorrow's next meeting", "What's still unresolved from last week?"];
@@ -27,9 +27,9 @@ function timestampLabel(seconds: number): string {
 
 function CiteCard({ chip, n }: { chip: EvidenceChip; n: number }) {
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 9, padding: "12px 14px", width: 216 }}>
+    <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 9, padding: "12px 14px", width: 216 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <p style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: "var(--text-faint)", margin: "0 0 6px" }}>
+        <p style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: "var(--faint)", margin: "0 0 6px" }}>
           [{n}] {chip.speaker} · {timestampLabel(chip.timestamp_s)}
         </p>
       </div>
@@ -41,7 +41,7 @@ function CiteCard({ chip, n }: { chip: EvidenceChip; n: number }) {
           style={{ width: "100%", height: 38, background: "#232830", borderRadius: 5, objectFit: "cover", marginBottom: 8 }}
         />
       )}
-      <p style={{ fontSize: 11, color: "var(--text-faint)", margin: 0, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+      <p style={{ fontSize: 11, color: "var(--faint)", margin: 0, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
         {chip.meeting_title}
       </p>
     </div>
@@ -57,7 +57,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
           width: 30,
           height: 30,
           borderRadius: "50%",
-          background: isUser ? "var(--text-muted)" : "var(--accent)",
+          background: isUser ? "var(--muted)" : "var(--blue)",
           color: "#fff",
           fontFamily: mono,
           fontSize: 11,
@@ -71,7 +71,7 @@ function MessageRow({ message }: { message: ChatMessage }) {
         {isUser ? "Me" : "VS"}
       </div>
       {isUser ? (
-        <div style={{ background: "var(--surface2)", borderRadius: 10, padding: "11px 15px", fontSize: 14, color: "var(--text)" }}>
+        <div style={{ background: "var(--soft)", borderRadius: 10, padding: "11px 15px", fontSize: 14, color: "var(--text)" }}>
           {message.content}
         </div>
       ) : (
@@ -139,7 +139,7 @@ export default function ChatPage() {
   return (
     <div style={{ display: "flex", height: "100vh" }}>
       <div style={{ width: 260, flexShrink: 0, borderRight: "1px solid var(--border)", padding: "22px 16px" }}>
-        <p style={{ fontFamily: mono, fontSize: 11.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-faint)", margin: "0 0 14px" }}>
+        <p style={{ fontFamily: mono, fontSize: 11.5, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--faint)", margin: "0 0 14px" }}>
           Org memory
         </p>
         <button
@@ -154,11 +154,11 @@ export default function ChatPage() {
             width: "100%",
             fontSize: 13.5,
             fontWeight: 600,
-            color: "var(--accent-strong)",
-            background: "var(--accent-bg)",
-            border: "1px solid var(--accent)",
+            color: "var(--blue-strong)",
+            background: "var(--blue-soft)",
+            border: "1px solid var(--blue-tint)",
             padding: 9,
-            borderRadius: 7,
+            borderRadius: 999,
             cursor: "pointer",
             marginBottom: 16,
           }}
@@ -166,11 +166,11 @@ export default function ChatPage() {
           + New question
         </button>
         {messages.length > 0 && (
-          <div style={{ padding: "11px 12px", borderRadius: 8, background: "var(--surface2)" }}>
+          <div style={{ padding: "11px 12px", borderRadius: 8, background: "var(--soft)" }}>
             <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", margin: 0, lineHeight: 1.4 }}>
               {latestUserQuestion}
             </p>
-            <p style={{ fontSize: 11.5, color: "var(--text-faint)", margin: "4px 0 0" }}>Current conversation</p>
+            <p style={{ fontSize: 11.5, color: "var(--faint)", margin: "4px 0 0" }}>Current conversation</p>
           </div>
         )}
       </div>
@@ -180,7 +180,7 @@ export default function ChatPage() {
           <p style={{ fontFamily: serif, fontSize: 19, color: "var(--text)", margin: 0 }}>
             {latestUserQuestion ?? "Org memory chat"}
           </p>
-          <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "6px 0 0" }}>
+          <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "6px 0 0" }}>
             {latestUserQuestion
               ? "Ask across your organization's meeting history"
               : "Every claim cites a speaker, a transcript span, and a screen"}
@@ -190,11 +190,11 @@ export default function ChatPage() {
               style={{
                 marginTop: 8,
                 borderRadius: 6,
-                background: "var(--evidence-bg)",
-                border: "1px solid var(--evidence)",
+                background: "var(--amber-soft)",
+                border: "1px solid var(--amber)",
                 padding: "8px 12px",
                 fontSize: 12,
-                color: "var(--evidence)",
+                color: "var(--amber)",
               }}
             >
               Not connected to the chat API yet (POST {API_BASE_URL}/api/v1/chat unavailable). Showing a demo
@@ -205,14 +205,14 @@ export default function ChatPage() {
 
         <div style={{ flex: 1, overflowY: "auto", padding: "26px 32px", display: "flex", flexDirection: "column", gap: 22, maxWidth: 760 }}>
           {messages.length === 0 && (
-            <p style={{ fontSize: 14, color: "var(--text-faint)", textAlign: "center", marginTop: 32 }}>
+            <p style={{ fontSize: 14, color: "var(--faint)", textAlign: "center", marginTop: 32 }}>
               Try: &quot;why are we using MongoDB?&quot; or &quot;what did we commit to last week?&quot;
             </p>
           )}
           {messages.map((m) => (
             <MessageRow key={m.id} message={m} />
           ))}
-          {sending && <p style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Thinking…</p>}
+          {sending && <p style={{ fontSize: 12.5, color: "var(--faint)" }}>Thinking…</p>}
         </div>
 
         <div style={{ padding: "0 32px", display: "flex", gap: 8 }}>
@@ -225,8 +225,8 @@ export default function ChatPage() {
                 fontFamily: sans,
                 fontSize: 12.5,
                 fontWeight: 500,
-                color: "var(--text-muted)",
-                background: "var(--surface2)",
+                color: "var(--muted)",
+                background: "var(--soft)",
                 border: "1px solid var(--border)",
                 padding: "7px 12px",
                 borderRadius: 20,
@@ -238,7 +238,20 @@ export default function ChatPage() {
           ))}
         </div>
 
-        <form onSubmit={sendMessage} style={{ padding: "16px 32px 24px", display: "flex", gap: 10 }}>
+        <form
+          onSubmit={sendMessage}
+          style={{
+            margin: "16px 32px 24px",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            background: "var(--bg)",
+            border: "1px solid var(--border-2)",
+            borderRadius: 999,
+            padding: "9px 9px 9px 20px",
+            boxShadow: "0 12px 26px -20px var(--shadow-2)",
+          }}
+        >
           <input
             type="text"
             value={input}
@@ -248,10 +261,9 @@ export default function ChatPage() {
               fontFamily: sans,
               flex: 1,
               fontSize: 14,
-              padding: "12px 16px",
-              borderRadius: 9,
-              border: "1px solid var(--border-strong)",
-              background: "var(--surface)",
+              border: "none",
+              outline: "none",
+              background: "transparent",
               color: "var(--text)",
             }}
           />
@@ -261,12 +273,12 @@ export default function ChatPage() {
             style={{
               fontFamily: sans,
               fontSize: 13.5,
-              fontWeight: 600,
+              fontWeight: 700,
               color: "#fff",
-              background: "var(--accent-strong)",
+              background: "var(--blue)",
               border: "none",
-              padding: "0 22px",
-              borderRadius: 9,
+              padding: "11px 22px",
+              borderRadius: 999,
               cursor: sending || !input.trim() ? "default" : "pointer",
               opacity: sending || !input.trim() ? 0.6 : 1,
             }}

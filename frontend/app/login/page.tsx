@@ -28,7 +28,7 @@ const LIGHT = {
   gapBg: "#f6e6df",
 };
 
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
 
 type Mode = "signin" | "signup";
@@ -133,7 +133,7 @@ export default function LoginPage() {
   if (configError) {
     return (
       <div style={{ maxWidth: 420, margin: "80px auto", fontFamily: sans }}>
-        <h1 style={{ fontFamily: "'Source Serif 4', serif", fontSize: 24, fontWeight: 600, color: LIGHT.text }}>
+        <h1 style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 24, fontWeight: 600, color: LIGHT.text }}>
           Sign-in isn&apos;t set up yet
         </h1>
         <p
@@ -175,7 +175,7 @@ export default function LoginPage() {
       >
         <Link href="/" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
           <span style={{ fontFamily: mono, color: LIGHT.accent, fontWeight: 600 }}>[</span>
-          <span style={{ fontFamily: "'Source Serif 4', serif", fontSize: 16, fontWeight: 600, color: LIGHT.text }}>
+          <span style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", fontSize: 16, fontWeight: 600, color: LIGHT.text }}>
             VisualSprint
           </span>
           <span style={{ fontFamily: mono, color: LIGHT.accent, fontWeight: 600 }}>]</span>
@@ -238,7 +238,7 @@ export default function LoginPage() {
 
           <h1
             style={{
-              fontFamily: "'Source Serif 4', serif",
+              fontFamily: "'Plus Jakarta Sans', sans-serif",
               fontSize: 29,
               fontWeight: 600,
               letterSpacing: "-0.01em",
@@ -442,7 +442,7 @@ export default function LoginPage() {
       >
         <h2
           style={{
-            fontFamily: "'Source Serif 4', serif",
+            fontFamily: "'Plus Jakarta Sans', sans-serif",
             fontSize: 25,
             lineHeight: 1.35,
             color: "#f2efe6",

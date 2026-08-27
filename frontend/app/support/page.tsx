@@ -1,6 +1,6 @@
-const serif = "'Source Serif 4', serif";
+const serif = "'Plus Jakarta Sans', sans-serif";
 const mono = "'IBM Plex Mono', monospace";
-const sans = "'IBM Plex Sans', sans-serif";
+const sans = "'Plus Jakarta Sans', sans-serif";
 const CONTACT_EMAIL = "thanobansk@gmail.com";
 
 const TOPICS = [
@@ -27,7 +27,7 @@ export default function SupportPage() {
     <div
       style={{
         minHeight: "100vh",
-        background: "var(--bg)",
+        background: "var(--soft)",
         color: "var(--text)",
         fontFamily: sans,
         WebkitFontSmoothing: "antialiased",
@@ -36,7 +36,7 @@ export default function SupportPage() {
       {/* Slim header */}
       <header
         style={{
-          background: "var(--surface)",
+          background: "var(--bg)",
           borderBottom: "1px solid var(--border)",
           padding: "14px clamp(20px,4vw,40px)",
         }}
@@ -60,12 +60,12 @@ export default function SupportPage() {
               textDecoration: "none",
             }}
           >
-            <span style={{ color: "var(--accent-strong)" }}>[</span>
+            <span style={{ color: "var(--blue-strong)" }}>[</span>
             VisualSprint
-            <span style={{ color: "var(--accent-strong)" }}>]</span>
+            <span style={{ color: "var(--blue-strong)" }}>]</span>
           </a>
-          <span style={{ color: "var(--border-strong)", fontSize: 18, lineHeight: 1 }}>›</span>
-          <span style={{ fontFamily: mono, fontSize: 13, color: "var(--text-muted)" }}>
+          <span style={{ color: "var(--border-2)", fontSize: 18, lineHeight: 1 }}>›</span>
+          <span style={{ fontFamily: mono, fontSize: 13, color: "var(--muted)" }}>
             Support
           </span>
         </div>
@@ -86,7 +86,7 @@ export default function SupportPage() {
             fontWeight: 600,
             letterSpacing: ".08em",
             textTransform: "uppercase",
-            color: "var(--accent)",
+            color: "var(--blue)",
             margin: "0 0 14px",
           }}
         >
@@ -109,7 +109,7 @@ export default function SupportPage() {
           style={{
             fontSize: 16,
             lineHeight: 1.7,
-            color: "var(--text-muted)",
+            color: "var(--muted)",
             margin: "0 0 44px",
             maxWidth: 560,
           }}
@@ -121,7 +121,7 @@ export default function SupportPage() {
         {/* Contact card */}
         <div
           style={{
-            background: "var(--surface)",
+            background: "var(--bg)",
             border: "1px solid var(--border)",
             borderRadius: 14,
             padding: "24px 28px",
@@ -141,7 +141,7 @@ export default function SupportPage() {
                 fontWeight: 600,
                 letterSpacing: ".08em",
                 textTransform: "uppercase",
-                color: "var(--text-faint)",
+                color: "var(--faint)",
                 margin: "0 0 8px",
               }}
             >
@@ -153,7 +153,7 @@ export default function SupportPage() {
                 fontFamily: mono,
                 fontSize: 16,
                 fontWeight: 600,
-                color: "var(--accent-strong)",
+                color: "var(--blue-strong)",
                 textDecoration: "none",
               }}
             >
@@ -165,8 +165,8 @@ export default function SupportPage() {
             style={{
               fontSize: 14,
               fontWeight: 600,
-              color: "var(--surface)",
-              background: "var(--accent)",
+              color: "var(--bg)",
+              background: "var(--blue)",
               borderRadius: 8,
               padding: "12px 22px",
               textDecoration: "none",
@@ -192,7 +192,7 @@ export default function SupportPage() {
               fontWeight: 600,
               letterSpacing: ".08em",
               textTransform: "uppercase",
-              color: "var(--text-faint)",
+              color: "var(--faint)",
               margin: "0 0 24px",
             }}
           >
@@ -206,7 +206,7 @@ export default function SupportPage() {
                     width: 6,
                     height: 6,
                     borderRadius: "50%",
-                    background: "var(--accent)",
+                    background: "var(--blue)",
                     marginTop: 8,
                     flexShrink: 0,
                     display: "block",
@@ -227,7 +227,7 @@ export default function SupportPage() {
                     style={{
                       fontSize: 13.5,
                       lineHeight: 1.65,
-                      color: "var(--text-muted)",
+                      color: "var(--muted)",
                       margin: 0,
                     }}
                   >
@@ -248,19 +248,19 @@ export default function SupportPage() {
               fontWeight: 600,
               letterSpacing: ".08em",
               textTransform: "uppercase",
-              color: "var(--text-faint)",
+              color: "var(--faint)",
               margin: "0 0 14px",
             }}
           >
             Legal
           </p>
-          <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--text-muted)", margin: 0 }}>
+          <p style={{ fontSize: 14, lineHeight: 1.7, color: "var(--muted)", margin: 0 }}>
             See also the{" "}
-            <a href="/privacy" style={{ color: "var(--accent-strong)", fontWeight: 600 }}>
+            <a href="/privacy" style={{ color: "var(--blue-strong)", fontWeight: 600 }}>
               Privacy Policy
             </a>{" "}
             and{" "}
-            <a href="/terms" style={{ color: "var(--accent-strong)", fontWeight: 600 }}>
+            <a href="/terms" style={{ color: "var(--blue-strong)", fontWeight: 600 }}>
               Terms of Service
             </a>
             .

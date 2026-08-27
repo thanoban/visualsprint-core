@@ -12,26 +12,70 @@ interface NavItem {
   glyph: string;
 }
 
-// Matches the nav set in the Claude Design project's AppSidebar.dc.html,
-// plus Glossary/Data rights, which exist in this app but not in that
-// project's 5-page scope -- dropping them would be a real regression, so
-// they're appended with the same glyph-badge treatment.
-const NAV_ITEMS: NavItem[] = [
+// Split into the Claude Design project's Workspace/Setup groups
+// (VisualSprint App.dc.html's NAV/NAV_SETUP). Glossary is relabeled
+// "Vocabulary" here (route/API stay /glossary); Data rights has no mockup
+// equivalent but dropping it would be a real regression, so it's appended
+// to Setup with the same glyph-badge treatment.
+const NAV_WORKSPACE: NavItem[] = [
   { key: "meetings", label: "Meetings", href: "/meetings", glyph: "M" },
   { key: "chat", label: "Org Chat", href: "/chat", glyph: "C" },
   { key: "upload", label: "Upload", href: "/upload", glyph: "U" },
   { key: "people", label: "People", href: "/people", glyph: "P" },
   { key: "actions", label: "Actions", href: "/actions", glyph: "A" },
-  { key: "glossary", label: "Glossary", href: "/glossary", glyph: "Gl" },
-  { key: "data-rights", label: "Data rights", href: "/data-rights", glyph: "DR" },
-  { key: "settings", label: "Connections", href: "/settings/connections", glyph: "S" },
 ];
+const NAV_SETUP: NavItem[] = [
+  { key: "settings", label: "Connections", href: "/settings/connections", glyph: "S" },
+  { key: "glossary", label: "Vocabulary", href: "/glossary", glyph: "V" },
+  { key: "data-rights", label: "Data rights", href: "/data-rights", glyph: "DR" },
+];
+const NAV_ITEMS: NavItem[] = [...NAV_WORKSPACE, ...NAV_SETUP];
 
 function activeKeyFor(pathname: string): string {
   const match = NAV_ITEMS.find((item) =>
     item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)
   );
   return match?.key ?? "";
+}
+
+function NavLink({ item, isActive }: { item: NavItem; isActive: boolean }) {
+  return (
+    <Link
+      href={item.href}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "9px 10px",
+        borderRadius: 9,
+        fontSize: 13.5,
+        fontWeight: 600,
+        color: isActive ? "var(--blue-strong)" : "var(--muted)",
+        background: isActive ? "var(--blue-soft)" : "transparent",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span
+        className="font-mono-brand"
+        style={{
+          width: 22,
+          height: 22,
+          flexShrink: 0,
+          borderRadius: 6,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 10.5,
+          fontWeight: 600,
+          color: isActive ? "var(--blue-strong)" : "var(--faint)",
+          background: isActive ? "#fff" : "var(--soft)",
+        }}
+      >
+        {item.glyph}
+      </span>
+      <span>{item.label}</span>
+    </Link>
+  );
 }
 
 function initials(label: string): string {
@@ -72,10 +116,10 @@ export function AppSidebar() {
   return (
     <div
       style={{
-        width: 248,
+        width: 244,
         flexShrink: 0,
         minHeight: "100vh",
-        background: "var(--surface2)",
+        background: "var(--bg)",
         borderRight: "1px solid var(--border)",
         padding: "22px 16px",
         display: "flex",
@@ -86,13 +130,13 @@ export function AppSidebar() {
     >
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 8px", marginBottom: 18 }}>
-          <span className="font-mono-brand" style={{ color: "var(--accent)", fontWeight: 600 }}>
+          <span className="font-mono-brand" style={{ color: "var(--blue)", fontWeight: 600 }}>
             [
           </span>
           <span className="font-display" style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>
             VisualSprint
           </span>
-          <span className="font-mono-brand" style={{ color: "var(--accent)", fontWeight: 600 }}>
+          <span className="font-mono-brand" style={{ color: "var(--blue)", fontWeight: 600 }}>
             ]
           </span>
         </div>
@@ -102,60 +146,41 @@ export function AppSidebar() {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            fontSize: 13,
-            fontWeight: 500,
-            color: "var(--text-muted)",
-            background: "var(--surface)",
+            fontSize: 12.5,
+            fontWeight: 700,
+            color: "var(--text)",
+            background: "var(--soft)",
             border: "1px solid var(--border)",
-            borderRadius: 7,
-            padding: "9px 12px",
+            borderRadius: 10,
+            padding: "9px 11px",
+            marginBottom: 16,
           }}
         >
-          <span>{orgLabel}</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{orgLabel}</span>
         </div>
 
-        <nav style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 2 }}>
-          {NAV_ITEMS.map((item) => {
-            const isActive = item.key === activeKey;
-            return (
-              <Link
-                key={item.key}
-                href={item.href}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "9px 10px",
-                  borderRadius: 7,
-                  fontSize: 13.5,
-                  fontWeight: isActive ? 600 : 500,
-                  color: isActive ? "var(--accent-strong)" : "var(--text-muted)",
-                  background: isActive ? "var(--accent-bg)" : "transparent",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span
-                  className="font-mono-brand"
-                  style={{
-                    width: 22,
-                    height: 22,
-                    flexShrink: 0,
-                    border: `1px solid ${isActive ? "var(--accent)" : "var(--border-strong)"}`,
-                    borderRadius: 5,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 11,
-                    color: isActive ? "var(--accent-strong)" : "var(--text-faint)",
-                    background: isActive ? "var(--surface)" : "transparent",
-                  }}
-                >
-                  {item.glyph}
-                </span>
-                <span>{isActive ? `[ ${item.label} ]` : item.label}</span>
-              </Link>
-            );
-          })}
+        <p
+          className="font-mono-brand"
+          style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--faint)", margin: "0 0 8px", padding: "0 10px" }}
+        >
+          Workspace
+        </p>
+        <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {NAV_WORKSPACE.map((item) => (
+            <NavLink key={item.key} item={item} isActive={item.key === activeKey} />
+          ))}
+        </nav>
+
+        <p
+          className="font-mono-brand"
+          style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--faint)", margin: "18px 0 8px", padding: "0 10px" }}
+        >
+          Setup
+        </p>
+        <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {NAV_SETUP.map((item) => (
+            <NavLink key={item.key} item={item} isActive={item.key === activeKey} />
+          ))}
         </nav>
       </div>
 
@@ -175,8 +200,8 @@ export function AppSidebar() {
             cursor: "pointer",
             fontSize: 13,
             fontWeight: 500,
-            color: "var(--text-muted)",
-            fontFamily: "'IBM Plex Sans', sans-serif",
+            color: "var(--muted)",
+            fontFamily: "'Plus Jakarta Sans', sans-serif",
           }}
         >
           <span>{theme === "dark" ? "Dark mode" : "Light mode"}</span>
@@ -185,7 +210,7 @@ export function AppSidebar() {
               width: 34,
               height: 19,
               borderRadius: 20,
-              background: "var(--accent)",
+              background: "var(--blue)",
               position: "relative",
               display: "inline-block",
             }}
@@ -220,7 +245,7 @@ export function AppSidebar() {
               width: 30,
               height: 30,
               borderRadius: "50%",
-              background: "var(--accent)",
+              background: "var(--blue)",
               color: "#fff",
               fontSize: 11,
               fontWeight: 700,
@@ -251,7 +276,7 @@ export function AppSidebar() {
               onClick={logOut}
               style={{
                 fontSize: 11.5,
-                color: "var(--text-faint)",
+                color: "var(--faint)",
                 margin: 0,
                 background: "none",
                 border: "none",
