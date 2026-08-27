@@ -43,6 +43,8 @@
   let meetingTitle = "";
   let checkInterval = null;
   let _endGraceTimer = null; // prevents spurious MEETING_ENDED on Meet URL micro-navigations
+  let _startCooldown = false; // blocks MEETING_STARTED for 15 s after sendEnded() so Meet's
+  //   post-call DOM transition (activeEl still in tree) can't immediately re-trigger detection
 
   // sessionStorage outlives same-tab SPA navigations; avoids re-injecting consent.
   const VS_CONSENT_KEY = "vs_consent_sent";
@@ -184,7 +186,7 @@
 
       // Check for entry into the live call.
       const activeEl = document.querySelector(IN_MEETING_SELECTORS[platform]);
-      if (activeEl && !inMeeting) {
+      if (activeEl && !inMeeting && !_startCooldown) {
         inMeeting    = true;
         meetingTitle = document.title.replace(/ – Google Meet$| – Zoom$/, "").trim();
         safeSend({ type: "MEETING_STARTED", platform, url: location.href, title: meetingTitle });
@@ -202,6 +204,10 @@
     consentSent = false;
     sessionStorage.removeItem(VS_CONSENT_KEY);
     safeSend({ type: "MEETING_ENDED", platform, roster: getParticipants() });
+    // 15-second cooldown so Meet's post-call DOM transition (some activeEl selectors
+    // linger briefly) can't immediately re-trigger MEETING_STARTED detection.
+    _startCooldown = true;
+    setTimeout(() => { _startCooldown = false; }, 15_000);
   }
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────────
