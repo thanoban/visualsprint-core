@@ -9,9 +9,15 @@ Uses the same `google.genai` SDK and `gemini_region` (us-central1) as
 not us-east5 (which was `vertex_region`, the Claude-on-Vertex region).
 """
 
+from __future__ import annotations
+
 import asyncio
+from typing import TYPE_CHECKING, Any
 
 from app.config import get_settings
+
+if TYPE_CHECKING:
+    from google import genai as _genai
 
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONALITY = 1024  # must match KnowledgeItem.embedding's Vector(1024)
@@ -40,9 +46,9 @@ class VertexEmbedder:
         # gemini-embedding-001 lives in us-central1 (same as GeminiVertexLlmClient),
         # not us-east5 (vertex_region, which was the Claude-on-Vertex region).
         self._region = region or settings.gemini_region
-        self._client = None
+        self._client: Any = None
 
-    def _ensure_client(self):
+    def _ensure_client(self) -> Any:
         if self._client is None:
             from google import genai
 
