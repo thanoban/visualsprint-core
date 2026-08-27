@@ -996,6 +996,11 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
 
     transcriber = _get_transcriber()
     for track in tracks:
+        if not track.uri.startswith("blob://"):
+            raise RuntimeError(
+                f"audio_track {track.id} has invalid uri {track.uri!r} — "
+                "expected blob:// scheme; this session cannot be transcribed"
+            )
         result = await transcriber.transcribe(
             TranscriptionRequest(audio_uri=track.uri, org_id=org_id)
         )

@@ -212,10 +212,17 @@ class TranscriptionCascade:
 
     @asynccontextmanager
     async def _materialize_audio(self, audio_uri: str) -> AsyncIterator[str]:
-        local_path = Path(audio_uri)
-        if local_path.exists():
-            yield str(local_path)
-            return
+        # Only resolve audio_uri as a local filesystem path when it is NOT a
+        # blob:// URI.  Path(".").exists() is always True on any OS — checking
+        # .exists() before the scheme guard would silently route any blank or
+        # invalid URI (e.g. ".") into soundfile as a directory, producing a
+        # cryptic "Error opening '.': Format not recognised" failure instead of
+        # a clear pipeline error.
+        if not audio_uri.startswith("blob://"):
+            local_path = Path(audio_uri)
+            if local_path.exists():
+                yield str(local_path)
+                return
 
         blob_store = self._blob_store or LocalBlobStore()
         data = await blob_store.get(audio_uri)

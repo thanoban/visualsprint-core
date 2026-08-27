@@ -32,11 +32,24 @@ async function setActiveRecordings(map) {
   await chrome.storage.session.set({ [ACTIVE_KEY]: map });
 }
 async function getPendingMeetings() {
-  const r = await chrome.storage.session.get(PENDING_KEY);
+  const r = await chrome.storage.local.get(PENDING_KEY);
   return r[PENDING_KEY] ?? {};
 }
 async function setPendingMeetings(map) {
-  await chrome.storage.session.set({ [PENDING_KEY]: map });
+  await chrome.storage.local.set({ [PENDING_KEY]: map });
+}
+
+// Removes pending entries whose tabs no longer exist. Called on SW startup so
+// stale entries left by a previous Chrome session don't block new detections.
+async function purgeStalePendingMeetings() {
+  const pending = await getPendingMeetings();
+  const tabIds = Object.keys(pending).map(Number);
+  if (tabIds.length === 0) return;
+  const cleaned = { ...pending };
+  for (const tabId of tabIds) {
+    try { await chrome.tabs.get(tabId); } catch { delete cleaned[tabId]; }
+  }
+  await setPendingMeetings(cleaned);
 }
 
 // Reads cached org_id; if missing, fetches it from /api/v1/me and caches it.
@@ -492,6 +505,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 // ─── Service worker restart recovery ─────────────────────────────────────────
 
 chrome.runtime.onStartup.addListener(async () => {
+  await purgeStalePendingMeetings();
   const recordings = await getActiveRecordings();
   for (const [tabIdStr, rec] of Object.entries(recordings)) {
     if (rec.finalized) continue;
