@@ -201,18 +201,27 @@ async def finalize_session(
     if body.total_chunks < 1:
         raise HTTPException(400, "total_chunks must be >= 1")
 
+    from app.db.models import CaptureState
+
+    if session.state != CaptureState.SCHEDULED:
+        # Already finalized — second call from the extension (tab-close + ended
+        # event fire simultaneously). Return success so the extension doesn't
+        # retry indefinitely; don't re-upload, re-persist, or re-enqueue.
+        log.info("companion.finalize.duplicate_skipped", session_id=capture_session_id,
+                 state=session.state)
+        return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
+
     from sqlalchemy import select
 
     from app.adapters.blobstore_s3 import get_blobstore
     from app.capture.audio_utils import webm_chunks_to_wav
     from app.capture.consent import record_disclosure
     from app.capture.persist import persist_capture_artifacts
-    from app.db.models import CaptureState, Keyframe
+    from app.db.models import Keyframe
     from app.interfaces.platform import (
         AudioTrack,
         CaptureArtifacts,
         CaptureMode,
-        PreExtractedFrame,
         RosterEntry,
     )
     from app.orchestrator.queue import enqueue_pipeline
@@ -249,18 +258,13 @@ async def finalize_session(
         content_type="audio/wav",
     )
 
-    # Keyframe rows were already written incrementally by upload_keyframe.
-    existing_frames = (
-        db.execute(
-            select(Keyframe)
-            .where(Keyframe.capture_session_id == capture_session_id)
-            .order_by(Keyframe.valid_from_s)
-        ).scalars().all()
-    )
-    preextracted = [
-        PreExtractedFrame(image_uri=f.image_uri, timestamp_s=f.valid_from_s)
-        for f in existing_frames
-    ]
+    # Keyframe rows are already written incrementally by upload_keyframe; count
+    # them for logging only — don't pass them to persist_capture_artifacts or
+    # they'll be duplicated as new rows on top of what's already in the DB.
+    keyframe_count = db.execute(
+        select(Keyframe)
+        .where(Keyframe.capture_session_id == capture_session_id)
+    ).scalars().all()
 
     roster = [RosterEntry(display_name=name) for name in body.roster if name.strip()]
 
@@ -268,7 +272,6 @@ async def finalize_session(
         mode=CaptureMode.DESKTOP,
         audio_tracks=[AudioTrack(uri=audio_uri, participant=None)],
         roster=roster,
-        preextracted_keyframes=preextracted,
     )
     persist_capture_artifacts(db, session, artifacts)
     record_disclosure(
@@ -288,7 +291,7 @@ async def finalize_session(
 
     log.info("companion.finalize.done", session_id=capture_session_id,
              chunks_used=len(chunks), missing=len(missing),
-             keyframes=len(preextracted), roster=len(roster))
+             keyframes=len(keyframe_count), roster=len(roster))
     return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
 
 
