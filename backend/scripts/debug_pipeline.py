@@ -150,7 +150,7 @@ def cmd_list_sessions():
                 .order_by(PipelineJob.created_at)
             ).all()
             if jobs:
-                stages = " → ".join(f"{j.stage}:{j.state}" for j in jobs)
+                stages = " → ".join(f"{j.stage}:{j.status}" for j in jobs)
                 print(f"  {str(s.id)[:8]}…  {stages}")
     finally:
         db.close()
@@ -187,8 +187,8 @@ def cmd_show_session(session_id: str):
 
         print(f"\nPipeline jobs ({len(jobs)}):")
         for j in jobs:
-            err = f" ERROR: {j.last_error[:60]}" if j.last_error else ""
-            print(f"  {j.stage:<12} {j.state:<10} attempts={j.attempts}{err}")
+            err = f" ERROR: {j.error[:60]}" if j.error else ""
+            print(f"  {j.stage:<12} {j.status:<10} attempts={j.attempts}{err}")
 
         items = db.execute(
             select(KnowledgeItem.__table__.c.type, KnowledgeItem.__table__.c.confidence)
@@ -237,19 +237,13 @@ async def cmd_run_stage(session_id: str, stage: str):
         ).first()
 
         if not job:
-            job = PipelineJob(
-                capture_session_id=sid,
-                org_id=session.org_id,
-                stage=stage,
-                state="PENDING",
-                attempts=0,
-            )
-            db.add(job)
+            from app.orchestrator.queue import enqueue_stage
+            job = enqueue_stage(db, str(session.org_id), str(sid), stage)
             db.commit()
             db.refresh(job)
             log.info("run_stage.job_created", stage=stage, job_id=str(job.id))
         else:
-            log.info("run_stage.job_found", stage=stage, state=job.state, job_id=str(job.id))
+            log.info("run_stage.job_found", stage=stage, status=job.status, job_id=str(job.id))
 
         log.info("run_stage.start", stage=stage, session=session_id)
         handler = _HANDLERS[stage]
