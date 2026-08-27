@@ -1,6 +1,8 @@
-# Standard Next.js production build (non-standalone: next.config.mjs has no
-# `output: "standalone"`, so the runner stage keeps node_modules rather than
-# relying on that mode's dependency-tracing copy).
+# Next.js standalone build — output: "standalone" in next.config.mjs traces
+# only the node_modules actually used at runtime, so the runner stage is ~20 MB
+# instead of the full node_modules (~300 MB). This halves Docker layer pressure
+# on CI runners and eliminates the "no space left on device" failures.
+
 FROM node:22-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -31,11 +33,14 @@ RUN npm run build
 FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+# standalone/ contains server.js + only the node_modules it needs (~20 MB).
+# static/ and public/ are served by the standalone server directly.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
 EXPOSE 3000
-CMD ["npm", "start"]
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+CMD ["node", "server.js"]

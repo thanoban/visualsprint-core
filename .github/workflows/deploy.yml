@@ -370,6 +370,13 @@ jobs:
             --format='value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
+      # Free disk space before the web build: the backend images (api + agents +
+      # bot) together occupy several GB of layer cache. Pruning dangling layers
+      # and unused images releases space without touching the Artifact Registry
+      # cache-from images (those are remote, not local).
+      - name: Prune Docker layer cache before web build
+        run: docker image prune -f
+
       - name: Build and push web image
         run: |
           docker build frontend \
