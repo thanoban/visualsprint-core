@@ -82,12 +82,12 @@ async def cmd_gemini_test():
 
     result, usage = await llm.complete_structured(
         system="You are a ping responder. Reply only with valid JSON.",
-        user=prompt,
+        user_content=prompt,
         schema=Ping,
         model="gemini-2.5-flash-lite",
     )
     log.info("gemini.test.ok", reply=result.reply, timestamp=result.timestamp, usage=str(usage))
-    print("\n✓ Gemini on Vertex AI is working.")
+    print("\n[OK] Gemini on Vertex AI is working.")
     print(f"  reply     = {result.reply}")
     print(f"  timestamp = {result.timestamp}")
     print(f"  tokens    = {usage}")
@@ -112,7 +112,7 @@ async def cmd_embed_test():
         dims=len(vec),
         first5=[round(v, 4) for v in vec[:5]],
     )
-    print(f"\n✓ gemini-embedding-001 returned {len(vec)}-dim vector.")
+    print(f"\n[OK] gemini-embedding-001 returned {len(vec)}-dim vector.")
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +256,10 @@ async def cmd_run_stage(session_id: str, stage: str):
         try:
             await handler(db, job)
             log.info("run_stage.ok", stage=stage)
-            print(f"\n✓ Stage '{stage}' completed successfully.")
+            print(f"\n[OK] Stage '{stage}' completed successfully.")
         except Exception as exc:
             log.exception("run_stage.fail", stage=stage, error=str(exc))
-            print(f"\n✗ Stage '{stage}' failed: {exc}")
+            print(f"\n[FAIL] Stage '{stage}' failed: {exc}")
             sys.exit(1)
     finally:
         db.close()
