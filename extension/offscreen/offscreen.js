@@ -50,29 +50,43 @@ async function startCapture(streamId, sessionId) {
     _micStream = null;
   }
 
-  // Mix tab + mic into one stream for the recorder. Capturing tabCapture
-  // audio silently redirects it away from the speakers, so the tab source is
-  // also reconnected to the AudioContext's own destination to keep the
-  // meeting audible to the user. The mic source is NOT connected to that
-  // destination -- doing so would echo the user's own voice back to them.
-  _audioCtx = new AudioContext();
-  const dest = _audioCtx.createMediaStreamDestination();
-
-  const tabSource = _audioCtx.createMediaStreamSource(_tabStream);
-  tabSource.connect(dest);
-  tabSource.connect(_audioCtx.destination);
-
-  if (_micStream) {
-    const micSource = _audioCtx.createMediaStreamSource(_micStream);
-    micSource.connect(dest);
-  }
-
   // Pick the best supported audio codec
   const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
     ? "audio/webm;codecs=opus"
     : "audio/webm";
 
-  recorder = new MediaRecorder(dest.stream, { mimeType });
+  // Mix tab + mic into one stream. Offscreen documents may start with the
+  // AudioContext in "suspended" state (no user gesture in the document). If
+  // resume() fails or the context stays suspended after attempting it, fall
+  // back to recording the tab stream directly (user's own voice not included,
+  // but other participants' audio is captured and the pipeline can still run).
+  _audioCtx = new AudioContext();
+  let recordStream;
+  try {
+    if (_audioCtx.state === "suspended") {
+      await _audioCtx.resume();
+    }
+    if (_audioCtx.state !== "running") {
+      throw new Error(`AudioContext not running: ${_audioCtx.state}`);
+    }
+    const dest = _audioCtx.createMediaStreamDestination();
+    const tabSource = _audioCtx.createMediaStreamSource(_tabStream);
+    tabSource.connect(dest);
+    // Reconnect tab audio to the real speakers so the meeting stays audible.
+    tabSource.connect(_audioCtx.destination);
+    if (_micStream) {
+      const micSource = _audioCtx.createMediaStreamSource(_micStream);
+      micSource.connect(dest);
+    }
+    recordStream = dest.stream;
+  } catch (e) {
+    console.warn("[VS] AudioContext mixing unavailable, recording tab stream directly:", e.message);
+    _audioCtx?.close().catch(() => {});
+    _audioCtx = null;
+    recordStream = _tabStream;
+  }
+
+  recorder = new MediaRecorder(recordStream, { mimeType });
 
   recorder.ondataavailable = async (e) => {
     if (!e.data || e.data.size === 0) return;

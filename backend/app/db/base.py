@@ -22,16 +22,19 @@ def get_engine() -> "Engine":
         # Supabase free-tier session pooler hard-limits to 15 total connections
         # across ALL connecting clients. With max_instances=2 for both api and
         # agents, four engine instances can exist simultaneously:
-        # 4 × (pool_size=2 + max_overflow=1) = 12, safely under the limit.
+        # 4 × (pool_size=3 + max_overflow=0) = 12, safely under the limit.
+        # No overflow slots: a 4th concurrent query on the same instance waits
+        # up to pool_timeout rather than opening a 4th connection that would
+        # push the org-wide total over 15 during rolling deploys.
         # pool_pre_ping evicts stale connections after Cloud Run scale-to-zero.
         # pool_recycle prevents pgbouncer's idle-connection reaping from causing
         # "connection closed" errors on long-idle instances.
         _engine = create_engine(
             get_settings().database_url,
             pool_pre_ping=True,
-            pool_size=2,
-            max_overflow=1,
-            pool_timeout=10,
+            pool_size=3,
+            max_overflow=0,
+            pool_timeout=30,
             pool_recycle=300,
         )
     return _engine
