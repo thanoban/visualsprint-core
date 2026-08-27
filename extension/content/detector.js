@@ -9,7 +9,10 @@
   const PLATFORM_PATTERNS = {
     meet:  /meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/,
     zoom:  /app\.zoom\.us\/wc\/\d+/,
-    teams: /teams\.microsoft\.com.*\/conversations/,
+    // Teams meeting URLs vary widely across versions; match both the old
+    // /conversations path (where in-channel calls land) and the newer
+    // /meet, /#/meeting, /#/call, and /v2/ paths used by current web client.
+    teams: /teams\.microsoft\.com.*(\/conversations|\/meet|[/#](meeting|call))/,
   };
 
   function detectPlatform() {

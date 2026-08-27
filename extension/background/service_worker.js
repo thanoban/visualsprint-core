@@ -448,7 +448,7 @@ async function _handleAudioChunk(msg) {
 const ESCALATION_ALARM = "vs_escalation_poll";
 const SEEN_ESCALATIONS_KEY = "vs_seen_escalations";
 
-chrome.alarms.create(ESCALATION_ALARM, { periodInMinutes: 1 });
+chrome.alarms.create(ESCALATION_ALARM, { periodInMinutes: 5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ESCALATION_ALARM) checkEscalations();
 });

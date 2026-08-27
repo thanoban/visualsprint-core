@@ -19,13 +19,14 @@ _SessionLocal: sessionmaker[Session] | None = None
 def get_engine() -> "Engine":
     global _engine
     if _engine is None:
-        # Supabase free-tier session pooler hard-limits to 15 total connections
-        # across ALL connecting clients. With max_instances=2 for both api and
-        # agents, four engine instances can exist simultaneously:
-        # 4 × (pool_size=3 + max_overflow=0) = 12, safely under the limit.
-        # No overflow slots: a 4th concurrent query on the same instance waits
-        # up to pool_timeout rather than opening a 4th connection that would
-        # push the org-wide total over 15 during rolling deploys.
+        # VS_DATABASE_URL uses Supabase's transaction-mode pooler (port 6543).
+        # Transaction mode removes the 15-connection cap that the session-mode
+        # pooler (port 5432) imposed, and is safe here because we never use
+        # connection-level state (no advisory locks, no SET statements that
+        # persist across requests, no prepared-statement caching).
+        # pool_size=3 per instance: pgbouncer only holds a backend connection
+        # for the duration of a transaction, so 3 SQLAlchemy "connections" can
+        # comfortably multiplex across the pool without exhausting the server.
         # pool_pre_ping evicts stale connections after Cloud Run scale-to-zero.
         # pool_recycle prevents pgbouncer's idle-connection reaping from causing
         # "connection closed" errors on long-idle instances.
