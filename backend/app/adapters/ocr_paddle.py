@@ -45,7 +45,10 @@ class _PaddleOcrBackend:
             return
         from paddleocr import PaddleOCR
 
-        self._engine = PaddleOCR(lang=self._lang, use_angle_cls=True, show_log=False)
+        # show_log was removed in PaddleOCR 3.x; suppress via logging instead
+        import logging as _logging
+        _logging.getLogger("ppocr").setLevel(_logging.WARNING)
+        self._engine = PaddleOCR(lang=self._lang, use_angle_cls=True)
 
     def run(self, image_path: str) -> list[RawOcrBlock]:
         self._ensure_loaded()
