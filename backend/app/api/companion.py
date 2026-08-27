@@ -137,6 +137,13 @@ async def upload_chunk(
     if not chunk_bytes:
         raise HTTPException(400, "empty chunk")
 
+    # Auth validated — release the DB connection before the GCS upload so we
+    # don't hold a pool slot during network I/O. Cloud Run's default concurrency
+    # is 80; with pool_size=3, holding a connection across a multi-second GCS
+    # write makes the 4th concurrent request time out after 30 s. The finally
+    # block in get_db() will call close() again, which is a safe no-op.
+    db.close()
+
     from app.adapters.blobstore_s3 import get_blobstore
     blob_store = get_blobstore()
     key = f"companion-chunks/{org_id}/{capture_session_id}/{seq:06d}.webm"
@@ -170,6 +177,11 @@ async def upload_keyframe(
     from app.db.models import Keyframe
     blob_store = get_blobstore()
     key = f"companion-frames/{org_id}/{capture_session_id}/{seq:06d}.jpg"
+
+    # Release the DB connection before the GCS upload; SQLAlchemy will
+    # reconnect automatically when we call db.add() below.
+    db.close()
+
     image_uri = await blob_store.put(key, frame_bytes, content_type="image/jpeg")
 
     # valid_to_s is a 30s estimate; the screen stage refines it with OCR timing.
@@ -228,6 +240,11 @@ async def finalize_session(
 
     blob_store = get_blobstore()
 
+    # Release the DB connection before downloading chunks + encoding WAV +
+    # uploading WAV — all heavy I/O that can take many seconds. Pool slots are
+    # reacquired automatically when we next touch `db` below.
+    db.close()
+
     # Collect uploaded chunks; allow partial sets (tab closed early — partial
     # captures with disclosed gaps are better than nothing).
     chunks: list[bytes] = []
@@ -264,6 +281,12 @@ async def finalize_session(
         log.error("companion.finalize.bad_uri", session_id=capture_session_id,
                   uri=audio_uri)
         raise HTTPException(500, f"blob store returned invalid URI {audio_uri!r}")
+
+    # Refetch the session after db.close() — the object was detached and must
+    # be re-attached before we can pass it to persist_capture_artifacts.
+    session = db.get(CaptureSession, capture_session_id)
+    if session is None:
+        raise HTTPException(500, "capture session disappeared during finalize")
 
     # Keyframe rows are already written incrementally by upload_keyframe; count
     # them for logging only — don't pass them to persist_capture_artifacts or
