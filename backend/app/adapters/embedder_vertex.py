@@ -2,12 +2,11 @@
 
 `output_dimensionality=1024` is set explicitly to match `KnowledgeItem.embedding`
 (`Vector(1024)`, app/db/models.py) — gemini-embedding-001 defaults to a larger
-size, so this is required, not cosmetic. Reuses the same GCP project/region as
-`VertexLlmClient` (app.config.Settings.vertex_project_id/vertex_region) — one
-set of cloud credentials covers both, per CLAUDE.md.
+size, so this is required, not cosmetic.
 
-The Vertex embedding SDK has no async client as of this writing, so `embed()`
-runs the sync call in a thread rather than blocking the event loop.
+Uses the same `google.genai` SDK and `gemini_region` (us-central1) as
+`GeminiVertexLlmClient` — gemini-embedding-001 is available in us-central1,
+not us-east5 (which was `vertex_region`, the Claude-on-Vertex region).
 """
 
 import asyncio
@@ -38,24 +37,31 @@ class VertexEmbedder:
     def __init__(self, project_id: str | None = None, region: str | None = None) -> None:
         settings = get_settings()
         self._project_id = _resolve_project_id(project_id or settings.vertex_project_id)
-        self._region = region or settings.vertex_region
-        self._model = None
+        # gemini-embedding-001 lives in us-central1 (same as GeminiVertexLlmClient),
+        # not us-east5 (vertex_region, which was the Claude-on-Vertex region).
+        self._region = region or settings.gemini_region
+        self._client = None
 
-    def _ensure_model(self):
-        if self._model is None:
-            import vertexai
-            from vertexai.language_models import TextEmbeddingModel
+    def _ensure_client(self):
+        if self._client is None:
+            from google import genai
 
-            vertexai.init(project=self._project_id, location=self._region)
-            self._model = TextEmbeddingModel.from_pretrained(EMBEDDING_MODEL)
-        return self._model
+            self._client = genai.Client(
+                vertexai=True, project=self._project_id, location=self._region
+            )
+        return self._client
 
     async def embed(self, text: str) -> list[float]:
-        from vertexai.language_models import TextEmbeddingInput
+        from google.genai import types
 
-        model = self._ensure_model()
-        inp = TextEmbeddingInput(text, task_type="RETRIEVAL_QUERY")
+        client = self._ensure_client()
         result = await asyncio.to_thread(
-            model.get_embeddings, [inp], output_dimensionality=EMBEDDING_DIMENSIONALITY
+            client.models.embed_content,
+            model=EMBEDDING_MODEL,
+            contents=text,
+            config=types.EmbedContentConfig(
+                output_dimensionality=EMBEDDING_DIMENSIONALITY,
+                task_type="RETRIEVAL_QUERY",
+            ),
         )
-        return result[0].values
+        return list(result.embeddings[0].values)
