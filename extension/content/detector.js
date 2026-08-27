@@ -21,13 +21,25 @@
   }
 
   const IN_MEETING_SELECTORS = {
-    meet:  '[data-call-ended="false"], [jsname="Nqah0"], .crqnQb',
+    // Multiple selectors across Meet UI versions — jsname/class values change
+    // with Meet deploys, so we cast a wide net. The leave-call button
+    // (aria-label) is the most stable signal; jsname attrs are fallbacks.
+    meet: [
+      '[data-call-ended="false"]',
+      'button[aria-label="Leave call"]',
+      'button[aria-label="Leave"]',
+      '[jsname="Nqah0"]',
+      '[jsname="r4jB5"]',
+      '.crqnQb',
+      '[jscontroller="IY7L3d"]',
+      '[data-meeting-code]',
+    ].join(", "),
     zoom:  ".footer-button-base__leave-btn",
     teams: '[data-tid="hangup-button"]',
   };
 
   const ENDED_SELECTORS = {
-    meet:  '[data-call-ended="true"], .YTbUzc',
+    meet:  '[data-call-ended="true"], .YTbUzc, [jsname="CQylAd"].D9uPtc',
     zoom:  ".post-call-page",
     teams: ".call-end-screen",
   };
