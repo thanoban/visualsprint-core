@@ -29,7 +29,7 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
@@ -42,7 +42,7 @@ from app.capture.rtms_protocol import (
     verify_webhook_signature,
 )
 from app.config import get_settings
-from app.db.base import get_sessionmaker
+from app.db.base import get_db
 from app.db.models import CaptureSession, Meeting, Org, OrgConnection
 from app.interfaces.platform import AudioTrack, CaptureArtifacts, CaptureMode
 from app.orchestrator.pipeline import FIRST_STAGE, next_stage
@@ -171,11 +171,16 @@ async def _run_stream(
 
 
 @router.post("/zoom/rtms")
-async def zoom_rtms_webhook(request: Request) -> dict:
-    # DB session is acquired lazily below — only meeting.rtms_started and
-    # meeting.rtms_stopped actually need one. Zoom sends many lifecycle events
-    # (meeting.started, participant_joined, meeting.ended, …) to every registered
-    # webhook; acquiring a connection on each would exhaust the pool under load.
+async def zoom_rtms_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    # db is released early (db.close()) on every branch that does not need the
+    # DB so we don't hold a pool slot during the many Zoom lifecycle events that
+    # require no persistence. For rtms_started / rtms_stopped the session is
+    # kept open and returned to the pool by get_db()'s finally block at the end
+    # of the request. The Depends(get_db) approach (vs. manual get_sessionmaker())
+    # makes test's dependency_overrides work correctly.
     raw_body = await request.body()
     body = json.loads(raw_body)
     event = body.get("event")
@@ -189,6 +194,7 @@ async def zoom_rtms_webhook(request: Request) -> dict:
         # The very first handshake, before Zoom has a verified endpoint --
         # Zoom does not sign this one with x-zm-signature (nothing to sign
         # with yet), so it's the one legitimate exception to the check below.
+        db.close()
         return compute_webhook_validation_response(
             payload["plainToken"], settings.zoom_webhook_secret_token
         )
@@ -206,6 +212,7 @@ async def zoom_rtms_webhook(request: Request) -> dict:
         # enables RTMS for the meeting via its REST API -- it does NOT
         # auto-start even with the correct scopes. We call the API here,
         # which triggers Zoom to fire meeting.rtms_started back to us.
+        db.close()
         obj = payload.get("object", {})
         meeting_id = obj.get("id") or payload.get("id")
         if meeting_id:
@@ -238,24 +245,20 @@ async def zoom_rtms_webhook(request: Request) -> dict:
             logger.warning("rtms_started: no usable server_urls, payload=%r", payload)
             raise HTTPException(400, "server_urls missing from payload")
 
-        db = get_sessionmaker()()
-        try:
-            org = _resolve_org_for_zoom_account(db, payload.get("account_id"))
-            meeting = (
-                db.query(Meeting)
-                .filter(Meeting.platform == "zoom", Meeting.platform_meeting_id == meeting_uuid)
-                .one_or_none()
-            )
-            if meeting is None:
-                meeting = Meeting(org_id=org.id, platform="zoom", platform_meeting_id=meeting_uuid)
-                db.add(meeting)
-                db.flush()
+        org = _resolve_org_for_zoom_account(db, payload.get("account_id"))
+        meeting = (
+            db.query(Meeting)
+            .filter(Meeting.platform == "zoom", Meeting.platform_meeting_id == meeting_uuid)
+            .one_or_none()
+        )
+        if meeting is None:
+            meeting = Meeting(org_id=org.id, platform="zoom", platform_meeting_id=meeting_uuid)
+            db.add(meeting)
+            db.flush()
 
-            cap_session = CaptureSession(org_id=org.id, meeting_id=meeting.id, mode="A1")
-            db.add(cap_session)
-            db.commit()
-        finally:
-            db.close()
+        cap_session = CaptureSession(org_id=org.id, meeting_id=meeting.id, mode="A1")
+        db.add(cap_session)
+        db.commit()
 
         task = asyncio.create_task(
             _run_stream(
@@ -278,57 +281,53 @@ async def zoom_rtms_webhook(request: Request) -> dict:
             result.pcm_bytes, get_blobstore(), f"zoom-rtms/{org_id}/{session_id}"
         )
 
-        db = get_sessionmaker()()
-        try:
-            session = db.get(CaptureSession, session_id)
-            if session is None:
-                raise HTTPException(404, "capture session not found")
+        session = db.get(CaptureSession, session_id)
+        if session is None:
+            raise HTTPException(404, "capture session not found")
 
-            # Same persistence path as every other capture mode
-            # (app/capture/persist.py), not a hand-rolled second copy: turns
-            # result.roster/speaker_labels (docs/13-participant-identity-
-            # capture.md's "Option A" -- PARTICIPANT_JOIN/ACTIVE_SPEAKER_CHANGE
-            # events, see app/capture/rtms_client.py) into the same
-            # Participant/PlatformSpeakerLabel rows Meet/Teams/Zoom-cloud
-            # already produce, so identity resolution (app/speakers/identity.py)
-            # treats a live Zoom meeting no differently from any other mode.
-            persist_capture_artifacts(
-                db,
-                session,
-                CaptureArtifacts(
-                    mode=CaptureMode.OFFICIAL_REALTIME,
-                    audio_tracks=[AudioTrack(uri=blob_uri)],
-                    roster=result.roster,
-                    speaker_labels=result.speaker_labels,
-                ),
-            )
+        # Same persistence path as every other capture mode
+        # (app/capture/persist.py), not a hand-rolled second copy: turns
+        # result.roster/speaker_labels (docs/13-participant-identity-
+        # capture.md's "Option A" -- PARTICIPANT_JOIN/ACTIVE_SPEAKER_CHANGE
+        # events, see app/capture/rtms_client.py) into the same
+        # Participant/PlatformSpeakerLabel rows Meet/Teams/Zoom-cloud
+        # already produce, so identity resolution (app/speakers/identity.py)
+        # treats a live Zoom meeting no differently from any other mode.
+        persist_capture_artifacts(
+            db,
+            session,
+            CaptureArtifacts(
+                mode=CaptureMode.OFFICIAL_REALTIME,
+                audio_tracks=[AudioTrack(uri=blob_uri)],
+                roster=result.roster,
+                speaker_labels=result.speaker_labels,
+            ),
+        )
 
-            record_disclosure(
-                db,
-                session,
-                subject="all_participants",
-                method="host_setting",
-                detail=(
-                    "platform=zoom RTMS auto-enabled by org settings; disclosed to "
-                    "participants via Zoom's own in-meeting recording indicator — no bot "
-                    "in the room, per docs/03-capture.md"
-                ),
-            )
+        record_disclosure(
+            db,
+            session,
+            subject="all_participants",
+            method="host_setting",
+            detail=(
+                "platform=zoom RTMS auto-enabled by org settings; disclosed to "
+                "participants via Zoom's own in-meeting recording indicator — no bot "
+                "in the room, per docs/03-capture.md"
+            ),
+        )
 
-            # Derived from the pipeline graph (next_stage(FIRST_STAGE)), not a
-            # hardcoded stage name -- RTMS writes its own AudioTrack directly
-            # above (there's nothing to pull, so the "acquire" stage itself is
-            # skipped), but still needs to enter at whatever stage comes right
-            # after it. A literal string here was the actual gap: it read
-            # "transcribe" from before the diarize stage existed and was never
-            # updated when diarize was inserted into the chain, so a live Zoom
-            # meeting silently got zero speaker separation while Mode D/A2 did
-            # not. Deriving it from pipeline.py means the next stage-order
-            # change can't cause the same class of bug again here.
-            enqueue_stage(db, org_id, session.id, next_stage(FIRST_STAGE))
-            db.commit()
-        finally:
-            db.close()
+        # Derived from the pipeline graph (next_stage(FIRST_STAGE)), not a
+        # hardcoded stage name -- RTMS writes its own AudioTrack directly
+        # above (there's nothing to pull, so the "acquire" stage itself is
+        # skipped), but still needs to enter at whatever stage comes right
+        # after it. A literal string here was the actual gap: it read
+        # "transcribe" from before the diarize stage existed and was never
+        # updated when diarize was inserted into the chain, so a live Zoom
+        # meeting silently got zero speaker separation while Mode D/A2 did
+        # not. Deriving it from pipeline.py means the next stage-order
+        # change can't cause the same class of bug again here.
+        enqueue_stage(db, org_id, session.id, next_stage(FIRST_STAGE))
+        db.commit()
         return {"status": "finalized", "capture_session_id": session_id}
 
     # Zoom sends many meeting lifecycle events (meeting.started,
@@ -337,5 +336,6 @@ async def zoom_rtms_webhook(request: Request) -> dict:
     # Returning 400 causes Zoom to mark the endpoint as unhealthy and
     # eventually throttle or suspend delivery. Return 200 and log so we
     # can see what Zoom is actually sending without breaking the channel.
+    db.close()
     logger.info("zoom webhook event %r ignored (not an RTMS event), keys=%s", event, list(payload.keys()))
     return {"status": "ignored", "event": event}
