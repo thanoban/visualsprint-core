@@ -13,7 +13,7 @@ let _micStream = null;
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "START_CAPTURE") {
     startCapture(msg.streamId, msg.sessionId).catch((e) => {
-      chrome.runtime.sendMessage({ type: "OFFSCREEN_ERROR", error: e.message });
+      chrome.runtime.sendMessage({ type: "OFFSCREEN_ERROR", sessionId: msg.sessionId, error: e.message });
     });
   } else if (msg.type === "STOP_CAPTURE") {
     stopCapture();

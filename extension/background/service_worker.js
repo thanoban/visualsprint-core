@@ -379,6 +379,34 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       break;
     }
 
+    case "CAPTURE_STARTED":
+      console.info("[VS] offscreen capture confirmed started", { sessionId: msg.sessionId });
+      break;
+
+    case "OFFSCREEN_ERROR": {
+      // startCapture() in offscreen.js threw — e.g. the tabCapture streamId
+      // expired while createSession() was in flight, or getUserMedia was denied.
+      // The session was already created in the API; finalize it with 0 chunks so
+      // the server knows capture failed and can close the session cleanly.
+      console.error("[VS] offscreen capture error:", msg.error);
+      const recs = await getActiveRecordings();
+      const failedTabId = Object.keys(recs).find(
+        (id) => recs[id].sessionId === msg.sessionId && !recs[id].finalized,
+      );
+      if (failedTabId) {
+        setBadge("!", "#EF4444", Number(failedTabId));
+        chrome.notifications.create("vs_offscreen_error", {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icons/icon128.png"),
+          title: "VisualSprint: Capture failed",
+          message: msg.error ?? "Audio capture could not start. Click the icon to retry.",
+          priority: 2,
+        });
+        await stopRecording(Number(failedTabId), []);
+      }
+      break;
+    }
+
     case "CONSENT_INJECTED":
       if (msg.ok) {
         console.info("[VS] consent notice posted to meeting chat");
