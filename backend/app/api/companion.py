@@ -257,6 +257,13 @@ async def finalize_session(
         wav_bytes,
         content_type="audio/wav",
     )
+    if not audio_uri.startswith("blob://"):
+        # Defensive: blobstore.put() must always return a blob:// URI.
+        # Fail loudly here rather than committing an empty-string AudioTrack
+        # that silently breaks every downstream stage.
+        log.error("companion.finalize.bad_uri", session_id=capture_session_id,
+                  uri=audio_uri)
+        raise HTTPException(500, f"blob store returned invalid URI {audio_uri!r}")
 
     # Keyframe rows are already written incrementally by upload_keyframe; count
     # them for logging only — don't pass them to persist_capture_artifacts or
