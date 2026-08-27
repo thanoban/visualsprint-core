@@ -43,10 +43,11 @@ class _PaddleOcrBackend:
     def _ensure_loaded(self) -> None:
         if self._engine is not None:
             return
-        from paddleocr import PaddleOCR
-
         # show_log was removed in PaddleOCR 3.x; suppress via logging instead
         import logging as _logging
+
+        from paddleocr import PaddleOCR
+
         _logging.getLogger("ppocr").setLevel(_logging.WARNING)
         self._engine = PaddleOCR(lang=self._lang, use_angle_cls=True)
 
