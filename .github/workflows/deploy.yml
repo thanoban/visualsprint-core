@@ -32,6 +32,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub-hosted runners ship with .NET, Android SDK, Haskell, CodeQL,
+      # and several other large toolchains that we never use. Removing them
+      # recovers ~18 GB, which is essential because the agents image alone
+      # (with torch + paddleocr + pyannote) weighs ~5-8 GB on disk during
+      # build. Without this, a cache miss on the backend images (e.g. from a
+      # debug_pipeline.py edit that invalidates the COPY layer) fills the
+      # runner's ~14 GB free disk before the web build even starts.
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force
+          df -h /
+
       # Keep the authentication action current: v3 runs on the supported
       # Node 24 runtime and performs the current GitHub OIDC/WIF exchange.
       # This remains keyless; never replace it with a service-account key.
@@ -104,6 +124,7 @@ jobs:
             -t "${REGISTRY}/api:latest"
           docker push "${REGISTRY}/api:${{ github.sha }}"
           docker push "${REGISTRY}/api:latest"
+          docker system prune -af
 
       # Scale-to-zero during testing (cost saving): cpu-throttling on,
       # min-instances=0. RTMS WebSocket streaming is unreliable in this mode
@@ -156,6 +177,7 @@ jobs:
             -t "${REGISTRY}/agents:latest"
           docker push "${REGISTRY}/agents:${{ github.sha }}"
           docker push "${REGISTRY}/agents:latest"
+          docker system prune -af
 
       # Scale-to-zero, not always-on: budget-constrained deploy (GCP GenAI
       # App Builder trial credit only, no backing payment method) can't
@@ -243,6 +265,7 @@ jobs:
             -t "${REGISTRY}/bot:latest"
           docker push "${REGISTRY}/bot:${{ github.sha }}"
           docker push "${REGISTRY}/bot:latest"
+          docker system prune -af
 
       - name: Create or update bot Cloud Run Job
         run: |
@@ -370,12 +393,13 @@ jobs:
             --format='value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
-      # Free disk space before the web build: the backend images (api + agents +
-      # bot) together occupy several GB of layer cache. Pruning dangling layers
-      # and unused images releases space without touching the Artifact Registry
-      # cache-from images (those are remote, not local).
+      # Belt-and-suspenders: each backend push already runs docker system prune -af,
+      # so there should be little left here. This catches any leftover build cache
+      # or intermediate layers that weren't cleaned up above.
       - name: Prune Docker layer cache before web build
-        run: docker image prune -f
+        run: |
+          docker system prune -af
+          df -h /
 
       - name: Build and push web image
         run: |
