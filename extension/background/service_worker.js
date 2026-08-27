@@ -530,6 +530,30 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
+// ─── Extension reload → reinject content scripts ─────────────────────────────
+// When the extension is reloaded from chrome://extensions, content-script
+// contexts in already-open meeting tabs are invalidated. Those tabs silently
+// stop detecting meetings until manually reloaded. Fix: re-execute the detector
+// into every open meeting tab on install/update so a single extension reload is
+// sufficient — no tab reloads required.
+chrome.runtime.onInstalled.addListener(async () => {
+  const patterns = [
+    "https://meet.google.com/*",
+    "https://app.zoom.us/*",
+    "https://teams.microsoft.com/*",
+  ];
+  for (const pattern of patterns) {
+    const tabs = await chrome.tabs.query({ url: pattern });
+    for (const tab of tabs) {
+      chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content/detector.js"],
+      }).catch(() => {});
+    }
+  }
+  console.info("[VS] detector reinjected into open meeting tabs");
+});
+
 // ─── Service worker restart recovery ─────────────────────────────────────────
 
 chrome.runtime.onStartup.addListener(async () => {
