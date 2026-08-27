@@ -12,12 +12,9 @@ not us-east5 (which was `vertex_region`, the Claude-on-Vertex region).
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from app.config import get_settings
-
-if TYPE_CHECKING:
-    from google import genai as _genai
 
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONALITY = 1024  # must match KnowledgeItem.embedding's Vector(1024)
