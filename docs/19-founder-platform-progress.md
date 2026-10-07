@@ -103,6 +103,26 @@ Slice 4 evidence: 114 capture and capture-API tests passed; scoped Ruff and stri
 The endpoint persists intent only. Worker invocation, provider reconciliation, stop/status APIs and the
 frontend route switch remain gated.
 
+## Slice 5: lifecycle reconciliation, stop and provider onboarding
+
+Published in `f3bd5e2`, `27a11c7` and `dbba7eb`:
+
+- Every accepted dispatch schedules immutable-record reconciliation; active captures are polled and
+  terminal state is monotonic.
+- Uncertain dispatch without a provider record ID becomes an explicit operator-reconciliation state;
+  the system does not guess or send another create request.
+- Stop is an idempotent persisted request. Provider acknowledgement does not mean departure; only a
+  later terminal provider state marks stop confirmed.
+- Cancelling before dispatch fences the outbox, and the dispatcher rechecks cancellation under lock.
+- Status reads expose normalized provider state, safe error code and last-provider-contact time.
+- Added a bounded standalone capture-worker entrypoint, separate from the legacy analysis worker.
+- Added owner/admin-only Vexa onboarding with SecretStore-backed endpoint/key values, endpoint validation,
+  credential-redacted responses and global provider-account ownership isolation.
+
+Slice 5 evidence: 129 capture and capture-API tests passed; scoped Ruff and strict Mypy passed.
+This is local contract evidence. A worker service/job has not been deployed, Vexa has not been provisioned,
+and no real meeting admission/capture claim is made.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
