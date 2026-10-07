@@ -18,7 +18,7 @@ from app.interfaces.capture_provider import (
 from app.interfaces.secretstore import SecretStore
 
 
-def _validate_base_url(value: str) -> str:
+def validate_provider_base_url(value: str) -> str:
     parsed = urlsplit(value)
     loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if (
@@ -38,7 +38,7 @@ class ManagedVexaCaptureProvider(CaptureProvider):
     """Creates and closes one HTTP client per operation."""
 
     def __init__(self, base_url: str, api_key: str, *, timeout_seconds: float = 15):
-        self._base_url = _validate_base_url(base_url)
+        self._base_url = validate_provider_base_url(base_url)
         if not api_key.strip():
             raise ValueError("capture_provider_key_missing")
         self._api_key = api_key

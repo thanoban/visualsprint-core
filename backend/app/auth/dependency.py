@@ -82,6 +82,21 @@ def require_org_member(
         raise HTTPException(403, "not a member of this org")
 
 
+def require_org_admin(
+    org_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    member = (
+        db.query(OrgMember)
+        .filter(OrgMember.org_id == org_id, OrgMember.user_id == user.id)
+        .one_or_none()
+    )
+    if member is None or member.role not in {"owner", "admin"}:
+        raise HTTPException(403, "workspace owner or admin required")
+    return user
+
+
 def require_session_member(
     capture_session_id: str,
     user: User = Depends(get_current_user),
