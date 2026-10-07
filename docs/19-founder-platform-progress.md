@@ -454,6 +454,36 @@ aggregation); 8 service unit tests pass in `tests/memory/test_project_memory.py`
 idempotency, new-version-after-assignment, knowledge-item aggregation, customer-across-projects,
 latest_summary None case). Alembic reports one head (a1b2c3d4e5f6). mypy clean on new files.
 
+## Slice 21: F10 — Persistent project/customer conversations
+
+Published in this session:
+
+- **`ChatThread`**, **`ChatMessage`**, **`AnswerCitation`** models added to `app/db/models.py`
+  with Alembic migration `b2c3d4e5f6a7`:
+  - `ChatThread`: scope_kind ("project"/"customer"), scope_id, creator_id, title, status, version.
+    Unique index on (org_id, creator_id, scope_kind, scope_id).
+  - `ChatMessage`: thread_id, role (user/assistant), state (pending/generating/done/failed),
+    content, client_request_id (idempotency), generation_id (for future SSE streaming).
+    UniqueConstraint on (thread_id, client_request_id).
+  - `AnswerCitation`: message_id, meeting_id, knowledge_item_id (nullable) — read-only provenance.
+- **`app/api/threads.py`** with 5 endpoints under `/api/v2/workspaces/{org_id}`:
+  - `POST /threads` — create creator-private thread; project scope requires project membership.
+  - `GET /threads` — list caller's threads; optional scope_kind/scope_id filters.
+  - `PATCH /threads/{id}` — update title/status; optimistic version check; creator only.
+  - `GET /threads/{id}/messages` — chronological messages; creator only.
+  - `POST /threads/{id}/messages` — idempotent (client_request_id); creates user message
+    (state=DONE) + pending assistant message (state=PENDING, generation_id set). 202 response.
+    Archived threads reject new messages with 409.
+- Router wired into `app/main.py`.
+- Architecture rule: no LLM call in this slice; generation_id is reserved for the future worker
+  that will fill the assistant message content.
+
+Slice 21 evidence: 12 new tests pass in `tests/api/test_threads.py` covering thread create
+(project/customer), non-member denied, unknown project 404, list with scope filter, list
+creator-only, update title + archive, version conflict, send message + pending assistant created,
+send idempotent, archived thread rejected, list messages chronological. Alembic reports one head
+(b2c3d4e5f6a7). mypy clean on new file.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

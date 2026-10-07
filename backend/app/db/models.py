@@ -1463,3 +1463,101 @@ class SummaryVersion(TimestampMixin, Base):
     structured_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     source_meeting_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+# --------------------------------------------------------------------------- #
+# F10 — Persistent project/customer conversations
+# --------------------------------------------------------------------------- #
+
+
+class ThreadStatus(enum.StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class MessageRole(enum.StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class MessageState(enum.StrEnum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class ChatThread(TimestampMixin, Base):
+    """Creator-private conversation thread scoped to a project or customer.
+
+    scope_kind is "project" or "customer"; scope_id is the entity PK.
+    Threads are private to their creator in the pilot; sharing is deferred.
+    """
+
+    __tablename__ = "chat_thread"
+    __table_args__ = (
+        CheckConstraint("scope_kind IN ('project', 'customer')", name="ck_ct_scope_kind"),
+        Index("ix_ct_org_creator_scope", "org_id", "creator_id", "scope_kind", "scope_id"),
+        Index("ix_ct_scope", "scope_kind", "scope_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    scope_kind: Mapped[str] = mapped_column(String(16))
+    scope_id: Mapped[str] = mapped_column(String(36))
+    creator_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    title: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[ThreadStatus] = mapped_column(
+        Enum(ThreadStatus, native_enum=False, length=16),
+        default=ThreadStatus.ACTIVE,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class ChatMessage(TimestampMixin, Base):
+    """One message in a ChatThread.
+
+    client_request_id enables idempotent user sends (same UUID → same row).
+    assistant messages gain a generation_id for SSE streaming.
+    """
+
+    __tablename__ = "chat_message"
+    __table_args__ = (
+        Index("ix_cm_thread", "thread_id"),
+        UniqueConstraint("thread_id", "client_request_id", name="uq_cm_thread_client_req"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_thread.id"))
+    role: Mapped[MessageRole] = mapped_column(
+        Enum(MessageRole, native_enum=False, length=16),
+    )
+    state: Mapped[MessageState] = mapped_column(
+        Enum(MessageState, native_enum=False, length=16),
+        default=MessageState.DONE,
+    )
+    content: Mapped[str] = mapped_column(Text, default="")
+    client_request_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    generation_id: Mapped[str | None] = mapped_column(String(36), default=None)
+
+
+class AnswerCitation(Base):
+    """Source link from an assistant message to a meeting segment.
+
+    Read-only — never updated after creation.  Only returned to callers who
+    can access the referenced meeting (checked at read time, not stored here).
+    """
+
+    __tablename__ = "answer_citation"
+    __table_args__ = (
+        Index("ix_ac_message", "message_id"),
+        Index("ix_ac_meeting", "meeting_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    message_id: Mapped[str] = mapped_column(ForeignKey("chat_message.id"))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meeting.id"))
+    knowledge_item_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_item.id"), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
