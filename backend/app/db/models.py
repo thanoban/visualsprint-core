@@ -1561,3 +1561,36 @@ class AnswerCitation(Base):
     meeting_id: Mapped[str] = mapped_column(ForeignKey("meeting.id"))
     knowledge_item_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_item.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+# --------------------------------------------------------------------------- #
+# F11 — Next-meeting agenda
+# --------------------------------------------------------------------------- #
+
+
+class AgendaVersion(TimestampMixin, Base):
+    """Versioned agenda for an upcoming CalendarOccurrence.
+
+    One row per (occurrence_id, input_revision_hash) where input_revision_hash
+    is derived from the project memory + participant list used to generate it.
+    User edits produce a new version row; the highest version is authoritative.
+
+    sections is a JSON list of {heading, notes, source_item_ids?} items.
+    User edits are distinguishable: edited_by is non-null when the user saved.
+    No auto-overwrite of user edits — a conflict shows a proposed new version.
+    """
+
+    __tablename__ = "agenda_version"
+    __table_args__ = (
+        Index("ix_av_occurrence", "occurrence_id"),
+        UniqueConstraint("occurrence_id", "input_revision_hash", name="uq_av_occurrence_revision"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    occurrence_id: Mapped[str] = mapped_column(ForeignKey("calendar_occurrence.id"))
+    input_revision_hash: Mapped[str] = mapped_column(String(64))
+    sections: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    edited_by: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    objective: Mapped[str] = mapped_column(Text, default="")

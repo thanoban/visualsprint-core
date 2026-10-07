@@ -484,6 +484,27 @@ creator-only, update title + archive, version conflict, send message + pending a
 send idempotent, archived thread rejected, list messages chronological. Alembic reports one head
 (b2c3d4e5f6a7). mypy clean on new file.
 
+## Slice 22: F11 — Next-meeting agenda and founder preparation
+
+Published in this session:
+
+- **`AgendaVersion`** model added to `app/db/models.py` with Alembic migration `c3d4e5f6a7b8`:
+  tracks versioned agendas for `CalendarOccurrence`s. Fields: `occurrence_id`, `input_revision_hash`
+  (sha256 of occurrence revision + project memory id + objective), `sections` (JSON list of
+  {heading, notes}), `objective`, `edited_by` (null = auto-generated, set = user edit), `version`.
+  UniqueConstraint on (occurrence_id, input_revision_hash).
+- **`POST /occurrences/{id}/agenda`** — generates an agenda from project memory (decisions,
+  open questions, commitments from `SummaryVersion`) + objective. Idempotent by input hash.
+  No LLM in this slice — deterministic section building from verified knowledge items.
+- **`GET /occurrences/{id}/agenda`** — returns latest `AgendaVersion` by highest version; 404 if none.
+- **`PATCH /agendas/{id}`** — saves user-edited sections; optimistic version check; marks `edited_by`.
+  User edits are distinguishable from auto-generated content and preserved across refreshes.
+- All three endpoints wired into `app/main.py` via `agenda_router`.
+
+Slice 22 evidence: 8 new tests pass in `tests/api/test_agenda.py` (generate with objective, idempotent,
+different objective creates new row, get latest, get 404 when none, update saves edits, version conflict,
+404 unknown occurrence). Alembic reports one head (c3d4e5f6a7b8). mypy clean on new file.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

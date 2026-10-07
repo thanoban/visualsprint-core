@@ -27,6 +27,7 @@ from app.api.rtms_webhook import router as rtms_webhook_router
 from app.api.rtms_webhook import set_websocket_connector
 from app.api.speakers import router as speakers_router
 from app.api.upload import router as upload_router
+from app.api.agenda import router as agenda_router
 from app.api.memory import router as memory_router
 from app.api.threads import router as threads_router
 from app.api.workspaces_v2 import router as workspaces_v2_router
@@ -104,6 +105,7 @@ app.include_router(companion_router)
 app.include_router(workspaces_v2_router)
 app.include_router(calendar_v2_router)
 app.include_router(memory_router)
+app.include_router(agenda_router)
 app.include_router(threads_router)
 
 
