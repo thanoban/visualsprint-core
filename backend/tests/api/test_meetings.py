@@ -3,12 +3,15 @@ from datetime import UTC, datetime
 from app.db.models import (
     BotSession,
     BotStatus,
+    CaptureRequest,
+    CaptureRequestStatus,
     CaptureSession,
     CaptureState,
     CoverageInterval,
     CoverageStatus,
     Meeting,
     Org,
+    User,
 )
 
 
@@ -83,3 +86,145 @@ def test_list_meetings_returns_latest_capture_and_gap_state(client, db_session):
 def test_list_meetings_404s_for_unknown_org(client):
     resp = client.get("/api/v1/orgs/does-not-exist/meetings")
     assert resp.status_code == 404
+
+
+def test_list_meetings_surfaces_capture_request_status(client, db_session):
+    org = Org(name="acme2")
+    db_session.add(org)
+    db_session.flush()
+    user = User(id="u-2", email="x@example.com")
+    db_session.add(user)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="Standup", platform="meet")
+    db_session.add(meeting)
+    db_session.flush()
+
+    req = CaptureRequest(
+        org_id=org.id,
+        meeting_id=meeting.id,
+        requested_by=user.id,
+        platform="google_meet",
+        native_meeting_id="aaa-bbbb-ccc",
+        meeting_url_secret_ref="s",
+        policy_snapshot={},
+        input_hash="a" * 64,
+        idempotency_key="key-standup",
+        status=CaptureRequestStatus.FINALIZED,
+    )
+    db_session.add(req)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["latest_capture_request_id"] == req.id
+    assert body[0]["latest_capture_request_status"] == "finalized"
+
+
+def test_list_meetings_report_ready_flag(client, db_session):
+    org = Org(name="acme3")
+    db_session.add(org)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="Done meeting", platform="meet")
+    db_session.add(meeting)
+    db_session.flush()
+    session = CaptureSession(org_id=org.id, meeting_id=meeting.id, mode="B", state=CaptureState.DONE)
+    db_session.add(session)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["report_ready"] is True
+
+
+def test_get_capture_status_returns_processing_state(client, db_session):
+    org = Org(name="acme4")
+    db_session.add(org)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="Processing meeting", platform="teams")
+    db_session.add(meeting)
+    db_session.flush()
+    session = CaptureSession(
+        org_id=org.id,
+        meeting_id=meeting.id,
+        mode="B",
+        state=CaptureState.UNDERSTANDING,
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings/{meeting.id}/capture-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "understanding"
+    assert body["report_ready"] is False
+    assert body["pipeline_progress_pct"] > 0
+    assert body["pipeline_progress_pct"] < 100
+
+
+def test_get_capture_status_done_means_report_ready(client, db_session):
+    org = Org(name="acme5")
+    db_session.add(org)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="Done", platform="meet")
+    db_session.add(meeting)
+    db_session.flush()
+    session = CaptureSession(
+        org_id=org.id,
+        meeting_id=meeting.id,
+        mode="B",
+        state=CaptureState.DONE,
+        report_title="Weekly sync summary",
+        report_summary="Discussed Q4 plans.",
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings/{meeting.id}/capture-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["report_ready"] is True
+    assert body["pipeline_progress_pct"] == 100
+    assert body["report_title"] == "Weekly sync summary"
+    assert body["report_summary"] == "Discussed Q4 plans."
+
+
+def test_get_capture_status_404_when_no_session(client, db_session):
+    org = Org(name="acme6")
+    db_session.add(org)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="No capture", platform="meet")
+    db_session.add(meeting)
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings/{meeting.id}/capture-status")
+    assert resp.status_code == 404
+
+
+def test_get_capture_status_with_coverage_gap(client, db_session):
+    org = Org(name="acme7")
+    db_session.add(org)
+    db_session.flush()
+    meeting = Meeting(org_id=org.id, title="Gap meeting", platform="meet")
+    db_session.add(meeting)
+    db_session.flush()
+    session = CaptureSession(org_id=org.id, meeting_id=meeting.id, mode="B", state=CaptureState.DONE)
+    db_session.add(session)
+    db_session.flush()
+    db_session.add(
+        CoverageInterval(
+            org_id=org.id,
+            capture_session_id=session.id,
+            start_s=10.0,
+            end_s=15.0,
+            modality="audio",
+            status=CoverageStatus.MISSING,
+            reason="silence gap",
+        )
+    )
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/orgs/{org.id}/meetings/{meeting.id}/capture-status")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["has_coverage_gap"] is True
