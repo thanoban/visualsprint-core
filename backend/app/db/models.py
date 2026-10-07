@@ -10,6 +10,7 @@ Conventions:
 import enum
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -23,6 +24,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -323,6 +325,195 @@ class BotSession(TimestampMixin, Base):
         ForeignKey("capture_session.id"), default=None
     )
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class ProviderBindingStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    INVALID = "invalid"
+
+
+class ProviderBinding(TimestampMixin, Base):
+    """Tenant-owned capture-provider configuration.
+
+    Credentials and arbitrary endpoint URLs remain in the secret store. The
+    database contains only reviewed references and the provider account scope
+    used to prevent two tenants from claiming the same upstream account.
+    """
+
+    __tablename__ = "provider_binding"
+    __table_args__ = (
+        UniqueConstraint("provider", "account_scope_id", name="uq_provider_account_scope"),
+        Index("ix_providerbinding_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    endpoint_ref: Mapped[str] = mapped_column(String(255))
+    account_scope_id: Mapped[str] = mapped_column(String(255))
+    secret_ref: Mapped[str] = mapped_column(String(255))
+    status: Mapped[ProviderBindingStatus] = mapped_column(
+        Enum(ProviderBindingStatus, native_enum=False, length=16),
+        default=ProviderBindingStatus.ACTIVE,
+    )
+
+
+class CaptureRequestStatus(enum.StrEnum):
+    QUEUED = "queued"
+    DISPATCHING = "dispatching"
+    ACCEPTED = "accepted"
+    MONITORING = "monitoring"
+    DISPATCH_UNKNOWN = "dispatch_unknown"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    FINALIZED = "finalized"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class CaptureStopState(enum.StrEnum):
+    NOT_REQUESTED = "not_requested"
+    REQUESTED = "requested"
+    ACKNOWLEDGED = "acknowledged"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
+
+
+class CaptureRequest(TimestampMixin, Base):
+    """Durable intent to capture one meeting occurrence.
+
+    The invitation URL is stored through ``meeting_url_secret_ref`` only. The
+    idempotency hash contains a one-way URL digest, never the URL or passcode.
+    """
+
+    __tablename__ = "capture_request"
+    __table_args__ = (
+        UniqueConstraint("org_id", "idempotency_key", name="uq_capture_request_org_key"),
+        Index("ix_capture_request_org_status", "org_id", "status"),
+        Index("ix_capture_request_meeting", "meeting_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    meeting_id: Mapped[str] = mapped_column(ForeignKey("meeting.id"))
+    requested_by: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    native_meeting_id: Mapped[str] = mapped_column(String(255))
+    meeting_url_secret_ref: Mapped[str] = mapped_column(String(255))
+    policy_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str] = mapped_column(String(255))
+    status: Mapped[CaptureRequestStatus] = mapped_column(
+        Enum(CaptureRequestStatus, native_enum=False, length=32),
+        default=CaptureRequestStatus.QUEUED,
+    )
+    stop_state: Mapped[CaptureStopState] = mapped_column(
+        Enum(CaptureStopState, native_enum=False, length=24),
+        default=CaptureStopState.NOT_REQUESTED,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class CaptureAttemptState(enum.StrEnum):
+    SCHEDULED = "scheduled"
+    JOINING = "joining"
+    WAITING_FOR_ADMISSION = "waiting_for_admission"
+    BLOCKED = "blocked"
+    CAPTURING = "capturing"
+    STOPPING = "stopping"
+    ENDED = "ended"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+class CaptureAttempt(TimestampMixin, Base):
+    __tablename__ = "capture_attempt"
+    __table_args__ = (
+        UniqueConstraint("request_id", "attempt_no", name="uq_capture_attempt_number"),
+        UniqueConstraint(
+            "provider_binding_id", "provider_record_id", name="uq_capture_attempt_provider_record"
+        ),
+        Index("ix_capture_attempt_org_state", "org_id", "state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    request_id: Mapped[str] = mapped_column(ForeignKey("capture_request.id"))
+    attempt_no: Mapped[int] = mapped_column(Integer)
+    provider_binding_id: Mapped[str] = mapped_column(ForeignKey("provider_binding.id"))
+    provider_record_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    state: Mapped[CaptureAttemptState] = mapped_column(
+        Enum(CaptureAttemptState, native_enum=False, length=32),
+        default=CaptureAttemptState.SCHEDULED,
+    )
+    provider_status: Mapped[str | None] = mapped_column(String(64), default=None)
+    error_code: Mapped[str | None] = mapped_column(String(128), default=None)
+    fencing_version: Mapped[int] = mapped_column(Integer, default=0)
+    last_provider_contact_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
+class UsageReservationStatus(enum.StrEnum):
+    RESERVED = "reserved"
+    RELEASED = "released"
+    RECONCILED = "reconciled"
+    EXPIRED = "expired"
+
+
+class UsageReservation(TimestampMixin, Base):
+    __tablename__ = "usage_reservation"
+    __table_args__ = (
+        UniqueConstraint("request_id", "unit", name="uq_usage_reservation_request_unit"),
+        Index("ix_usage_reservation_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    request_id: Mapped[str] = mapped_column(ForeignKey("capture_request.id"))
+    unit: Mapped[str] = mapped_column(String(32))
+    estimated_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3))
+    actual_quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 3), default=None)
+    status: Mapped[UsageReservationStatus] = mapped_column(
+        Enum(UsageReservationStatus, native_enum=False, length=16),
+        default=UsageReservationStatus.RESERVED,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OutboxStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class OutboxEvent(TimestampMixin, Base):
+    __tablename__ = "outbox_event"
+    __table_args__ = (
+        UniqueConstraint(
+            "operation", "entity_id", "input_revision", name="uq_outbox_operation_revision"
+        ),
+        Index("ix_outbox_status_runat", "status", "run_at"),
+        Index("ix_outbox_org", "org_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    operation: Mapped[str] = mapped_column(String(64))
+    entity_id: Mapped[str] = mapped_column(String(36))
+    input_revision: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[OutboxStatus] = mapped_column(
+        Enum(OutboxStatus, native_enum=False, length=16), default=OutboxStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=8)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    locked_by: Mapped[str | None] = mapped_column(String(64), default=None)
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    fencing_version: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(128), default=None)
 
 
 class AudioTrack(TimestampMixin, Base):
