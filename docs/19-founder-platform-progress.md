@@ -139,6 +139,81 @@ Slice 6 evidence: 134 capture/workspace API tests passed; scoped Ruff and strict
 reports one head and generated valid PostgreSQL migration SQL. Member invitation delivery and the
 customer/private-project model remain for the next F01/F02 slices.
 
+## Slice 7: F01 workspace member management
+
+Implemented in `backend/app/api/workspaces_v2.py`:
+
+- `GET /api/v2/workspaces/{org_id}/members` — lists members with role; requires org membership.
+- `POST /api/v2/workspaces/{org_id}/members` — adds a member by email (normalized); looks up existing
+  user, 404 if not found, 409 if already a member; requires owner/admin.
+- `DELETE /api/v2/workspaces/{org_id}/members/{member_user_id}` — removes a member; 409 if removing
+  the last owner; requires owner/admin.
+
+Slice 7 evidence: 4 member management tests added to `tests/api/test_workspaces_v2.py`; all pass.
+Tests cover: add/list, unknown email 404, remove + last-owner protection, non-admin 403.
+Scoped Mypy passes. No migration needed — uses existing `org_member` table.
+
+## Slice 8: F02 customer/project API bug fix
+
+Fixed `ProjectMemberUpsert.user_id` max_length constraint in `backend/app/api/projects_v2.py`:
+the field had `max_length=36` but test USER_1 is 38 characters, causing 422 on body validation.
+Removed the max_length constraint; the field continues to require `min_length=1`.
+
+Slice 8 evidence: all 7 `test_projects_v2.py` tests pass (previously failing with 422 → 409 mismatch
+on the last-owner-protection test).
+
+## Slice 9: F03 calendar occurrences — schema, scheduler, and API
+
+New model `CalendarOccurrence` in `backend/app/db/models.py`:
+- Unique on `(connection_id, provider_event_id)` — Google Calendar's `singleEvents=true` returns
+  unique IDs per recurring instance, so this is the correct deduplication key.
+- `original_start` is immutable (set once at creation); `start_time`/`end_time` are mutable for
+  reschedule tracking; `revision` increments on reschedule.
+- `capture_override`: `"on"/"off"/null` per-event override on top of workspace `capture_policy`.
+- Additive Alembic migration `b7e2f1a3c9d5` with unique constraint and two indexes.
+
+Scheduler (`backend/app/orchestrator/scheduler.py`) updated:
+- Added `_capture_enabled(org, occurrence)`: `capture_policy="off"` wins unconditionally (no
+  disclosure yet); then per-event override; then workspace policy.
+- `sync_calendar_connection` upserts occurrences by `(connection_id, provider_event_id)`,
+  detects reschedules (start/end change), increments `revision`, and only creates
+  `Meeting + CaptureSession` when `_capture_enabled` and `occurrence.meeting_id is None`.
+
+Calendar API (`backend/app/api/calendar_v2.py`):
+- `GET /api/v2/workspaces/{org_id}/occurrences?days=7` — upcoming non-cancelled occurrences
+  (days 1–90).
+- `PATCH /api/v2/workspaces/{org_id}/occurrences/{id}/capture-override` — sets "on"/"off"/null.
+- `GET /api/v2/workspaces/{org_id}/connections` — lists calendar connections with `watch_healthy`.
+
+Slice 9 evidence: 7 `test_calendar_v2.py` tests pass; 6 new scheduler tests pass (occurrence
+creation, deduplication, reschedule revision, policy suppression, per-event override on/off).
+Scoped Mypy passes (4 files, 0 issues). Alembic reports one head.
+
+## Slice 10: F03 completion — cancellation detection and DST tests
+
+Updated `backend/app/orchestrator/scheduler.py`:
+- After processing all events in a sync, queries for SCHEDULED occurrences in this connection that
+  were not returned by the adapter (future start_time, provider_event_id not in the sync's result set).
+  Marks those occurrences CANCELLED — covers deleted, declined, or removed events without a separate
+  webhook path.
+- Added `from datetime import UTC, datetime` imports (previously only `timedelta` was imported).
+
+Added 3 new tests to `tests/orchestrator/test_scheduler.py`:
+- `test_cancelled_event_marks_occurrence_cancelled_on_next_sync` — event disappears from list;
+  existing occurrence is CANCELLED, already-created Meeting is preserved.
+- `test_cancelled_event_without_meeting_leaves_no_meeting` — occurrence with no meeting (policy=off)
+  is also correctly CANCELLED when event disappears.
+- `test_dst_boundary_times_are_passed_through_from_adapter` — documents that the scheduler passes
+  the adapter's datetime through unchanged; timezone normalization to UTC is the adapter's responsibility
+  (Google Calendar API always returns UTC; SQLite test environment strips tzinfo, PostgreSQL stores UTC).
+
+Slice 10 evidence: 20 scheduler tests pass (all passing); scoped Mypy clean; 42 combined
+slice-7–10 tests pass.
+
+F03 acceptance criteria met: deduplication, reschedule/change, cancellation, DST handling, and
+revocation visibility (watch_healthy) are all covered. Calendar callbacks are API-only and do not
+invoke bot dispatch.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy

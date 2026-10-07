@@ -1,10 +1,11 @@
-"""Workspace onboarding and capture policy endpoints."""
+"""Workspace onboarding, capture policy and member management endpoints."""
 
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import get_current_user, require_org_admin, require_org_member
@@ -12,6 +13,8 @@ from app.db.base import get_db
 from app.db.models import Org, OrgMember, User
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["workspaces-v2"])
+
+_VALID_WORKSPACE_ROLES = {"owner", "admin", "member"}
 
 
 class WorkspaceView(BaseModel):
@@ -114,3 +117,83 @@ def update_workspace(
     db.commit()
     member = db.query(OrgMember).filter_by(org_id=org_id, user_id=user.id).one()
     return _view(org, member.role)
+
+
+# --------------------------------------------------------------------------- #
+# Member management
+# --------------------------------------------------------------------------- #
+
+
+class MemberView(BaseModel):
+    user_id: str
+    email: str
+    role: str
+
+
+class MemberAdd(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    role: str = "member"
+
+
+@router.get("/members", response_model=list[MemberView])
+def list_members(
+    org_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> list[MemberView]:
+    rows = db.execute(
+        select(OrgMember, User)
+        .join(User, User.id == OrgMember.user_id)
+        .where(OrgMember.org_id == org_id)
+        .order_by(OrgMember.created_at)
+    ).all()
+    return [MemberView(user_id=m.user_id, email=u.email, role=m.role) for m, u in rows]
+
+
+@router.post("/members", response_model=MemberView, status_code=201)
+def add_member(
+    org_id: str,
+    body: MemberAdd,
+    db: Session = Depends(get_db),
+    _actor: User = Depends(require_org_admin),
+) -> MemberView:
+    if body.role not in _VALID_WORKSPACE_ROLES:
+        raise HTTPException(422, "role must be owner, admin, or member")
+    normalized = body.email.strip().lower()
+    target = db.execute(select(User).where(User.email == normalized)).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(404, "no account found for that email address")
+    existing = db.execute(
+        select(OrgMember).where(OrgMember.org_id == org_id, OrgMember.user_id == target.id)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(409, "user is already a workspace member")
+    membership = OrgMember(org_id=org_id, user_id=target.id, role=body.role)
+    db.add(membership)
+    db.commit()
+    return MemberView(user_id=target.id, email=target.email, role=membership.role)
+
+
+@router.delete("/members/{member_user_id}", status_code=204)
+def remove_member(
+    org_id: str,
+    member_user_id: str,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_org_admin),
+) -> Response:
+    target = db.execute(
+        select(OrgMember).where(OrgMember.org_id == org_id, OrgMember.user_id == member_user_id)
+    ).scalar_one_or_none()
+    if target is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if target.role == "owner":
+        owners = db.execute(
+            select(OrgMember).where(OrgMember.org_id == org_id, OrgMember.role == "owner")
+        ).scalars().all()
+        if len(owners) <= 1:
+            raise HTTPException(409, "workspace must retain at least one owner")
+    db.delete(target)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

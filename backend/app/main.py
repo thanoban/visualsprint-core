@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.actions import router as actions_router
+from app.api.calendar_v2 import router as calendar_v2_router
 from app.api.capture import router as capture_router
 from app.api.capture_provider_v2 import router as capture_provider_v2_router
 from app.api.capture_v2 import router as capture_v2_router
@@ -20,6 +21,7 @@ from app.api.meetings import router as meetings_router
 from app.api.oauth import router as oauth_router
 from app.api.ops import router as ops_router
 from app.api.people import router as people_router
+from app.api.projects_v2 import router as projects_v2_router
 from app.api.report import router as report_router
 from app.api.rtms_webhook import router as rtms_webhook_router
 from app.api.rtms_webhook import set_websocket_connector
@@ -92,11 +94,13 @@ app.include_router(rtms_webhook_router)
 app.include_router(oauth_router)
 app.include_router(me_router)
 app.include_router(people_router)
+app.include_router(projects_v2_router)
 app.include_router(speakers_router)
 app.include_router(ops_router)
 app.include_router(leads_router)
 app.include_router(companion_router)
 app.include_router(workspaces_v2_router)
+app.include_router(calendar_v2_router)
 
 
 @app.get("/healthz", tags=["ops"])

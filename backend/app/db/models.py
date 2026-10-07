@@ -22,6 +22,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -206,6 +207,100 @@ class OrgConnection(TimestampMixin, Base):
     secret_ref: Mapped[str] = mapped_column(String(255))
 
 
+class CustomerStatus(enum.StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class Customer(TimestampMixin, Base):
+    __tablename__ = "customer"
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_customer_org_id"),
+        Index("ix_customer_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    name: Mapped[str] = mapped_column(String(255))
+    status: Mapped[CustomerStatus] = mapped_column(
+        Enum(CustomerStatus, native_enum=False, length=16), default=CustomerStatus.ACTIVE
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class CustomerContact(TimestampMixin, Base):
+    __tablename__ = "customer_contact"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "customer_id"], ["customer.org_id", "customer.id"]
+        ),
+        UniqueConstraint("customer_id", "email", name="uq_customer_contact_email"),
+        Index("ix_customer_contact_org_email", "org_id", "email"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    customer_id: Mapped[str] = mapped_column(String(36))
+    email: Mapped[str] = mapped_column(String(320))
+    display_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    verified_rule: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ProjectVisibility(enum.StrEnum):
+    PRIVATE = "private"
+
+
+class ProjectStatus(enum.StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class Project(TimestampMixin, Base):
+    __tablename__ = "project"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["org_id", "customer_id"], ["customer.org_id", "customer.id"]
+        ),
+        UniqueConstraint("org_id", "id", name="uq_project_org_id"),
+        Index("ix_project_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    customer_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    name: Mapped[str] = mapped_column(String(255))
+    visibility: Mapped[ProjectVisibility] = mapped_column(
+        Enum(ProjectVisibility, native_enum=False, length=16), default=ProjectVisibility.PRIVATE
+    )
+    status: Mapped[ProjectStatus] = mapped_column(
+        Enum(ProjectStatus, native_enum=False, length=16), default=ProjectStatus.ACTIVE
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class ProjectRole(enum.StrEnum):
+    OWNER = "owner"
+    EDITOR = "editor"
+    VIEWER = "viewer"
+
+
+class ProjectMember(TimestampMixin, Base):
+    __tablename__ = "project_member"
+    __table_args__ = (
+        ForeignKeyConstraint(["org_id", "project_id"], ["project.org_id", "project.id"]),
+        UniqueConstraint("project_id", "user_id", name="uq_project_member_user"),
+        Index("ix_project_member_org_user", "org_id", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    project_id: Mapped[str] = mapped_column(String(36))
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    role: Mapped[ProjectRole] = mapped_column(
+        Enum(ProjectRole, native_enum=False, length=16), default=ProjectRole.VIEWER
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Meetings & capture
 # --------------------------------------------------------------------------- #
@@ -216,10 +311,12 @@ class Meeting(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_meeting_org_start", "org_id", "scheduled_start"),
         Index("ix_meeting_external_calendar_event", "org_id", "external_calendar_event_id"),
+        UniqueConstraint("org_id", "id", name="uq_meeting_org_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
     title: Mapped[str] = mapped_column(String(500), default="")
     platform: Mapped[str] = mapped_column(String(32), default="upload")  # zoom|meet|teams|upload
     platform_meeting_id: Mapped[str | None] = mapped_column(String(255), default=None)
@@ -230,6 +327,78 @@ class Meeting(TimestampMixin, Base):
     external_calendar_event_id: Mapped[str | None] = mapped_column(String(255), default=None)
     scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CalendarOccurrenceStatus(enum.StrEnum):
+    SCHEDULED = "scheduled"
+    CANCELLED = "cancelled"
+    ENDED = "ended"
+
+
+class CalendarOccurrence(TimestampMixin, Base):
+    """One instance of a calendar event (recurring or one-off).
+
+    `original_start` is the scheduled start at the time the occurrence was
+    first seen — it identifies this slot within a recurring series and never
+    changes on reschedule. `start_time` and `end_time` reflect the current
+    (possibly rescheduled) times. `revision` increments on every reschedule.
+    """
+
+    __tablename__ = "calendar_occurrence"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "provider_event_id",
+            name="uq_occurrence_connection_event",
+        ),
+        Index("ix_occurrence_org_start", "org_id", "start_time"),
+        Index("ix_occurrence_connection", "connection_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    connection_id: Mapped[str] = mapped_column(ForeignKey("calendar_connection.id"))
+    provider_event_id: Mapped[str] = mapped_column(String(255))
+    original_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str] = mapped_column(String(500), default="")
+    meeting_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    platform: Mapped[str | None] = mapped_column(String(32), default=None)
+    platform_meeting_id: Mapped[str | None] = mapped_column(String(255), default=None)
+    status: Mapped[CalendarOccurrenceStatus] = mapped_column(
+        Enum(CalendarOccurrenceStatus, native_enum=False, length=16),
+        default=CalendarOccurrenceStatus.SCHEDULED,
+    )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    # "on" | "off" | null (null means inherit the workspace capture policy)
+    capture_override: Mapped[str | None] = mapped_column(String(8), default=None)
+    meeting_id: Mapped[str | None] = mapped_column(ForeignKey("meeting.id"), default=None)
+
+
+class MeetingAssignmentSource(enum.StrEnum):
+    MANUAL = "manual"
+    APPROVED_RULE = "approved_rule"
+
+
+class MeetingAssignment(TimestampMixin, Base):
+    __tablename__ = "meeting_assignment"
+    __table_args__ = (
+        ForeignKeyConstraint(["org_id", "meeting_id"], ["meeting.org_id", "meeting.id"]),
+        ForeignKeyConstraint(["org_id", "project_id"], ["project.org_id", "project.id"]),
+        UniqueConstraint("meeting_id", name="uq_meeting_assignment_meeting"),
+        Index("ix_meeting_assignment_project", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    meeting_id: Mapped[str] = mapped_column(String(36))
+    project_id: Mapped[str] = mapped_column(String(36))
+    assigned_by: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    source: Mapped[MeetingAssignmentSource] = mapped_column(
+        Enum(MeetingAssignmentSource, native_enum=False, length=24),
+        default=MeetingAssignmentSource.MANUAL,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class CaptureState(enum.StrEnum):
