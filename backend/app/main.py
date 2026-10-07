@@ -25,6 +25,7 @@ from app.api.rtms_webhook import router as rtms_webhook_router
 from app.api.rtms_webhook import set_websocket_connector
 from app.api.speakers import router as speakers_router
 from app.api.upload import router as upload_router
+from app.api.workspaces_v2 import router as workspaces_v2_router
 from app.config import get_settings
 from app.observability import (
     RateLimitMiddleware,
@@ -95,6 +96,7 @@ app.include_router(speakers_router)
 app.include_router(ops_router)
 app.include_router(leads_router)
 app.include_router(companion_router)
+app.include_router(workspaces_v2_router)
 
 
 @app.get("/healthz", tags=["ops"])

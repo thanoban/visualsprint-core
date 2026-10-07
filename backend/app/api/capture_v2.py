@@ -16,6 +16,7 @@ from app.adapters.secretstore_gcp import get_secretstore
 from app.auth.dependency import get_current_user, require_org_member
 from app.capture.dispatcher import enqueue_reconciliation
 from app.capture.requests import (
+    CapturePolicyError,
     CaptureRequestConflict,
     CaptureRequestScopeError,
     capture_request_input_hash,
@@ -150,6 +151,10 @@ async def create_request(
         db.rollback()
         await secret_store.delete(secret_ref)
         raise HTTPException(404, "meeting not found") from exc
+    except CapturePolicyError as exc:
+        db.rollback()
+        await secret_store.delete(secret_ref)
+        raise HTTPException(409, "workspace capture is not enabled") from exc
     except Exception as exc:
         db.rollback()
         # Commit outcome can be ambiguous after a connection failure. Keep

@@ -69,6 +69,17 @@ class Org(TimestampMixin, Base):
     # runaway agent spend, not to meter normal use.
     monthly_llm_token_budget: Mapped[int | None] = mapped_column(Integer, default=None)
     settings: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    preferred_language: Mapped[str] = mapped_column(String(16), default="en")
+    capture_policy: Mapped[str] = mapped_column(String(32), default="off")
+    capture_concurrency_limit: Mapped[int] = mapped_column(Integer, default=5)
+    capture_monthly_minutes: Mapped[int] = mapped_column(Integer, default=6000)
+    disclosure_ack_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    disclosure_ack_by: Mapped[str | None] = mapped_column(
+        ForeignKey("app_user.id"), default=None
+    )
 
 
 class Person(TimestampMixin, Base):

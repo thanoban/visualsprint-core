@@ -88,7 +88,10 @@ def state():
     with factory() as db:
         db.add_all(
             [
-                Org(id="org-1", name="One"),
+                Org(
+                    id="org-1", name="One", capture_policy="manual",
+                    disclosure_ack_at=datetime(2026, 10, 8, tzinfo=UTC),
+                ),
                 User(id="user-1", email="one@example.com"),
                 OrgMember(org_id="org-1", user_id="user-1", role="owner"),
                 Meeting(id="meeting-1", org_id="org-1", title="Pilot", platform="meet"),

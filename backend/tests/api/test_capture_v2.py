@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.api.capture_v2 import get_capture_secret_store
 from app.db.models import (
     CaptureAttempt,
@@ -36,7 +38,11 @@ class MemorySecrets:
 
 
 def seed(db):
-    org = Org(name="Acme")
+    org = Org(
+        name="Acme",
+        capture_policy="manual",
+        disclosure_ack_at=datetime(2026, 10, 8, tzinfo=UTC),
+    )
     db.add(org)
     db.flush()
     db.add(User(id=USER_ID, email="test@example.com"))
@@ -160,6 +166,24 @@ def test_get_is_scoped_to_workspace(client, db_session):
     assert client.get(
         f"/api/v2/workspaces/not-the-org/capture-requests/{created['id']}"
     ).status_code == 404
+
+
+def test_capture_is_rejected_when_workspace_policy_is_off(client, db_session):
+    org, meeting = seed(db_session)
+    org.capture_policy = "off"
+    db_session.commit()
+    secrets = MemorySecrets()
+    install_secrets(secrets)
+
+    response = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "policy-off"},
+        json=payload(meeting.id),
+    )
+
+    assert response.status_code == 409
+    assert secrets.values == {}
+    assert db_session.query(CaptureRequest).count() == 0
 
 
 def test_stop_before_dispatch_cancels_intent_and_outbox(client, db_session):

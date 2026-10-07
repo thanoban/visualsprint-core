@@ -21,6 +21,7 @@ from app.db.models import (
     CaptureRequest,
     CaptureRequestStatus,
     Meeting,
+    Org,
     OrgMember,
     OutboxEvent,
     UsageReservation,
@@ -34,6 +35,10 @@ class CaptureRequestConflict(ValueError):
 
 class CaptureRequestScopeError(ValueError):
     """The actor or meeting does not belong to the requested workspace."""
+
+
+class CapturePolicyError(ValueError):
+    """Workspace capture has not been explicitly enabled and acknowledged."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,7 @@ def create_capture_request(
     if validated_target != target:
         raise ValueError("meeting target identity does not match its URL")
 
+    org = db.get(Org, org_id)
     meeting_exists = db.execute(
         select(Meeting.id).where(Meeting.id == meeting_id, Meeting.org_id == org_id)
     ).scalar_one_or_none()
@@ -113,6 +119,8 @@ def create_capture_request(
     ).scalar_one_or_none()
     if meeting_exists is None or member_exists is None:
         raise CaptureRequestScopeError("capture_request_scope_mismatch")
+    if org is None or org.capture_policy == "off" or org.disclosure_ack_at is None:
+        raise CapturePolicyError("workspace_capture_not_enabled")
 
     input_hash = capture_request_input_hash(
         meeting_id=meeting_id,

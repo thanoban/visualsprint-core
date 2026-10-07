@@ -34,8 +34,14 @@ def db():
     session = sessionmaker(bind=engine, expire_on_commit=False)()
     session.add_all(
         [
-            Org(id="org-1", name="One"),
-            Org(id="org-2", name="Two"),
+            Org(
+                id="org-1", name="One", capture_policy="manual",
+                disclosure_ack_at=datetime(2026, 10, 7, tzinfo=UTC),
+            ),
+            Org(
+                id="org-2", name="Two", capture_policy="manual",
+                disclosure_ack_at=datetime(2026, 10, 7, tzinfo=UTC),
+            ),
             User(id="user-1", email="one@example.com"),
             User(id="user-2", email="two@example.com"),
             OrgMember(org_id="org-1", user_id="user-1", role="owner"),
