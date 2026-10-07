@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.actions import router as actions_router
 from app.api.capture import router as capture_router
+from app.api.capture_v2 import router as capture_v2_router
 from app.api.chat import router as chat_router
 from app.api.companion import router as companion_router
 from app.api.corrections import router as corrections_router
@@ -78,6 +79,7 @@ app.add_middleware(RequestContextMiddleware)
 app.include_router(upload_router)
 app.include_router(meetings_router)
 app.include_router(capture_router)
+app.include_router(capture_v2_router)
 app.include_router(report_router)
 app.include_router(chat_router)
 app.include_router(corrections_router)

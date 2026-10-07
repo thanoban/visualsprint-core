@@ -42,12 +42,11 @@ class CaptureRequestResult:
     created: bool
 
 
-def _canonical_hash(
+def capture_request_input_hash(
     *,
     meeting_id: str,
     requested_by: str,
     target: MeetingTarget,
-    meeting_url_secret_ref: str,
     policy_snapshot: dict[str, Any],
     estimated_seconds: int,
 ) -> str:
@@ -57,7 +56,6 @@ def _canonical_hash(
         "platform": target.platform,
         "native_meeting_id": target.native_meeting_id,
         "meeting_url_sha256": hashlib.sha256(target.meeting_url.encode()).hexdigest(),
-        "meeting_url_secret_ref": meeting_url_secret_ref,
         "policy_snapshot": policy_snapshot,
         "estimated_seconds": estimated_seconds,
     }
@@ -116,11 +114,10 @@ def create_capture_request(
     if meeting_exists is None or member_exists is None:
         raise CaptureRequestScopeError("capture_request_scope_mismatch")
 
-    input_hash = _canonical_hash(
+    input_hash = capture_request_input_hash(
         meeting_id=meeting_id,
         requested_by=requested_by,
         target=validated_target,
-        meeting_url_secret_ref=meeting_url_secret_ref,
         policy_snapshot=policy_snapshot,
         estimated_seconds=estimated_seconds,
     )
