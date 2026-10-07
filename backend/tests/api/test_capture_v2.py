@@ -384,3 +384,41 @@ def test_stale_flag_not_set_for_terminal_state(client, db_session):
     resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
     assert resp.status_code == 200
     assert resp.json()["is_stale"] is False
+
+
+def test_recurring_url_with_distinct_idempotency_keys_creates_separate_requests(client, db_session):
+    """Same meeting URL (recurring Zoom) + different idempotency keys → separate requests."""
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    resp1 = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "occurrence-week-1"},
+        json=payload(meeting.id),
+    )
+    resp2 = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "occurrence-week-2"},
+        json=payload(meeting.id),
+    )
+    assert resp1.status_code == 202
+    assert resp2.status_code == 202
+    assert resp1.json()["id"] != resp2.json()["id"]
+
+
+def test_out_of_order_stop_on_finalized_request_is_idempotent(client, db_session):
+    """Stop on a FINALIZED request: stop_state confirmed, no new reconcile events."""
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "overrun-stop"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.FINALIZED
+    db_session.commit()
+
+    resp = client.post(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop")
+    assert resp.status_code == 202
+    assert resp.json()["stop_state"] == "confirmed"
+    assert db_session.query(OutboxEvent).filter_by(operation="capture.reconcile").count() == 0

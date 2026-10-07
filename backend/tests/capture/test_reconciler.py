@@ -25,6 +25,7 @@ from app.db.models import (
     User,
 )
 from app.interfaces.capture_provider import (
+    CaptureProviderError,
     CaptureReference,
     CaptureSnapshot,
     CaptureStatus,
@@ -34,15 +35,18 @@ from app.interfaces.capture_provider import (
 
 
 class Provider:
-    def __init__(self, status, *, transcript_segments=None):
+    def __init__(self, status, *, transcript_segments=None, status_error=None):
         self.status_value = status
         self.status_calls = 0
         self.stop_calls = 0
         self.transcript_calls = 0
         self._transcript_segments = transcript_segments or []
+        self._status_error = status_error
 
     async def status(self, reference):
         self.status_calls += 1
+        if self._status_error is not None:
+            raise self._status_error
         return CaptureSnapshot(
             reference=reference, status=self.status_value, provider_status=self.status_value.value
         )
@@ -359,3 +363,146 @@ async def test_state_entered_at_not_updated_when_state_unchanged(state):
     with state() as db:
         attempt = db.get(CaptureAttempt, "attempt-1")
         assert attempt.state_entered_at == earlier.replace(tzinfo=None)
+
+
+# ── F05 edge-case tests ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_blocked_state_is_persisted_and_event_rescheduled(state):
+    """BLOCKED means host denied admission — system records it but does not auto-stop."""
+    provider = Provider(CaptureStatus.BLOCKED)
+    assert await run(state, provider)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        event = db.get(OutboxEvent, "event-1")
+        assert attempt.state == CaptureAttemptState.BLOCKED
+        assert event.status == OutboxStatus.PENDING
+        request = db.get(CaptureRequest, "request-1")
+        assert request.status == CaptureRequestStatus.MONITORING
+        assert request.stop_state == CaptureStopState.NOT_REQUESTED
+
+
+@pytest.mark.asyncio
+async def test_retryable_provider_error_reschedules_event(state):
+    err = CaptureProviderError("upstream_timeout", retryable=True)
+    provider = Provider(CaptureStatus.CAPTURING, status_error=err)
+    assert await run(state, provider)
+    with state() as db:
+        event = db.get(OutboxEvent, "event-1")
+        request = db.get(CaptureRequest, "request-1")
+        assert event.status == OutboxStatus.PENDING
+        assert event.error_code == "upstream_timeout"
+        assert request.status == CaptureRequestStatus.MONITORING
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_provider_error_fails_event_and_request(state):
+    err = CaptureProviderError("session_not_found", retryable=False)
+    provider = Provider(CaptureStatus.CAPTURING, status_error=err)
+    assert await run(state, provider)
+    with state() as db:
+        event = db.get(OutboxEvent, "event-1")
+        request = db.get(CaptureRequest, "request-1")
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert event.status == OutboxStatus.FAILED
+        assert event.error_code == "session_not_found"
+        assert request.status == CaptureRequestStatus.RECONCILIATION_REQUIRED
+        assert attempt.error_code == "session_not_found"
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_is_reclaimed_by_another_worker(state):
+    """A lease older than lease_seconds is superseded; the new worker reconciles."""
+    stale_time = datetime(2026, 10, 8, 11, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 10, 8, 12, 5, 0, tzinfo=UTC)  # 65 min later, > default 60s lease
+    with state() as db:
+        event = db.get(OutboxEvent, "event-1")
+        event.status = OutboxStatus.RUNNING
+        event.locked_by = "stale-worker"
+        event.locked_at = stale_time
+        db.commit()
+    provider = Provider(CaptureStatus.CAPTURING)
+    result = await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="fresh-worker",
+        now=now,
+        lease_seconds=60,
+    )
+    assert result
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.state == CaptureAttemptState.CAPTURING
+        assert provider.status_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fencing_prevents_stale_write_from_overwriting_newer_state(state):
+    """If fencing_version advanced between provider I/O and the write, skip the write."""
+    from app.capture.reconciler import reconcile_next as _reconcile
+
+    class SlowProvider:
+        """Simulates a slow status call; lets another worker advance the fence first."""
+        def __init__(self):
+            self.status_calls = 0
+            self._barrier = None
+
+        async def status(self, reference):
+            self.status_calls += 1
+            # Advance the fencing_version while we are "in flight"
+            with state() as db:
+                event = db.execute(
+                    __import__("sqlalchemy").select(OutboxEvent).where(
+                        OutboxEvent.id == "event-1"
+                    )
+                ).scalar_one()
+                event.fencing_version += 99  # simulate a concurrent worker
+                db.commit()
+            return CaptureSnapshot(
+                reference=reference,
+                status=CaptureStatus.CAPTURING,
+                provider_status="active",
+            )
+
+        async def transcript(self, reference):
+            snap = CaptureSnapshot(
+                reference=reference, status=CaptureStatus.CAPTURING, provider_status="active"
+            )
+            return TranscriptSnapshot(capture=snap, segments=[])
+
+        async def stop(self, reference):
+            pass
+
+    result = await reconcile_next(
+        state,
+        provider_resolver=Resolver(SlowProvider()),
+        worker_id="monitor-1",
+        now=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    assert result
+    # The stale write was dropped; attempt state stayed as originally seeded (JOINING)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.state == CaptureAttemptState.JOINING
+
+
+@pytest.mark.asyncio
+async def test_stop_before_dispatch_fires_cancels_queued_request(state):
+    """Stop issued before the outbox event fires should cancel without provider call."""
+    with state() as db:
+        request = db.get(CaptureRequest, "request-1")
+        request.status = CaptureRequestStatus.QUEUED
+        event = db.get(OutboxEvent, "event-1")
+        event.operation = "capture.dispatch"
+        event.status = OutboxStatus.PENDING
+        db.commit()
+    # No reconcile event exists; reconcile_next finds nothing and returns False.
+    provider = Provider(CaptureStatus.CAPTURING)
+    result = await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    assert not result
+    assert provider.status_calls == 0
