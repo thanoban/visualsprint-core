@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.api.capture_v2 import get_capture_secret_store
 from app.db.models import (
@@ -255,3 +255,132 @@ def test_stop_live_attempt_queues_reconciliation_and_status_exposes_freshness(cl
     assert status_response.json()["provider_state"] == "capturing"
     assert status_response.json()["provider_status"] == "active"
     assert db_session.query(OutboxEvent).filter_by(operation="capture.reconcile").count() == 1
+
+
+def _add_live_attempt(db, org_id, request_id, *, state=CaptureAttemptState.CAPTURING,
+                      last_contact_offset_seconds=0, last_transcript_offset_seconds=None):
+    """Helper: add a CaptureAttempt in a live state with controlled timestamps."""
+    binding = ProviderBinding(
+        org_id=org_id,
+        provider="vexa",
+        endpoint_ref="ep",
+        account_scope_id="scope",
+        secret_ref="key",
+    )
+    db.add(binding)
+    db.flush()
+    now = datetime.now(UTC)
+    contact_at = now - timedelta(seconds=last_contact_offset_seconds)
+    transcript_at = None
+    if last_transcript_offset_seconds is not None:
+        transcript_at = now - timedelta(seconds=last_transcript_offset_seconds)
+    attempt = CaptureAttempt(
+        org_id=org_id,
+        request_id=request_id,
+        attempt_no=1,
+        provider_binding_id=binding.id,
+        provider_record_id="record-x",
+        state=state,
+        provider_status="active",
+        last_provider_contact_at=contact_at,
+        last_transcript_at=transcript_at,
+    )
+    db.add(attempt)
+    db.commit()
+    return attempt
+
+
+def test_is_stale_false_when_contact_recent(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "stale-recent"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.MONITORING
+    db_session.flush()
+    _add_live_attempt(db_session, org.id, request.id, last_contact_offset_seconds=30)
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
+    assert resp.status_code == 200
+    assert resp.json()["is_stale"] is False
+
+
+def test_is_stale_true_when_contact_is_old(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "stale-old"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.MONITORING
+    db_session.flush()
+    _add_live_attempt(db_session, org.id, request.id, last_contact_offset_seconds=300)
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
+    assert resp.status_code == 200
+    assert resp.json()["is_stale"] is True
+
+
+def test_last_transcript_at_exposed_when_present(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "transcript-freshness"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.MONITORING
+    db_session.flush()
+    _add_live_attempt(db_session, org.id, request.id,
+                      last_contact_offset_seconds=10,
+                      last_transcript_offset_seconds=20)
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["last_transcript_at"] is not None
+    assert body["is_stale"] is False
+
+
+def test_last_transcript_at_none_when_no_transcript_yet(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "no-transcript"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.MONITORING
+    db_session.flush()
+    _add_live_attempt(db_session, org.id, request.id, last_contact_offset_seconds=10)
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
+    assert resp.status_code == 200
+    assert resp.json()["last_transcript_at"] is None
+
+
+def test_stale_flag_not_set_for_terminal_state(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "terminal-stale"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.FINALIZED
+    db_session.flush()
+    _add_live_attempt(db_session, org.id, request.id,
+                      state=CaptureAttemptState.ENDED,
+                      last_contact_offset_seconds=600)
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
+    assert resp.status_code == 200
+    assert resp.json()["is_stale"] is False

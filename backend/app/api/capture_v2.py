@@ -5,12 +5,16 @@ provider inside the HTTP request and never exposes the invitation URL again.
 """
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+_STALE_AFTER = timedelta(seconds=180)
+_LIVE_STATES = {"joining", "waiting_for_admission", "capturing", "stopping"}
 
 from app.adapters.secretstore_gcp import get_secretstore
 from app.auth.dependency import get_current_user, require_org_member
@@ -64,6 +68,8 @@ class CaptureRequestView(BaseModel):
     provider_state: str | None = None
     provider_status: str | None = None
     last_provider_contact_at: str | None = None
+    last_transcript_at: str | None = None
+    is_stale: bool = False
     error_code: str | None = None
 
 
@@ -73,6 +79,13 @@ def _view(
     attempt: CaptureAttempt | None = None,
     created: bool | None = None,
 ) -> CaptureRequestView:
+    now = datetime.now(UTC)
+    is_stale = False
+    if attempt and attempt.state.value in _LIVE_STATES and attempt.last_provider_contact_at:
+        contact = attempt.last_provider_contact_at
+        if contact.tzinfo is None:
+            contact = contact.replace(tzinfo=UTC)
+        is_stale = (now - contact) >= _STALE_AFTER
     return CaptureRequestView(
         id=request.id,
         meeting_id=request.meeting_id,
@@ -89,6 +102,12 @@ def _view(
             if attempt and attempt.last_provider_contact_at
             else None
         ),
+        last_transcript_at=(
+            attempt.last_transcript_at.isoformat()
+            if attempt and attempt.last_transcript_at
+            else None
+        ),
+        is_stale=is_stale,
         error_code=attempt.error_code if attempt else None,
     )
 

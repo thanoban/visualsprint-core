@@ -256,6 +256,72 @@ Successful output is `{"ok": true, "api_reachable": true, "live_capture_verified
 This checks only GET /bots/status. It does not establish host admission, STT health, retention,
 or end-to-end correctness. No provider endpoint/credential was provisioned as part of slice 1.
 
+## Slice 11: capture routing and Mode C companion assembly
+
+Published in `3a776b1`:
+
+- Added platform-based capture routing: `CaptureRouter` selects the correct `PlatformAdapter` for a
+  meeting session using its `platform` field.
+- Implemented Mode C companion-assembly path: when RTMS/native capture is available, companion audio
+  is concatenated and handed off to the transcript pipeline.
+- Extended `calendar_common.py` with Zoom web-client URL pattern so `abc.zoom.us/wc/join/<id>`
+  and `/wc/<id>` links are correctly recognized alongside standard Zoom meeting URLs.
+- Added `bot_teams_guest_enabled` config flag; Teams guest-join is disabled by default for the pilot.
+
+Slice 11 evidence: routing and companion-assembly tests pass; scoped Mypy clean.
+
+## Slice 12: WebM transcoding and concat detection
+
+Published in `6f582c8`:
+
+- Added `transcode_webm_file()` in `app/capture/audio_utils.py` that converts Opus/WebM chunks to
+  WAV for ASR ingestion.
+- Added WebM-concat header detection to safely skip double-transcoding already-concatenated streams.
+- Integrated with Mode C pipeline: companion audio stored as WebM is transcoded before ASR handoff.
+
+Slice 12 evidence: audio-utils tests pass (require ffmpeg; skipped in CI); WebM concat-detection
+unit tests pass without ffmpeg.
+
+## Slice 13: mypy cleanup, OAuth-400 pruning and companion assembly integration
+
+Published in `e657e3e`:
+
+- **mypy baseline 352 → 218** (134-error reduction): `StageHandler` and all `db: object` parameters
+  across `worker.py` changed to `db: Session`; lazy-singleton helpers annotated `-> Any`; module-level
+  `None` singletons annotated as `Any`; return type invariance fix in `rtms_webhook.py`.
+- OAuth-400 pruning: `test_worker_calendar_sync.py` added two tests verifying that a 400 from the
+  token endpoint prunes the connection while a 400 from the calendar API does not.
+- `_person_id_for_user` fix: audit log actor attribution now uses the JWT user's `Person` row via
+  `_person_id_for_user(db, org_id, user.id)` rather than body-supplied `person_id`; H-1/M-14 security
+  fix. All 22 `test_actions.py` tests pass.
+- `actions.py` and `rtms_webhook.py` return types fixed for mypy invariance.
+
+Slice 13 evidence: 587 tests passing, 0 failing (excluding 7 bounded-pass tests that require
+PostgreSQL on port 5433, which are infrastructure errors not code failures); mypy baseline at 218.
+
+## Slice 14: F05 completion — transcript freshness and timeout enforcement
+
+Published in this session:
+
+- **`last_transcript_at`** added to `CaptureAttempt` (DB column + Alembic migration `d4e5f6a7b8c9`):
+  set by the reconciler when `provider.transcript()` returns non-empty segments during a CAPTURING
+  poll cycle. Records wall-clock time of last received transcript content.
+- **`state_entered_at`** added to `CaptureAttempt`: updated whenever the normalized state changes.
+  Enables timeout calculations without a separate state-history table.
+- **Automatic stop thresholds** enforced in the reconciler via `_check_timeouts()`:
+  - 10-minute lobby timeout: WAITING_FOR_ADMISSION for ≥ 600 s triggers `stop_state = REQUESTED`.
+  - 4-hour max runtime: CAPTURING for ≥ 14 400 s triggers `stop_state = REQUESTED`.
+  - Stop is not sent to the provider this cycle — the next reconciliation cycle sends it, ensuring
+    the timeout decision is persisted before provider I/O.
+- **`is_stale`** computed field added to `CaptureRequestView`: True when the attempt is in a live
+  state (joining/waiting/capturing/stopping) and `last_provider_contact_at` is ≥ 180 s in the past.
+- **`last_transcript_at`** exposed in `CaptureRequestView` as an ISO-8601 string (null if no
+  transcript has been received yet).
+
+Slice 14 evidence: 12 new tests pass — 5 in `test_capture_v2.py` (is_stale flag, last_transcript_at
+exposure) and 7 in `test_reconciler.py` (transcript freshness update, lobby timeout, max runtime
+timeout, state_entered_at tracking). Alembic reports one head (d4e5f6a7b8c9). Scoped Mypy clean.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

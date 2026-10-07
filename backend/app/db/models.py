@@ -632,6 +632,12 @@ class CaptureAttempt(TimestampMixin, Base):
     last_provider_contact_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    state_entered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_transcript_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
 
 class UsageReservationStatus(enum.StrEnum):

@@ -1,11 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.capture.reconciler import reconcile_next
+from app.capture.reconciler import (
+    LOBBY_TIMEOUT_SECONDS,
+    MAX_RUNTIME_SECONDS,
+    reconcile_next,
+)
 from app.db.base import Base
 from app.db.models import (
     CaptureAttempt,
@@ -20,20 +24,35 @@ from app.db.models import (
     ProviderBinding,
     User,
 )
-from app.interfaces.capture_provider import CaptureSnapshot, CaptureStatus
+from app.interfaces.capture_provider import (
+    CaptureReference,
+    CaptureSnapshot,
+    CaptureStatus,
+    TranscriptSegment,
+    TranscriptSnapshot,
+)
 
 
 class Provider:
-    def __init__(self, status):
+    def __init__(self, status, *, transcript_segments=None):
         self.status_value = status
         self.status_calls = 0
         self.stop_calls = 0
+        self.transcript_calls = 0
+        self._transcript_segments = transcript_segments or []
 
     async def status(self, reference):
         self.status_calls += 1
         return CaptureSnapshot(
             reference=reference, status=self.status_value, provider_status=self.status_value.value
         )
+
+    async def transcript(self, reference):
+        self.transcript_calls += 1
+        snap = CaptureSnapshot(
+            reference=reference, status=self.status_value, provider_status=self.status_value.value
+        )
+        return TranscriptSnapshot(capture=snap, segments=self._transcript_segments)
 
     async def stop(self, reference):
         self.stop_calls += 1
@@ -187,3 +206,156 @@ async def test_ended_provider_confirms_requested_stop(state):
         request = db.get(CaptureRequest, "request-1")
         assert request.stop_state == CaptureStopState.CONFIRMED
         assert request.status == CaptureRequestStatus.FINALIZED
+
+
+@pytest.mark.asyncio
+async def test_transcript_freshness_updated_when_capturing_with_segments(state):
+    with state() as db:
+        db.get(CaptureAttempt, "attempt-1").state = CaptureAttemptState.CAPTURING
+        db.commit()
+    segment = TranscriptSegment(id="seg-1", start_s=0.0, end_s=2.5, text="Hello")
+    provider = Provider(CaptureStatus.CAPTURING, transcript_segments=[segment])
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        # SQLite strips tzinfo; compare naive value
+        assert attempt.last_transcript_at == now.replace(tzinfo=None)
+        assert provider.transcript_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_transcript_freshness_not_updated_when_no_segments(state):
+    with state() as db:
+        db.get(CaptureAttempt, "attempt-1").state = CaptureAttemptState.CAPTURING
+        db.commit()
+    provider = Provider(CaptureStatus.CAPTURING, transcript_segments=[])
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.last_transcript_at is None
+
+
+@pytest.mark.asyncio
+async def test_transcript_not_polled_for_non_capturing_states(state):
+    provider = Provider(CaptureStatus.WAITING)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    assert provider.transcript_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_lobby_timeout_sets_stop_requested(state):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    entered = now - timedelta(seconds=LOBBY_TIMEOUT_SECONDS + 1)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        attempt.state = CaptureAttemptState.WAITING_FOR_ADMISSION
+        attempt.state_entered_at = entered
+        db.commit()
+    provider = Provider(CaptureStatus.WAITING)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        request = db.get(CaptureRequest, "request-1")
+        assert request.stop_state == CaptureStopState.REQUESTED
+
+
+@pytest.mark.asyncio
+async def test_lobby_timeout_not_triggered_before_threshold(state):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    entered = now - timedelta(seconds=LOBBY_TIMEOUT_SECONDS - 60)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        attempt.state = CaptureAttemptState.WAITING_FOR_ADMISSION
+        attempt.state_entered_at = entered
+        db.commit()
+    provider = Provider(CaptureStatus.WAITING)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        request = db.get(CaptureRequest, "request-1")
+        assert request.stop_state == CaptureStopState.NOT_REQUESTED
+
+
+@pytest.mark.asyncio
+async def test_max_runtime_sets_stop_requested(state):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    entered = now - timedelta(seconds=MAX_RUNTIME_SECONDS + 1)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        attempt.state = CaptureAttemptState.CAPTURING
+        attempt.state_entered_at = entered
+        db.commit()
+    provider = Provider(CaptureStatus.CAPTURING)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        request = db.get(CaptureRequest, "request-1")
+        assert request.stop_state == CaptureStopState.REQUESTED
+
+
+@pytest.mark.asyncio
+async def test_state_entered_at_updated_on_state_change(state):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.state == CaptureAttemptState.JOINING
+    provider = Provider(CaptureStatus.CAPTURING)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.state == CaptureAttemptState.CAPTURING
+        assert attempt.state_entered_at == now.replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_state_entered_at_not_updated_when_state_unchanged(state):
+    earlier = datetime(2026, 10, 7, tzinfo=UTC)
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        attempt.state = CaptureAttemptState.CAPTURING
+        attempt.state_entered_at = earlier
+        db.commit()
+    provider = Provider(CaptureStatus.CAPTURING)
+    now = datetime(2026, 10, 8, tzinfo=UTC)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=now,
+    )
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.state_entered_at == earlier.replace(tzinfo=None)
