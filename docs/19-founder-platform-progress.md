@@ -68,6 +68,24 @@ head, and PostgreSQL offline SQL generation succeeded. The broader API suite had
 and five pre-existing failures in action approval/rejection actor attribution from unrelated dirty files.
 Those failures were not modified or hidden by this slice.
 
+## Slice 3: leased dispatch and tenant provider resolution
+
+Published in `00d5743`:
+
+- Added a database-leased outbox dispatcher with fencing tokens and stale-claim recovery.
+- Commits a capture attempt before provider I/O; a recovered attempt enters reconciliation instead
+  of sending a second provider create request.
+- Serializes capacity checks under the workspace row and enforces the five-active-bot pilot limit.
+- Persists provider record identity and normalized state only while the worker still owns its fence.
+- Treats unknown exceptions after dispatch begins as uncertain, never as permission to blind retry.
+- Resolves Vexa endpoint and API key from the tenant's SecretStore references; no global provider key.
+- Rejects non-TLS remote endpoints, credentialed URLs and endpoints containing paths/query fragments.
+- Uses a bounded, automatically closed HTTP client for every provider operation.
+
+Slice 3 evidence: all 101 capture tests passed; scoped Ruff and strict Mypy passed. The dispatcher is
+not invoked by the API or worker yet. Reconciliation consumption and authenticated v2 routes remain
+required before the new capture lane may be enabled.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
