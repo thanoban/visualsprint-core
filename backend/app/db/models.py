@@ -75,6 +75,9 @@ class Org(TimestampMixin, Base):
     capture_policy: Mapped[str] = mapped_column(String(32), default="off")
     capture_concurrency_limit: Mapped[int] = mapped_column(Integer, default=5)
     capture_monthly_minutes: Mapped[int] = mapped_column(Integer, default=6000)
+    # F14: pilot flag — enables F08-F14 features for this workspace.
+    # Off by default; set by an org owner via PATCH /workspaces/{id}/pilot.
+    pilot_features_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     disclosure_ack_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )

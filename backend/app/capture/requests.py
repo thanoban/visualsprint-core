@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,10 @@ class CaptureRequestScopeError(ValueError):
 
 class CapturePolicyError(ValueError):
     """Workspace capture has not been explicitly enabled and acknowledged."""
+
+
+class CaptureMinuteLimitError(ValueError):
+    """Creating this request would exceed the workspace's monthly capture-minute limit."""
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,25 @@ def create_capture_request(
         raise CaptureRequestScopeError("capture_request_scope_mismatch")
     if org is None or org.capture_policy == "off" or org.disclosure_ack_at is None:
         raise CapturePolicyError("workspace_capture_not_enabled")
+
+    # Capture-minute limit: sum current-month reserved seconds.
+    # Reservations use the "bot_second" unit; limit is stored as minutes.
+    if org.capture_monthly_minutes is not None:
+        now_ts = now or datetime.now(UTC)
+        month_start = now_ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        used_seconds_raw = db.execute(
+            select(func.coalesce(func.sum(UsageReservation.estimated_quantity), 0)).where(
+                UsageReservation.org_id == org_id,
+                UsageReservation.unit == "bot_second",
+                UsageReservation.created_at >= month_start,
+            )
+        ).scalar_one()
+        used_seconds = float(used_seconds_raw or 0)
+        limit_seconds = org.capture_monthly_minutes * 60
+        if used_seconds + estimated_seconds > limit_seconds:
+            raise CaptureMinuteLimitError(
+                f"would exceed monthly limit of {org.capture_monthly_minutes} minutes"
+            )
 
     input_hash = capture_request_input_hash(
         meeting_id=meeting_id,

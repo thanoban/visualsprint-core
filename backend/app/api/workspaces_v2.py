@@ -176,6 +176,54 @@ def add_member(
     return MemberView(user_id=target.id, email=target.email, role=membership.role)
 
 
+# --------------------------------------------------------------------------- #
+# F14 — Pilot flag
+# --------------------------------------------------------------------------- #
+
+
+class PilotView(BaseModel):
+    org_id: str
+    pilot_features_enabled: bool
+
+
+class PilotUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pilot_features_enabled: bool
+
+
+@router.get("/pilot", response_model=PilotView)
+def get_pilot(
+    org_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> PilotView:
+    org = db.get(Org, org_id)
+    if org is None:
+        raise HTTPException(404, "workspace not found")
+    return PilotView(org_id=org.id, pilot_features_enabled=org.pilot_features_enabled)
+
+
+@router.patch("/pilot", response_model=PilotView)
+def update_pilot(
+    org_id: str,
+    body: PilotUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> PilotView:
+    """Enable or disable pilot features for this workspace.  Owner-only."""
+    org = db.get(Org, org_id)
+    if org is None:
+        raise HTTPException(404, "workspace not found")
+    member = db.query(OrgMember).filter_by(org_id=org_id, user_id=user.id).one_or_none()
+    if member is None or member.role != "owner":
+        raise HTTPException(403, "workspace owner required to change pilot status")
+    org.pilot_features_enabled = body.pilot_features_enabled
+    db.commit()
+    return PilotView(org_id=org.id, pilot_features_enabled=org.pilot_features_enabled)
+
+
 @router.delete("/members/{member_user_id}", status_code=204)
 def remove_member(
     org_id: str,

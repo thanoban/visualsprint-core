@@ -568,6 +568,32 @@ get/invalid scope 422). Alembic reports one head (f7a8b9c0d1e2). mypy clean on b
 F13 acceptance criteria status: usage metering ✅, export job API ✅, deletion job API ✅.
 Background worker execution and connection health diagnostics are deferred to F14 pilot ops.
 
+## Slice 25: F14 — Pilot release controls
+
+Published in this session:
+
+- **`pilot_features_enabled`** boolean column added to `Org` model (`app/db/models.py`), default
+  `False`. Alembic migration `g8a9b0c1d2e3` (`server_default="0"`, `nullable=False`).
+- **`GET /api/v2/workspaces/{org_id}/pilot`** — returns `{org_id, pilot_features_enabled}`; any
+  org member can read the flag.
+- **`PATCH /api/v2/workspaces/{org_id}/pilot`** — sets the flag; org owner required (403 for
+  members/admins). Idempotent.
+- **`CaptureMinuteLimitError`** exception class added to `app/capture/requests.py`.
+- **Capture-minute limit enforcement** in `create_capture_request`: when `org.capture_monthly_minutes`
+  is set, sum all `UsageReservation` rows with `unit="bot_second"` created in the current UTC month,
+  compare against `limit_seconds = capture_monthly_minutes * 60`, raise
+  `CaptureMinuteLimitError` if adding `estimated_seconds` would exceed it.
+- **HTTP 429 handler** in `app/api/capture_v2.py` converts `CaptureMinuteLimitError` to a 429
+  response so the API surface is clean.
+
+Slice 25 evidence: 7 new tests pass in `tests/api/test_pilot_and_limits.py` (pilot GET default
+false, owner enable, member 403, owner disable; capture limit not exceeded, exceeded raises 429,
+previous month's usage not counted). Alembic reports one head (g8a9b0c1d2e3). mypy clean on the
+three changed files.
+
+F14 acceptance criteria status: pilot flag API ✅, capture-minute limit enforcement ✅.
+Operational qualification (5-concurrent soak, outage drills) is runtime work not tracked here.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.
