@@ -8,9 +8,7 @@
 // piece of functionality (starting a new question), no invented history.
 
 import { useState } from "react";
-import { API_BASE_URL } from "@/lib/config";
 import { useAuth } from "@/lib/AuthProvider";
-import { mockAssistantReply } from "@/lib/mock-data";
 import type { ChatMessage, ChatRequest, ChatResponse, EvidenceChip } from "@/lib/types";
 
 const sans = "'Plus Jakarta Sans', sans-serif";
@@ -128,7 +126,8 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, data.message]);
     } catch {
       setBackendConnected(false);
-      setMessages((prev) => [...prev, mockAssistantReply(question)]);
+      setMessages((prev) => prev.filter((message) => message.id !== userMessage.id));
+      setInput((current) => current || question);
     } finally {
       setSending(false);
     }
@@ -144,6 +143,7 @@ export default function ChatPage() {
         </p>
         <button
           type="button"
+          disabled={sending}
           onClick={() => {
             setMessages([]);
             setInput("");
@@ -183,10 +183,11 @@ export default function ChatPage() {
           <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "6px 0 0" }}>
             {latestUserQuestion
               ? "Ask across your organization's meeting history"
-              : "Every claim cites a speaker, a transcript span, and a screen"}
+              : "Explore meeting history with links to available evidence"}
           </p>
           {backendConnected === false && (
             <p
+              role="alert"
               style={{
                 marginTop: 8,
                 borderRadius: 6,
@@ -197,8 +198,8 @@ export default function ChatPage() {
                 color: "var(--amber)",
               }}
             >
-              Not connected to the chat API yet (POST {API_BASE_URL}/api/v1/chat unavailable). Showing a demo
-              response instead.
+              We couldn&apos;t get an answer. Your question is still in the input below;
+              please try again. No answer was generated.
             </p>
           )}
         </header>

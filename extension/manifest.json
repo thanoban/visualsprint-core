@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VisualSprint Companion",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "minimum_chrome_version": "116",
   "description": "Capture meetings from your browser tab — transcripts, insights, and screen evidence, all from inside your own meeting.",
 
   "permissions": [
@@ -19,6 +20,9 @@
     "https://meet.google.com/*",
     "https://app.zoom.us/*",
     "https://teams.microsoft.com/*",
+    "https://teams.live.com/*",
+    "https://teams.cloud.microsoft/*",
+    "https://*.zoom.us/*",
     "http://localhost:8000/*",
     "https://visualsprint-api-5ieahiycsa-uw.a.run.app/*",
     "https://uktfgmvmtijqpzqnivvi.supabase.co/*"
@@ -35,6 +39,9 @@
         "https://meet.google.com/*",
         "https://app.zoom.us/*",
         "https://teams.microsoft.com/*"
+        ,"https://teams.live.com/*"
+        ,"https://teams.cloud.microsoft/*"
+        ,"https://*.zoom.us/*"
       ],
       "js": ["content/detector.js"],
       "run_at": "document_idle"

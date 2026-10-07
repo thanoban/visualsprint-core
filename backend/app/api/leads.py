@@ -8,7 +8,7 @@ same reasoning as the OAuth callback being the other unauthenticated route.
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.db.base import get_db
@@ -21,10 +21,10 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 class LeadIn(BaseModel):
     kind: LeadKind
-    name: str
-    email: str
-    company: str | None = None
-    message: str | None = None
+    name: str = Field(max_length=100)
+    email: str = Field(max_length=320)
+    company: str | None = Field(default=None, max_length=255)
+    message: str | None = Field(default=None, max_length=2000)
 
     @field_validator("name", "email")
     @classmethod

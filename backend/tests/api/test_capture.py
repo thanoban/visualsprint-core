@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app.api import capture
-from app.db.models import BotSession, BotStatus, Meeting, Org
+from app.db.models import BotSession, BotStatus, Meeting, Org, OrgConnection
 
 
 def _seed_org(db) -> Org:
@@ -24,7 +24,8 @@ def test_instant_capture_zoom_dispatches_nothing(client, db_session):
     assert body["platform"] == "zoom"
     assert body["dispatched"] is False
     assert body["bot_session_id"] is None
-    assert "automatically" in body["note"]
+    assert body["capture_mode"] == "C"
+    assert body["status"] == "action_required"
     assert db_session.query(BotSession).count() == 0
 
 
@@ -36,8 +37,9 @@ def test_instant_capture_meet_requires_explicit_guest_bot_opt_in(client, db_sess
         f"/api/v1/orgs/{org.id}/capture/instant",
         json={"url": "https://meet.google.com/abc-defg-hij", "title": "Ad hoc sync"},
     )
-    assert resp.status_code == 409
-    assert "official recording/transcript" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert resp.json()["capture_mode"] == "C"
+    assert "Companion" in resp.json()["note"]
     assert db_session.query(BotSession).count() == 0
 
 
@@ -47,7 +49,7 @@ def test_instant_capture_meet_creates_bot_when_explicitly_enabled(client, db_ses
         "get_settings",
         lambda: SimpleNamespace(
             bot_google_guest_enabled=True,
-            bot_dispatch_enabled=False,
+            bot_dispatch_enabled=True,
             bot_google_join_mode="guest",
             bot_google_account_email=None,
         ),
@@ -77,7 +79,11 @@ def test_instant_capture_meet_creates_bot_when_explicitly_enabled(client, db_ses
     assert bot.scheduled_start is not None
 
 
-def test_instant_capture_teams_join_url_is_the_full_link(client, db_session):
+def test_instant_capture_teams_join_url_is_the_full_link(client, db_session, monkeypatch):
+    monkeypatch.setattr(capture, "get_settings", lambda: SimpleNamespace(
+        bot_google_guest_enabled=False, bot_teams_guest_enabled=True, bot_dispatch_enabled=True,
+        bot_google_join_mode="guest", bot_google_account_email=None,
+    ))
     org = _seed_org(db_session)
     db_session.commit()
 
@@ -90,6 +96,18 @@ def test_instant_capture_teams_join_url_is_the_full_link(client, db_session):
     body = resp.json()
     bot = db_session.get(BotSession, body["bot_session_id"])
     assert bot.join_url == teams_url
+
+
+def test_zoom_connection_does_not_claim_live_capture(client, db_session):
+    org = _seed_org(db_session)
+    db_session.add(OrgConnection(org_id=org.id, provider="zoom", account_label="host",
+                                 secret_ref="test/zoom"))
+    db_session.commit()
+    result = client.post(f"/api/v1/orgs/{org.id}/capture/instant",
+                         json={"url": "https://zoom.us/j/123456789"}).json()
+    assert result["capture_mode"] == "A1"
+    assert result["status"] == "awaiting_stream"
+    assert "does not confirm" in result["note"]
 
 
 def test_instant_capture_unrecognized_url_is_422(client, db_session):

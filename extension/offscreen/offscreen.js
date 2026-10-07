@@ -1,125 +1,154 @@
-/**
- * Offscreen document: runs MediaRecorder on the tab's audio stream.
- * Receives START_CAPTURE / STOP_CAPTURE from the background service worker.
- * Sends AUDIO_CHUNK messages back to the SW with each 5-second webm segment.
- */
+/** MV3 offscreen recorder: target-tab audio/video, microphone, and flush ACK. */
+let recorder, tabStream, micStream, audioContext, micGain, video, frameTimer;
+let sessionId, chunkSeq = 0, frameSeq = 0, startedAt, microphoneCaptured = false;
+let writes = Promise.resolve(), stopping = null, previousFrame = null;
+let initialMicMuted = false;
+const MAX_CAPTURE_MS = 5 * 3600 * 1000;
+let safetyTimer;
 
-let recorder = null;
-let chunkSeq = 0;
-let _audioCtx = null;
-let _tabStream = null;
-let _micStream = null;
-
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+  if (msg.target !== "offscreen") return;
   if (msg.type === "START_CAPTURE") {
-    startCapture(msg.streamId, msg.sessionId).catch((e) => {
-      chrome.runtime.sendMessage({ type: "OFFSCREEN_ERROR", sessionId: msg.sessionId, error: e.message });
-    });
-  } else if (msg.type === "STOP_CAPTURE") {
-    stopCapture();
+    startCapture(msg).then(() => respond({ ok: true, microphoneCaptured }))
+      .catch(async (error) => {
+        if (sessionId === msg.sessionId) cleanup();
+        respond({ ok: false, error: error.message });
+      });
+    return true;
+  }
+  if (msg.type === "STOP_CAPTURE") {
+    stopCapture(false).then(respond).catch((error) => respond({ ok: false, error: error.message }));
+    return true;
+  }
+  if (msg.type === "MIC_STATE" && micGain) {
+    micGain.gain.value = msg.muted ? 0 : 1;
+    respond({ ok: true });
   }
 });
 
-async function startCapture(streamId, sessionId) {
-  if (recorder && recorder.state !== "inactive") {
-    recorder.stop();
-  }
-  chunkSeq = 0;
-
-  // Obtain the tab's audio stream from the tabCapture streamId. This is the
-  // *other* participants' audio as rendered by the tab -- it does NOT include
-  // the local user's own voice.
-  _tabStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      mandatory: {
-        chromeMediaSource: "tab",
-        chromeMediaSourceId: streamId,
-      },
-    },
-    video: false,
-  });
-
-  // Separately capture the local microphone so the session owner's own
-  // speech isn't a silent gap in the transcript. If the user denies the mic
-  // prompt, fall back to tab-only capture rather than failing the recording
-  // entirely -- partial audio beats none.
-  try {
-    _micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch (e) {
-    console.warn("[VS] microphone capture unavailable, recording tab audio only:", e.message);
-    _micStream = null;
-  }
-
-  // Pick the best supported audio codec
-  const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-    ? "audio/webm;codecs=opus"
-    : "audio/webm";
-
-  // Mix tab + mic into one stream. Offscreen documents may start with the
-  // AudioContext in "suspended" state (no user gesture in the document). If
-  // resume() fails or the context stays suspended after attempting it, fall
-  // back to recording the tab stream directly (user's own voice not included,
-  // but other participants' audio is captured and the pipeline can still run).
-  _audioCtx = new AudioContext();
-  let recordStream;
-  try {
-    if (_audioCtx.state === "suspended") {
-      await _audioCtx.resume();
-    }
-    if (_audioCtx.state !== "running") {
-      throw new Error(`AudioContext not running: ${_audioCtx.state}`);
-    }
-    const dest = _audioCtx.createMediaStreamDestination();
-    const tabSource = _audioCtx.createMediaStreamSource(_tabStream);
-    tabSource.connect(dest);
-    // Reconnect tab audio to the real speakers so the meeting stays audible.
-    tabSource.connect(_audioCtx.destination);
-    if (_micStream) {
-      const micSource = _audioCtx.createMediaStreamSource(_micStream);
-      micSource.connect(dest);
-    }
-    recordStream = dest.stream;
-  } catch (e) {
-    console.warn("[VS] AudioContext mixing unavailable, recording tab stream directly:", e.message);
-    _audioCtx?.close().catch(() => {});
-    _audioCtx = null;
-    recordStream = _tabStream;
-  }
-
-  recorder = new MediaRecorder(recordStream, { mimeType });
-
-  recorder.ondataavailable = async (e) => {
-    if (!e.data || e.data.size === 0) return;
-    const arrayBuffer = await e.data.arrayBuffer();
-    // ArrayBuffer is not JSON-serializable — convert to plain Array so it
-    // survives the chrome.runtime.sendMessage JSON round-trip intact.
-    const chunkArray = Array.from(new Uint8Array(arrayBuffer));
-    chrome.runtime.sendMessage({
-      type: "AUDIO_CHUNK",
-      sessionId,
-      seq: chunkSeq++,
-      chunk: chunkArray,
-    });
-  };
-
-  // Emit a chunk every 5 seconds
-  recorder.start(5000);
-  chrome.runtime.sendMessage({ type: "CAPTURE_STARTED", sessionId });
+async function persist(message) {
+  const response = await chrome.runtime.sendMessage({ target: "background", ...message });
+  if (!response?.ok) throw new Error(response?.error ?? "Capture media was not persisted");
 }
 
-function stopCapture() {
-  if (recorder && recorder.state !== "inactive") {
-    recorder.stop();
+function queueWrite(message) {
+  writes = writes.then(() => persist(message));
+  writes.catch((error) => {
+    chrome.runtime.sendMessage({ target: "background", type: "OFFSCREEN_ERROR", sessionId, error: error.message });
+  });
+}
+
+async function startCapture(msg) {
+  if (recorder && recorder.state !== "inactive") throw new Error("Another tab is already recording");
+  sessionId = msg.sessionId;
+  chunkSeq = frameSeq = 0;
+  writes = Promise.resolve();
+  stopping = null;
+  previousFrame = null;
+  initialMicMuted = !!msg.micMuted;
+  startedAt = Date.now();
+  microphoneCaptured = false;
+  const constraints = { chromeMediaSource: "tab", chromeMediaSourceId: msg.streamId };
+  // Consumes the user-invoked ID immediately; no remote API calls intervene.
+  tabStream = await navigator.mediaDevices.getUserMedia({
+    audio: { mandatory: constraints },
+    video: { mandatory: constraints },
+  });
+  audioContext = new AudioContext();
+  await audioContext.resume();
+  if (audioContext.state !== "running") throw new Error("Meeting audio playback could not start");
+  const destination = audioContext.createMediaStreamDestination();
+  const tabSource = audioContext.createMediaStreamSource(tabStream);
+  tabSource.connect(destination);
+  tabSource.connect(audioContext.destination);
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    micGain = audioContext.createGain();
+    micGain.gain.value = initialMicMuted ? 0 : 1;
+    audioContext.createMediaStreamSource(micStream).connect(micGain);
+    micGain.connect(destination);
+    microphoneCaptured = true;
+  } catch {
+    micStream = null; // Explicit metadata discloses the local-voice gap.
   }
+  video = document.createElement("video");
+  video.srcObject = tabStream;
+  video.muted = true;
+  await video.play();
+  const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus" : "audio/webm";
+  recorder = new MediaRecorder(destination.stream, { mimeType });
+  recorder.ondataavailable = (event) => {
+    if (!event.data?.size) return;
+    const seq = chunkSeq++;
+    writes = writes.then(async () => persist({
+      type: "AUDIO_CHUNK", sessionId, seq,
+      chunk: Array.from(new Uint8Array(await event.data.arrayBuffer())),
+    }));
+    writes.catch((error) => {
+      chrome.runtime.sendMessage({ target: "background", type: "OFFSCREEN_ERROR", sessionId, error: error.message });
+    });
+  };
+  recorder.start(5000);
+  frameTimer = setInterval(captureFrame, 15000);
+  safetyTimer = setTimeout(() => stopCapture(), MAX_CAPTURE_MS);
+  await chrome.runtime.sendMessage({ target: "background", type: "CAPTURE_STARTED", sessionId, microphoneCaptured });
+  captureFrame();
+  // A tab close/track end must flush even if its content script cannot send end.
+  tabStream.getAudioTracks().forEach((track) => track.addEventListener("ended", () => stopCapture()));
+}
+
+function captureFrame() {
+  if (!video?.videoWidth || frameSeq >= 600 || stopping) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.min(1280, video.videoWidth);
+  canvas.height = Math.round(video.videoHeight * canvas.width / video.videoWidth);
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const signatureCanvas = document.createElement("canvas");
+  signatureCanvas.width = 32; signatureCanvas.height = 18;
+  const context = signatureCanvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(canvas, 0, 0, 32, 18);
+  const pixels = context.getImageData(0, 0, 32, 18).data;
+  let delta = 0;
+  if (previousFrame) {
+    for (let i = 0; i < pixels.length; i += 4) delta += Math.abs(pixels[i] - previousFrame[i]);
+    if (delta / (32 * 18) < 10) return;
+  }
+  previousFrame = new Uint8ClampedArray(pixels);
+  const bytes = Uint8Array.from(atob(canvas.toDataURL("image/jpeg", 0.65).split(",")[1]), (c) => c.charCodeAt(0));
+  queueWrite({ type: "KEYFRAME", sessionId, seq: frameSeq++,
+    timestampS: (Date.now() - startedAt) / 1000, chunk: Array.from(bytes) });
+}
+
+function cleanup() {
+  clearInterval(frameTimer);
+  clearTimeout(safetyTimer);
+  tabStream?.getTracks().forEach((track) => track.stop());
+  micStream?.getTracks().forEach((track) => track.stop());
+  tabStream = micStream = micGain = video = null;
+  audioContext?.close().catch(() => {});
+  audioContext = null;
   recorder = null;
+}
 
-  _tabStream?.getTracks().forEach((t) => t.stop());
-  _micStream?.getTracks().forEach((t) => t.stop());
-  _tabStream = null;
-  _micStream = null;
-
-  _audioCtx?.close().catch(() => {});
-  _audioCtx = null;
-
-  chrome.runtime.sendMessage({ type: "CAPTURE_STOPPED" });
+function stopCapture(notifyBackground = true) {
+  if (stopping) return stopping;
+  stopping = (async () => {
+    clearInterval(frameTimer);
+    clearTimeout(safetyTimer);
+    if (recorder && recorder.state !== "inactive") {
+      await new Promise((resolve) => {
+        recorder.onstop = resolve;
+        recorder.stop(); // Final dataavailable is emitted before onstop.
+      });
+    }
+    let error;
+    try { await writes; } catch (e) { error = e.message; }
+    const result = { ok: !error, error, sessionId, totalChunks: chunkSeq,
+      microphoneCaptured, durationS: (Date.now() - startedAt) / 1000 };
+    cleanup();
+    if (notifyBackground) chrome.runtime.sendMessage({ target: "background", type: "CAPTURE_STOPPED", ...result });
+    return result;
+  })();
+  return stopping;
 }

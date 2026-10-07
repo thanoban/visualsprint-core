@@ -30,6 +30,9 @@ are cleaned up by a GCS lifecycle rule on the companion-chunks/ prefix
 (set Object Lifecycle: delete after Age=1 day — zero code, near-zero cost).
 """
 
+import asyncio
+import json
+
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -86,6 +89,25 @@ async def delete_raw_audio(
         deleted += 1
     if deleted:
         log.info("raw_cleanup.audio_deleted", session=capture_session_id, tracks=deleted)
+    if session is not None and session.mode == "C":
+        # Source fragments are raw audio too. Do not rely on an optional cloud
+        # lifecycle rule to fulfill the product's post-transcription deletion.
+        manifest_uri = f"blob://companion-manifests/{session.org_id}/{capture_session_id}.json"
+        try:
+            if await blob_store.exists(manifest_uri):
+                manifest = json.loads(await blob_store.get(manifest_uri))
+                total = manifest["total_chunks"]
+                if not isinstance(total, int) or not 1 <= total <= 3600:
+                    raise ValueError("invalid companion manifest")
+                for offset in range(0, total, 8):
+                    await asyncio.gather(*[
+                        blob_store.delete(
+                            f"blob://companion-chunks/{session.org_id}/{capture_session_id}/{seq:06d}.webm"
+                        ) for seq in range(offset, min(total, offset + 8))
+                    ])
+                await blob_store.delete(manifest_uri)
+        except Exception as exc:
+            log.warning("raw_cleanup.companion_chunks_pending", session=capture_session_id, error=str(exc))
     return deleted
 
 

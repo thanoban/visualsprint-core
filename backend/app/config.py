@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     linear_oauth_client_secret: str | None = None
     zoom_oauth_client_id: str | None = None
     zoom_oauth_client_secret: str | None = None
+    zoom_oauth_scopes: str = (
+        "user:read:user cloud_recording:read:list_recording_files "
+        "meeting:update:participant_rtms_app_status"
+    )
     microsoft_oauth_client_id: str | None = None
     microsoft_oauth_client_secret: str | None = None
 
@@ -215,6 +219,9 @@ class Settings(BaseSettings):
     # artifacts is the normal Meet path. Enable browser bots only for an org
     # that deliberately standardizes on Open guest access.
     bot_google_guest_enabled: bool = False
+    # Teams anonymous admission is also tenant/host controlled. Never dispatch
+    # guest bots implicitly just because a calendar invitation contains a link.
+    bot_teams_guest_enabled: bool = False
     # Path to Playwright storage_state JSON. Read only when
     # bot_google_join_mode="session"; ignored in the durable guest mode.
     bot_google_storage_state_path: str | None = None

@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 import structlog
 
+from sqlalchemy.orm import Session
+
 from app.config import Settings, get_settings
 from app.db.base import get_sessionmaker
 from app.db.models import PipelineJob
@@ -23,7 +25,7 @@ from app.orchestrator import queue as q
 
 log = structlog.get_logger()
 
-StageHandler = Callable[[object, PipelineJob], Awaitable[None]]
+StageHandler = Callable[[Session, PipelineJob], Awaitable[None]]
 _HANDLERS: dict[str, StageHandler] = {}
 
 
@@ -35,23 +37,23 @@ def stage_handler(name: str) -> Callable[[StageHandler], StageHandler]:
     return register
 
 
-async def _noop(db: object, job: PipelineJob) -> None:  # placeholder for unbuilt phases
+async def _noop(db: Session, job: PipelineJob) -> None:  # placeholder for unbuilt phases
     log.info("stage.noop", stage=job.stage, session=job.capture_session_id)
 
 
-_llm_client = None
-_transcriber = None
-_diarizer = None
-_speaker_embedder = None
-_platform_adapters = None
-_calendar_adapters = None
-_vlm_captioner = None
+_llm_client: Any = None
+_transcriber: Any = None
+_diarizer: Any = None
+_speaker_embedder: Any = None
+_platform_adapters: Any = None
+_calendar_adapters: Any = None
+_vlm_captioner: Any = None
 _EMBEDDER_UNAVAILABLE = object()
 _SPEAKER_EMBEDDER_UNAVAILABLE = object()
 _VLM_CAPTIONER_UNAVAILABLE = object()
 
 
-def _get_llm():
+def _get_llm() -> Any:
     global _llm_client
     if _llm_client is None:
         provider = get_settings().llm_provider
@@ -70,7 +72,7 @@ def _get_llm():
     return _llm_client
 
 
-def _get_transcriber():
+def _get_transcriber() -> Any:
     """Lazy singleton, same pattern as _get_llm — overridable in tests via
     `app.orchestrator.worker._transcriber = <fake>` so the walking-skeleton
     test never needs real Google/Azure/Groq credentials or torch/speechbrain."""
@@ -93,16 +95,16 @@ def _get_transcriber():
     return _transcriber
 
 
-_embedder = None
+_embedder: Any = None
 
 
-def _build_embedder():
+def _build_embedder() -> Any:
     from app.adapters.embedder_vertex import VertexEmbedder
 
     return VertexEmbedder()
 
 
-def _get_embedder():
+def _get_embedder() -> Any:
     """Lazy singleton, same pattern as _get_transcriber — overridable in
     tests via `app.orchestrator.worker._embedder = <fake>`. Memory
     Intelligence treats a missing embedder as an optional enhancement, not a
@@ -121,13 +123,13 @@ def _get_embedder():
     return _embedder
 
 
-def _build_speaker_embedder():
+def _build_speaker_embedder() -> Any:
     from app.adapters.speaker_embedder_pyannote import PyannoteSpeakerEmbedder
 
     return PyannoteSpeakerEmbedder()
 
 
-def _auto_add_person_glossary_terms(db: object, org_id: str, resolved: list) -> None:
+def _auto_add_person_glossary_terms(db: Session, org_id: str, resolved: list[Any]) -> None:
     """After identify stage, upsert each resolved person's display_name as a
     GlossaryTerm so _repair_context feeds it into ASR repair for future sessions.
     Deduplicates by (org_id, term) — no-op when the term already exists.
@@ -155,7 +157,7 @@ def _auto_add_person_glossary_terms(db: object, org_id: str, resolved: list) -> 
     db.flush()
 
 
-def _get_speaker_embedder():
+def _get_speaker_embedder() -> Any:
     """Optional voice embedding backend for identity fusion.
 
     Missing Hugging Face credentials or pyannote deps leave speakers
@@ -180,7 +182,7 @@ def _get_speaker_embedder():
 _PLATFORM_TO_OAUTH_PROVIDER = {"meet": "google", "zoom": "zoom", "teams": "microsoft"}
 
 
-def _get_platform_adapter_for_session(db: object, org_id: str, platform: str | None):
+def _get_platform_adapter_for_session(db: Session, org_id: str, platform: str | None) -> Any:
     """Returns a PlatformAdapter for this org's Mode A2 capture on
     `platform`, or None if unavailable.
 
@@ -194,6 +196,8 @@ def _get_platform_adapter_for_session(db: object, org_id: str, platform: str | N
     platform, which is what this used to do and would have been wrong
     the moment a second org connected the same platform (same bug class
     already fixed for calendar sync and the action-connector registry)."""
+    if platform is None:
+        return None
     if _platform_adapters is not None:
         return _platform_adapters.get(platform)
 
@@ -226,7 +230,7 @@ def _get_platform_adapter_for_session(db: object, org_id: str, platform: str | N
     return None
 
 
-def _get_calendar_adapter_for_connection(db: object, connection):
+def _get_calendar_adapter_for_connection(db: Session, connection: Any) -> Any:
     """Returns an adapter for this specific CalendarConnection.
 
     If `_calendar_adapters` (the module-level test-injection seam) is set,
@@ -258,21 +262,51 @@ def _get_calendar_adapter_for_connection(db: object, connection):
     return None
 
 
-def _is_missing_secret(exc: BaseException) -> bool:
-    """True when an exception (or anything in its cause/context chain) is the
-    secretstore's 'secret not found' KeyError (app/adapters/secretstore_*.py).
-    That is a permanent condition -- the OAuth token was never stored or was
-    lost -- and must be handled differently from a transient API/network
-    error, which should keep retrying rather than prune the connection."""
+_OAUTH_TOKEN_URL_FRAGMENTS = (
+    "oauth2.googleapis.com/token",
+    "login.microsoftonline.com",
+    "oauth2/v2.0/token",
+    "oauth/token",
+)
+
+
+def _is_oauth_token_url(url: str) -> bool:
+    return any(fragment in url for fragment in _OAUTH_TOKEN_URL_FRAGMENTS)
+
+
+def _is_permanent_auth_failure(exc: BaseException) -> bool:
+    """True when the connection's OAuth credentials are permanently unusable.
+
+    Two cases:
+    1. "secret not found" — the OAuth token was never stored or was lost on
+       ephemeral container disk (the exact failure in docs/14-production-status.md).
+    2. HTTP 400 from an OAuth token endpoint — Google and Microsoft both return
+       400 Bad Request (not 401) when a refresh token is revoked or expired.
+       This is a permanent condition; the user must re-authorize. A 400 from
+       the Calendar/Graph API itself uses a different URL and is not matched.
+    """
+    import httpx
+
     seen: BaseException | None = exc
     while seen is not None:
         if "secret not found" in str(seen):
+            return True
+        if (
+            isinstance(seen, httpx.HTTPStatusError)
+            and seen.response.status_code == 400
+            and _is_oauth_token_url(str(seen.response.url))
+        ):
             return True
         seen = seen.__cause__ or seen.__context__
     return False
 
 
-async def _sync_all_calendars(db: object) -> None:
+def _is_missing_secret(exc: BaseException) -> bool:
+    """Kept for backwards compatibility — delegates to _is_permanent_auth_failure."""
+    return _is_permanent_auth_failure(exc)
+
+
+async def _sync_all_calendars(db: Session) -> None:
     """One pass over every CalendarConnection -- the periodic caller
     app/orchestrator/scheduler.py's sync_calendar_connection describes
     itself as needing. A failure on one connection (bad/expired token, API
@@ -309,7 +343,7 @@ async def _sync_all_calendars(db: object) -> None:
                 )
         except Exception as exc:
             db.rollback()
-            if _is_missing_secret(exc):
+            if _is_permanent_auth_failure(exc):
                 # The stored OAuth token is gone -- e.g. the connection was
                 # made before VS_SECRETSTORE_BACKEND=gcp, so its token went to
                 # the old ephemeral local secretstore and was lost on the next
@@ -333,7 +367,7 @@ async def _sync_all_calendars(db: object) -> None:
             log.warning("calendar_sync.failed", connection=connection.id, error=str(exc))
 
 
-async def _run_retention_sweep(db: object) -> None:
+async def _run_retention_sweep(db: Session) -> None:
     """One pass over every Org with Org.retention_days set (see
     app/orchestrator/retention.py for what's actually purged and why). A
     failure on one org (blob-store outage, bad row) is logged and skipped,
@@ -367,7 +401,7 @@ async def _run_retention_sweep(db: object) -> None:
             log.warning("retention.failed", org=org.id, error=str(exc))
 
 
-async def _run_transcode_backfill(db: object) -> None:
+async def _run_transcode_backfill(db: Session) -> None:
     """One pass retrying non-FLAC AudioTrack blobs (see
     app/orchestrator/transcode_backfill.py). A failure must not block the
     worker's poll loop, same resilience convention as retention/calendar
@@ -386,7 +420,7 @@ async def _run_transcode_backfill(db: object) -> None:
         log.warning("transcode_backfill.failed", error=str(exc))
 
 
-async def _run_action_triggers(db: object) -> None:
+async def _run_action_triggers(db: Session) -> None:
     """One pass over every Org for the two time-driven action triggers
     (see app/orchestrator/action_triggers.py). Per-org isolated like every
     other sweep -- one org's bad data must not block another's."""
@@ -419,7 +453,7 @@ async def _run_action_triggers(db: object) -> None:
             log.warning("action_triggers.failed", org=org.id, error=str(exc))
 
 
-async def _run_lifecycle_sweep(db: object) -> None:
+async def _run_lifecycle_sweep(db: Session) -> None:
     from sqlalchemy import select
 
     from app.agents.lifecycle import sweep_org_lifecycle
@@ -437,7 +471,7 @@ async def _run_lifecycle_sweep(db: object) -> None:
             log.warning("lifecycle.failed", org=org.id, error=str(exc))
 
 
-async def _run_work_tracking_sweep(db: object) -> None:
+async def _run_work_tracking_sweep(db: Session) -> None:
     from sqlalchemy import select
 
     from app.db.models import Org
@@ -455,10 +489,10 @@ async def _run_work_tracking_sweep(db: object) -> None:
             log.warning("work_tracking.failed", org=org.id, error=str(exc))
 
 
-_job_dispatcher = None
+_job_dispatcher: Any = None
 
 
-def _get_job_dispatcher():
+def _get_job_dispatcher() -> Any:
     """Lazy singleton for the bot dispatch backend.
 
     "local"         → asyncio tasks inside this process (dev/test only).
@@ -489,7 +523,7 @@ def _get_job_dispatcher():
     return _job_dispatcher
 
 
-async def _run_bot_dispatch_sweep(db: object) -> None:
+async def _run_bot_dispatch_sweep(db: Session) -> None:
     """Dispatches due BotSession rows via the configured JobDispatcher.
 
     In "local" mode (dev): asyncio tasks in this process — the process must
@@ -568,7 +602,7 @@ async def _run_bot_dispatch_sweep(db: object) -> None:
         log.warning("bot_dispatch.failed", error=str(exc))
 
 
-async def _run_longitudinal_sweep(db: object) -> None:
+async def _run_longitudinal_sweep(db: Session) -> None:
     from datetime import timedelta
 
     from sqlalchemy import select
@@ -605,7 +639,7 @@ async def _run_longitudinal_sweep(db: object) -> None:
 
 
 @stage_handler("acquire")
-async def _handle_acquire(db: object, job: PipelineJob) -> None:
+async def _handle_acquire(db: Session, job: PipelineJob) -> None:
     """Mode D: audio already landed in blob storage at upload time (see
     api/upload.py) — this stage just confirms the audio_track row exists so a
     missing upload fails loudly here rather than silently at transcribe time.
@@ -623,6 +657,12 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
     has_track = db.execute(
         select(AudioTrack.id).where(AudioTrack.capture_session_id == session.id).limit(1)
     ).scalar_one_or_none()
+
+    if session.mode == "C" and has_track is None:
+        from app.capture.companion_ingest import assemble_companion_capture
+
+        await assemble_companion_capture(db, session)
+        return
 
     if session.mode in ("D", "B", "C"):
         # Mode D: audio landed at upload time (api/upload.py). Mode B: audio
@@ -683,7 +723,7 @@ async def _handle_acquire(db: object, job: PipelineJob) -> None:
     )
 
 
-def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str]]:
+def _repair_context(db: Session, session: Any) -> tuple[list[str], list[str], list[str]]:
     """Roster + org glossary + screen-OCR context for the LLM repair pass.
 
     Glossary terms come from `GlossaryTerm` (app/api/corrections.py populates
@@ -716,13 +756,13 @@ def _repair_context(db: object, session) -> tuple[list[str], list[str], list[str
     return roster, glossary_terms, ocr_context
 
 
-def _build_diarizer():
+def _build_diarizer() -> Any:
     from app.adapters.diarizer_pyannote import PyannoteDiarizer
 
     return PyannoteDiarizer()
 
 
-def _get_diarizer():
+def _get_diarizer() -> Any:
     """Lazy singleton, same pattern as _get_transcriber -- overridable in
     tests via `app.orchestrator.worker._diarizer = <fake>` so the diarize
     stage never needs pyannote.audio installed or a Hugging Face token."""
@@ -732,7 +772,7 @@ def _get_diarizer():
     return _diarizer
 
 
-def _assign_cluster(start_s: float, end_s: float, turns: list) -> tuple[str | None, float]:
+def _assign_cluster(start_s: float, end_s: float, turns: list[Any]) -> tuple[str | None, float]:
     """Returns (cluster_id, overlap_ratio) for the diarized turn overlapping
     this utterance the most, or (None, 0.0) when nothing overlaps.
 
@@ -755,7 +795,7 @@ def _assign_cluster(start_s: float, end_s: float, turns: list) -> tuple[str | No
 
 
 @stage_handler("diarize")
-async def _handle_diarize(db: object, job: PipelineJob) -> None:
+async def _handle_diarize(db: Session, job: PipelineJob) -> None:
     """Separates "who spoke when" from mixed audio, so every capture mode can
     attribute speech to a speaker rather than only Zoom per-participant
     tracks (docs/08-speaker-identity.md).
@@ -840,7 +880,7 @@ async def _handle_diarize(db: object, job: PipelineJob) -> None:
 
 
 @stage_handler("identify")
-async def _handle_identify(db: object, job: PipelineJob) -> None:
+async def _handle_identify(db: Session, job: PipelineJob) -> None:
     """Resolve diarized clusters to Person rows when deterministic evidence is strong.
 
     Roster labels and already-enrolled voiceprints are useful; uncalibrated
@@ -919,7 +959,7 @@ async def _handle_identify(db: object, job: PipelineJob) -> None:
 
 
 @stage_handler("transcribe")
-async def _handle_transcribe(db: object, job: PipelineJob) -> None:
+async def _handle_transcribe(db: Session, job: PipelineJob) -> None:
     """Idempotent: clears any utterances (and this stage's coverage_interval
     rows) from a prior partial attempt before re-inserting, so a crash-and-
     retry never duplicates rows.
@@ -1063,11 +1103,11 @@ async def _handle_transcribe(db: object, job: PipelineJob) -> None:
     await delete_raw_audio(db, session_id, get_blobstore())
 
 
-_ocr_engine = None
-_keyframe_detect_fn = None
+_ocr_engine: Any = None
+_keyframe_detect_fn: Any = None
 
 
-def _get_ocr():
+def _get_ocr() -> Any:
     global _ocr_engine
     if _ocr_engine is None:
         from app.adapters.blobstore_s3 import get_blobstore
@@ -1077,13 +1117,13 @@ def _get_ocr():
     return _ocr_engine
 
 
-def _build_vlm_captioner():
+def _build_vlm_captioner() -> Any:
     from app.adapters.vlm_caption import LlmVisionCaptioner
 
     return LlmVisionCaptioner(llm=_get_llm(), model=get_settings().model_classify)
 
 
-def _get_vlm_captioner():
+def _get_vlm_captioner() -> Any:
     """Optional screen-caption enhancement. If Vertex/vision setup is absent,
     keyframe OCR and grounding still run; only Keyframe.vlm_caption stays
     blank. Tests can inject `_vlm_captioner = <fake>` directly."""
@@ -1100,7 +1140,7 @@ def _get_vlm_captioner():
     return _vlm_captioner
 
 
-def _get_keyframe_detect_fn():
+def _get_keyframe_detect_fn() -> Any:
     """Lazy singleton, same pattern as _get_transcriber -- overridable in
     tests via `app.orchestrator.worker._keyframe_detect_fn = <fake>` so the
     screen-stage test never needs opencv/imagehash/scikit-image installed."""
@@ -1113,7 +1153,7 @@ def _get_keyframe_detect_fn():
 
 
 @stage_handler("screen")
-async def _handle_screen(db: object, job: PipelineJob) -> None:
+async def _handle_screen(db: Session, job: PipelineJob) -> None:
     """Idempotent: clears any keyframes/groundings from a prior partial
     attempt before re-inserting. No video_uri is a normal outcome (audio-only
     Mode D, or a platform session with no screen share) -- honest absence of
@@ -1283,44 +1323,44 @@ async def _handle_screen(db: object, job: PipelineJob) -> None:
 
 
 @stage_handler("understand")
-async def _handle_understand(db: object, job: PipelineJob) -> None:
+async def _handle_understand(db: Session, job: PipelineJob) -> None:
     from app.agents.context import run_context_intelligence
 
     await run_context_intelligence(db, job.capture_session_id, _get_llm())
 
 
 @stage_handler("verify")
-async def _handle_verify(db: object, job: PipelineJob) -> None:
+async def _handle_verify(db: Session, job: PipelineJob) -> None:
     from app.agents.verification import run_evidence_verification
 
     await run_evidence_verification(db, job.capture_session_id, _get_llm())
 
 
 @stage_handler("remember")
-async def _handle_remember(db: object, job: PipelineJob) -> None:
+async def _handle_remember(db: Session, job: PipelineJob) -> None:
     from app.agents.memory import run_memory_intelligence
 
     await run_memory_intelligence(db, job.capture_session_id, _get_llm(), embedder=_get_embedder())
 
 
 @stage_handler("propose")
-async def _handle_propose(db: object, job: PipelineJob) -> None:
+async def _handle_propose(db: Session, job: PipelineJob) -> None:
     from app.agents.action import run_action_intelligence
 
     await run_action_intelligence(db, job.capture_session_id, _get_llm())
 
 
 @stage_handler("report")
-async def _handle_report(db: object, job: PipelineJob) -> None:
+async def _handle_report(db: Session, job: PipelineJob) -> None:
     from app.adapters.blobstore_s3 import get_blobstore
     from app.agents.report import run_report_intelligence
     from app.db.models import CaptureSession
 
     _report_input, generated, _blob_uri = await run_report_intelligence(
-        db, job.capture_session_id, _get_llm(), blobstore=get_blobstore()  # type: ignore[arg-type, no-untyped-call]
+        db, job.capture_session_id, _get_llm(), blobstore=get_blobstore()
     )
     if not generated.abstained:
-        session = db.get(CaptureSession, job.capture_session_id)  # type: ignore[attr-defined]
+        session = db.get(CaptureSession, job.capture_session_id)
         if session is not None:
             if generated.title:
                 session.report_title = generated.title
@@ -1381,14 +1421,14 @@ async def run_once() -> bool:
     return True
 
 
-def _sweep_registry(settings: Settings) -> list[tuple[str, float, Callable[[object], Awaitable[None]]]]:
+def _sweep_registry(settings: Settings) -> list[tuple[str, float, Callable[[Session], Awaitable[None]]]]:
     """(name, interval_seconds, coroutine_fn) for every periodic sweep.
 
     Single source of truth for both the local-dev loop and the production
     bounded pass, so the two modes cannot silently drift apart -- a sweep
     added to one and not the other was a real risk with the old duplicated
     if-blocks this replaced."""
-    sweeps: list[tuple[str, float, Callable[[object], Awaitable[None]]]] = [
+    sweeps: list[tuple[str, float, Callable[[Session], Awaitable[None]]]] = [
         ("calendar_sync", settings.calendar_sync_interval_s, _sync_all_calendars),
         ("retention_sweep", settings.retention_sweep_interval_s, _run_retention_sweep),
         ("transcode_backfill", settings.transcode_backfill_interval_s, _run_transcode_backfill),

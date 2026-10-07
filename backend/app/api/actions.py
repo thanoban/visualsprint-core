@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import dependency as auth_dep
@@ -20,7 +21,8 @@ from app.auth.dependency import get_current_user, require_org_member
 from app.connectors.errors import ConnectorError
 from app.db.base import get_db
 from app.db.models import ActionStatus, Person, ProposedAction, User
-from app.interfaces.actions import ActionKind, ActionPayload
+from app.capture.token_provider import TokenProvider
+from app.interfaces.actions import ActionConnector, ActionKind, ActionPayload
 from app.oauth.connection import build_org_token_provider as _build_org_token_provider
 from app.oauth.connection import get_org_connection as _get_org_connection
 from app.orchestrator.audit import log_audit_event
@@ -28,7 +30,7 @@ from app.orchestrator.audit import log_audit_event
 router = APIRouter(prefix="/api/v1", tags=["actions"])
 
 
-def _get_connector(db: Session, org_id: str, kind: ActionKind):
+def _get_connector(db: Session, org_id: str, kind: ActionKind) -> ActionConnector:
     """Built fresh per call, not cached -- unlike before real OAuth
     existed, which org's connection backs a connector can change at any
     time (connect/reconnect a vendor), and this only runs when a human
@@ -36,7 +38,7 @@ def _get_connector(db: Session, org_id: str, kind: ActionKind):
     plus one or two indexed queries would matter."""
     from app.capture.token_provider import UnconfiguredTokenProvider
 
-    def _token_provider_for(provider: str, reason: str):
+    def _token_provider_for(provider: str, reason: str) -> TokenProvider:
         return _build_org_token_provider(db, org_id, provider) or UnconfiguredTokenProvider(reason)
 
     if kind == ActionKind.EMAIL_DRAFT:
@@ -142,14 +144,18 @@ async def list_actions(
     return [_to_out(db, r) for r in rows]
 
 
-class ApproveActionRequest(BaseModel):
-    approved_by_person_id: str | None = None
+def _person_id_for_user(db: Session, org_id: str, user: User) -> str | None:
+    """Resolve the Person row for the JWT-authenticated user within an org.
+    Returns None when the user has no linked Person (external approver path)."""
+    person = db.execute(
+        select(Person).where(Person.org_id == org_id, Person.user_id == user.id)
+    ).scalar_one_or_none()
+    return person.id if person else None
 
 
 @router.post("/actions/{action_id}/approve", response_model=ProposedActionOut)
 async def approve_action(
     action_id: str,
-    req: ApproveActionRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ProposedActionOut:
@@ -164,11 +170,15 @@ async def approve_action(
     if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.FAILED):
         raise HTTPException(409, f"action is not approvable (status={action.status.value})")
 
+    # approved_by comes from the JWT, not the request body -- the body field
+    # was forgeable by any org member (H-1/M-14 from the 2026-08-31 audit).
+    actor_person_id = _person_id_for_user(db, action.org_id, user)
+
     # The approval record itself is written and committed unconditionally,
     # before execution is even attempted -- this is what rule 5 requires,
     # and it's what the DB CHECK constraint is actually checking for.
     action.status = ActionStatus.APPROVED
-    action.approved_by_person_id = req.approved_by_person_id
+    action.approved_by_person_id = actor_person_id
     action.approved_at = datetime.now(UTC)
     action.error = None
     # No title/body here: those are meeting-content-derived free text with
@@ -178,7 +188,7 @@ async def approve_action(
     log_audit_event(
         db,
         org_id=action.org_id,
-        actor=req.approved_by_person_id or "system",
+        actor=actor_person_id or user.id,
         event="action_approved",
         detail={"action_id": action.id, "kind": action.kind},
     )
@@ -207,14 +217,9 @@ async def approve_action(
     return _to_out(db, action)
 
 
-class RejectActionRequest(BaseModel):
-    rejected_by_person_id: str | None = None
-
-
 @router.post("/actions/{action_id}/reject", response_model=ProposedActionOut)
 async def reject_action(
     action_id: str,
-    req: RejectActionRequest = RejectActionRequest(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ProposedActionOut:
@@ -226,13 +231,14 @@ async def reject_action(
     if action.status != ActionStatus.PENDING_APPROVAL:
         raise HTTPException(409, f"action is not pending approval (status={action.status.value})")
 
+    actor_person_id = _person_id_for_user(db, action.org_id, user)
     action.status = ActionStatus.REJECTED
     # See approve_action's comment above -- same reasoning against storing
     # free-text content in an AuditLog row that has no purge path.
     log_audit_event(
         db,
         org_id=action.org_id,
-        actor=req.rejected_by_person_id or "system",
+        actor=actor_person_id or user.id,
         event="action_rejected",
         detail={"action_id": action.id, "kind": action.kind},
     )

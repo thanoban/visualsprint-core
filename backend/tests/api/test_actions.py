@@ -29,7 +29,8 @@ def _seed(db, *, kind: str = "email_draft", target: dict | None = None):
     db.add(org)
     db.flush()
 
-    person = Person(org_id=org.id, display_name="Nimal Perera")
+    person = Person(org_id=org.id, display_name="Nimal Perera",
+                    user_id="test-user-0000-0000-0000-000000000000")
     db.add(person)
     db.flush()
 
@@ -235,13 +236,15 @@ def test_approve_writes_an_audit_log_entry(client, db_session):
     assert entries[0].detail == {"action_id": action_id, "kind": "email_draft"}
 
 
-def test_approve_without_a_person_id_attributes_to_system(client, db_session):
-    org_id, action_id, _person_id = _seed(db_session)
+def test_approve_attributes_to_authenticated_users_person(client, db_session):
+    # H-1/M-14 fix: actor comes from JWT, not request body. The test user's Person
+    # is linked via user_id in _seed, so actor == that person's id.
+    org_id, action_id, person_id = _seed(db_session)
 
     client.post(f"/api/v1/actions/{action_id}/approve", json={})
 
     entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
-    assert entry.actor == "system"
+    assert entry.actor == person_id
 
 
 def test_approve_and_reject_never_leak_the_action_title_into_the_audit_trail(client, db_session):
@@ -275,14 +278,14 @@ def test_reject_writes_an_audit_log_entry_attributed_to_the_rejector(client, db_
     assert entry.detail == {"action_id": action_id, "kind": "email_draft"}
 
 
-def test_reject_with_no_body_still_works_and_attributes_to_system(client, db_session):
-    org_id, action_id, _person_id = _seed(db_session)
+def test_reject_with_no_body_still_works_and_attributes_to_authenticated_user(client, db_session):
+    org_id, action_id, person_id = _seed(db_session)
 
     resp = client.post(f"/api/v1/actions/{action_id}/reject")
 
     assert resp.status_code == 200, resp.text
     entry = db_session.query(AuditLog).filter(AuditLog.org_id == org_id).one()
-    assert entry.actor == "system"
+    assert entry.actor == person_id
 
 
 def test_build_org_token_provider_returns_none_when_org_has_no_connection(db_session):

@@ -44,7 +44,14 @@ from app.interfaces.actions import ActionKind
 
 
 def _already_proposed(db: Session, org_id: str) -> set[tuple[str, str]]:
-    rows = db.execute(select(ProposedAction).where(ProposedAction.org_id == org_id)).scalars().all()
+    # Exclude rejected/failed actions so an item can be re-escalated or
+    # re-reminded after a previous action was rejected or failed to send.
+    rows = db.execute(
+        select(ProposedAction).where(
+            ProposedAction.org_id == org_id,
+            ProposedAction.status.not_in([ActionStatus.REJECTED, ActionStatus.FAILED]),
+        )
+    ).scalars().all()
     pairs: set[tuple[str, str]] = set()
     for row in rows:
         for item_id in row.payload.get("evidence_item_ids", []):

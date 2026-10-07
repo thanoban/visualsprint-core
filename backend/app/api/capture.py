@@ -22,9 +22,10 @@ from sqlalchemy.orm import Session
 
 from app.adapters.calendar_common import BOT_ELIGIBLE_PLATFORMS, bot_join_url, detect_conferencing
 from app.auth.dependency import require_org_member
+from app.capture.routing import instant_route
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import BotSession, BotStatus, Meeting
+from app.db.models import BotSession, BotStatus, Meeting, OrgConnection
 
 router = APIRouter(prefix="/api/v1/orgs/{org_id}/capture", tags=["capture"])
 
@@ -41,6 +42,8 @@ class InstantCaptureResponse(BaseModel):
     bot_session_id: str | None = None
     note: str
     admission_guidance: str | None = None
+    capture_mode: str = "C"
+    status: str = "action_required"
 
 
 def _admission_guidance(
@@ -99,6 +102,24 @@ async def start_instant_capture(
         )
     platform, platform_meeting_id = conferencing
 
+    settings = get_settings()
+    zoom_connection = db.query(OrgConnection).filter(
+        OrgConnection.org_id == org_id, OrgConnection.provider == "zoom"
+    ).first() if platform == "zoom" else None
+    route = instant_route(
+        platform, zoom_connected=zoom_connection is not None,
+        bot_dispatch=settings.bot_dispatch_enabled,
+        meet_guest=settings.bot_google_guest_enabled,
+        teams_guest=getattr(settings, "bot_teams_guest_enabled", False),
+    )
+    if route.mode == "C":
+        return InstantCaptureResponse(
+            platform=platform, dispatched=False, capture_mode="C", status="action_required",
+            note="Join this meeting in Chrome or Edge, then click the VisualSprint Companion "
+                 "icon to capture audio and screen evidence. The companion must be installed "
+                 "and signed in. Official recordings can also be imported after the meeting.",
+        )
+
     if platform == "zoom":
         # No BotSession to create: RTMS is tied to the host's Zoom account
         # (app/api/rtms_webhook.py), not to this endpoint or a calendar
@@ -108,24 +129,16 @@ async def start_instant_capture(
         return InstantCaptureResponse(
             platform=platform,
             dispatched=False,
+            capture_mode="A1", status="awaiting_stream",
             note=(
-                "Zoom meetings are captured automatically via RTMS as soon as they start "
-                "on a connected host account -- no manual join needed."
+                "Zoom is connected. Capture starts only after RTMS is enabled, authorized by "
+                "the host, and its stream-start event is received. A connected account alone "
+                "does not confirm this meeting is recording; use the companion for browser calls."
             ),
         )
 
     if platform not in BOT_ELIGIBLE_PLATFORMS:
         raise HTTPException(422, f"instant capture isn't supported for platform {platform!r}")
-
-    settings = get_settings()
-    if platform == "meet" and not settings.bot_google_guest_enabled:
-        raise HTTPException(
-            409,
-            "Google Meet guest bots are disabled because normal Meet access policies reject "
-            "them. Connect Google Calendar and use the official recording/transcript capture "
-            "path; enable VS_BOT_GOOGLE_GUEST_ENABLED only for an organization that deliberately "
-            "uses Open guest access.",
-        )
 
     join_url = bot_join_url(platform, platform_meeting_id)
     if join_url is None:
@@ -166,6 +179,7 @@ async def start_instant_capture(
     return InstantCaptureResponse(
         platform=platform,
         dispatched=settings.bot_dispatch_enabled,
+        capture_mode="B", status="queued",
         meeting_id=meeting.id,
         bot_session_id=bot.id,
         note=note,

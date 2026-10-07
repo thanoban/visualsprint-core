@@ -134,7 +134,7 @@ async def list_utterances(
 
     rows: list[UtteranceOut] = []
     for u in utterances:
-        ss = speakers_by_cluster.get(u.speaker_cluster_id or "") if u.speaker_cluster_id else None
+        utt_ss = speakers_by_cluster.get(u.speaker_cluster_id or "") if u.speaker_cluster_id else None
         rows.append(
             UtteranceOut(
                 id=u.id,
@@ -144,7 +144,7 @@ async def list_utterances(
                 lang_tags=u.lang_tags or [],
                 speaker=_speaker_label(u, people_by_id),
                 speaker_cluster_id=u.speaker_cluster_id,
-                session_speaker_id=ss.id if ss else None,
+                session_speaker_id=utt_ss.id if utt_ss else None,
                 person_id=u.person_id,
                 attribution_confidence=u.attribution_confidence,
                 asr_confidence=u.asr_confidence,
@@ -183,7 +183,8 @@ async def list_speakers(
         .scalars()
         .all()
     ):
-        utterance_counts[u] = utterance_counts.get(u, 0) + 1
+        if u is not None:
+            utterance_counts[u] = utterance_counts.get(u, 0) + 1
 
     people = (
         db.execute(select(Person).where(Person.org_id == session.org_id))
@@ -265,7 +266,7 @@ async def correct_speaker(
                 select(KnowledgeItem).where(
                     KnowledgeItem.org_id == session.org_id,
                     KnowledgeItem.type == KnowledgeType.COMMITMENT,
-                    KnowledgeItem.owner_source == "SPEAKER",
+                    KnowledgeItem.owner_source.in_(["speaker_derived", "speaker_candidate"]),
                     KnowledgeItem.owner_utterance_id.in_(utterance_ids),
                 )
             )

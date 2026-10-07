@@ -240,9 +240,9 @@ export default function UploadPage() {
         <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
           <p style={{ fontSize: 14.5, fontWeight: 600, color: "var(--text)", margin: 0 }}>Capture a meeting happening right now</p>
           <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "5px 0 16px" }}>
-            Zoom captures automatically on a connected host account. Google Meet uses its connected
-            Workspace calendar and official recording/transcript path after the meeting; paste a Teams
-            link only when your organization has enabled its guest bot.
+            For meetings you attend in Chrome or Edge, use the VisualSprint Companion to capture
+            audio and screen evidence. Connected platforms can import official recordings after
+            the meeting. Zoom live capture also needs RTMS authorization and a confirmed stream.
           </p>
           <form onSubmit={handleInstantCapture} style={{ display: "flex", gap: 10 }}>
             <input
@@ -286,9 +286,9 @@ export default function UploadPage() {
                   padding: "8px 12px",
                   fontSize: 13,
                   margin: 0,
-                  background: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green-soft)" : "var(--amber-soft)",
-                  color: instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green)" : "var(--amber)",
-                  border: `1px solid ${instantResult.dispatched || instantResult.platform === "zoom" ? "var(--green)" : "var(--amber)"}`,
+                  background: "var(--amber-soft)",
+                  color: "var(--amber)",
+                  border: "1px solid var(--amber)",
                 }}
               >
                 {instantResult.note}

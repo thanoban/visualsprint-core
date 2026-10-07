@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
+import structlog
 
 from app.capture.blob_ingest import download_and_store
 from app.capture.token_provider import TokenProvider
@@ -38,6 +39,7 @@ from app.interfaces.platform import (
 
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 MATCH_TOLERANCE = timedelta(seconds=5)
+log = structlog.get_logger()
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -101,11 +103,25 @@ class ZoomAdapter:
                 blob_uri = await self._download_audio(meeting_id, f, headers, tag=f"mixed-{i}")
                 audio_tracks.append(AudioTrack(uri=blob_uri, participant=None))
 
+        screen_uri = None
+        for recording in recordings.get("recording_files", []):
+            if recording.get("recording_type") in (
+                "shared_screen", "shared_screen_with_speaker_view", "shared_screen_with_gallery_view"
+            ) and recording.get("download_url"):
+                async with self._client.stream("GET", recording["download_url"],
+                                               headers=headers, follow_redirects=True) as response:
+                    response.raise_for_status()
+                    screen_uri = await self._blobs.put_stream(
+                        f"zoom/{meeting_id}/screen.mp4", response.aiter_bytes(), content_type="video/mp4"
+                    )
+                break
+
         return CaptureArtifacts(
             mode=self.mode,
             audio_tracks=audio_tracks,
             roster=roster,
             speaker_labels=speaker_labels,
+            screen_share_uri=screen_uri,
         )
 
     async def _auth_headers(self) -> dict[str, str]:
@@ -134,6 +150,9 @@ class ZoomAdapter:
                 headers=headers,
                 params=params,
             )
+            if resp.status_code == 403:
+                log.warning("zoom.participant_report_unavailable", meeting=meeting_id)
+                return []
             resp.raise_for_status()
             data = resp.json()
             participants.extend(data.get("participants", []))

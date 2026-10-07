@@ -6,13 +6,16 @@
 (function () {
   "use strict";
 
+  // Reinjection on extension update must not create duplicate polling loops.
+  window.__vsDetectorCleanup?.();
+
   const PLATFORM_PATTERNS = {
     meet:  /meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/,
-    zoom:  /app\.zoom\.us\/wc\/\d+/,
+    zoom:  /(?:[a-z0-9-]+\.)?zoom\.us\/wc\/(?:join\/)?\d+/,
     // Teams meeting URLs vary widely across versions; match both the old
     // /conversations path (where in-channel calls land) and the newer
     // /meet, /#/meeting, /#/call, and /v2/ paths used by current web client.
-    teams: /teams\.microsoft\.com.*(\/conversations|\/meet|[/#](meeting|call))/,
+    teams: /teams\.(?:microsoft\.com|live\.com|cloud\.microsoft)/,
   };
 
   function detectPlatform() {
@@ -31,11 +34,7 @@
       '[data-call-ended="false"]',
       'button[aria-label="Leave call"]',
       'button[aria-label="Leave"]',
-      '[jsname="Nqah0"]',
-      '[jsname="r4jB5"]',
-      '.crqnQb',
-      '[jscontroller="IY7L3d"]',
-      '[data-meeting-code]',
+      'button[aria-label*="Leave call"]',
     ].join(", "),
     zoom:  ".footer-button-base__leave-btn",
     teams: '[data-tid="hangup-button"]',
@@ -59,6 +58,8 @@
   let checkInterval = null;
   let _endGraceTimer = null; // prevents spurious MEETING_ENDED on Meet URL micro-navigations
   let _startCooldown = false; // blocks MEETING_STARTED for 15 s after sendEnded() so Meet's
+  let absentSince = null;
+  const rosterSeen = new Set();
   //   post-call DOM transition (activeEl still in tree) can't immediately re-trigger detection
 
   // sessionStorage outlives same-tab SPA navigations; avoids re-injecting consent.
@@ -86,6 +87,7 @@
     clearInterval(checkInterval);
     clearTimeout(_endGraceTimer);
   }
+  window.__vsDetectorCleanup = _teardown;
 
   // ── Consent chat injection ───────────────────────────────────────────────────
   // Best-effort: post a disclosure message in the Meet chat so other participants
@@ -167,6 +169,17 @@
       .filter(Boolean);
   }
 
+  function micMuted() {
+    if (platform === "meet") {
+      return !!document.querySelector('button[aria-label*="Turn on microphone"]');
+    }
+    return false;
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "RECORDING_STARTED") injectConsentMessage().catch(() => {});
+  });
+
   // ── Meeting state machine ─────────────────────────────────────────────────────
   function checkMeetingState() {
     try {
@@ -201,11 +214,23 @@
 
       // Check for entry into the live call.
       const activeEl = document.querySelector(IN_MEETING_SELECTORS[platform]);
+      if (inMeeting) {
+        getParticipants().forEach((name) => rosterSeen.add(name));
+        safeSend({ type: "MEETING_HEARTBEAT", roster: Array.from(rosterSeen), micMuted: micMuted() });
+        if (!activeEl) {
+          absentSince ??= Date.now();
+          if (Date.now() - absentSince >= 10000) { sendEnded(); return; }
+        } else absentSince = null;
+      }
       if (activeEl && !inMeeting && !_startCooldown) {
         inMeeting    = true;
         meetingTitle = document.title.replace(/ – Google Meet$| – Zoom$/, "").trim();
-        safeSend({ type: "MEETING_STARTED", platform, url: location.href, title: meetingTitle });
-        injectConsentMessage().catch(() => {}); // async, fire-and-forget, errors silenced
+        rosterSeen.clear();
+        absentSince = null;
+      }
+      // Reannounce idempotently so sign-in or SW restart can re-arm recording.
+      if (activeEl && inMeeting) {
+        safeSend({ type: "MEETING_STARTED", platform, url: location.href, title: meetingTitle, micMuted: micMuted() });
       }
     } catch (e) {
       if (e?.message?.includes("Extension context invalidated")) {
@@ -218,7 +243,8 @@
     inMeeting   = false;
     consentSent = false;
     sessionStorage.removeItem(VS_CONSENT_KEY);
-    safeSend({ type: "MEETING_ENDED", platform, roster: getParticipants() });
+    getParticipants().forEach((name) => rosterSeen.add(name));
+    safeSend({ type: "MEETING_ENDED", platform, roster: Array.from(rosterSeen) });
     // 15-second cooldown so Meet's post-call DOM transition (some activeEl selectors
     // linger briefly) can't immediately re-trigger MEETING_STARTED detection.
     _startCooldown = true;

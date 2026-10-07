@@ -19,10 +19,12 @@ export async function setStoredSession(session) {
 }
 
 export async function clearStoredSession() {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.remove([STORAGE_KEY, "vs_org_id"]);
 }
 
-export async function getAuthHeaders() {
+let refreshing = null;
+
+async function freshSession() {
   let session = await getStoredSession();
   if (!session) return null;
 
@@ -30,15 +32,16 @@ export async function getAuthHeaders() {
   const nowS = Math.floor(Date.now() / 1000);
 
   if (expiresAt - nowS < REFRESH_MARGIN_S) {
-    const refreshed = await _refreshSession(session.refresh_token);
-    if (refreshed) {
-      session = refreshed;
-    } else {
-      await clearStoredSession();
-      return null;
-    }
+    session = await _refreshSession(session.refresh_token);
   }
+  return session;
+}
 
+export async function getAuthHeaders() {
+  // Concurrent media uploads share one refresh: refresh tokens rotate.
+  if (!refreshing) refreshing = freshSession().finally(() => { refreshing = null; });
+  const session = await refreshing;
+  if (!session) return null;
   return {
     Authorization: `Bearer ${session.access_token}`,
     "Content-Type": "application/json",
@@ -58,7 +61,10 @@ async function _refreshSession(refreshToken) {
         body: JSON.stringify({ refresh_token: refreshToken }),
       }
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      if ([400, 401, 403].includes(resp.status)) await clearStoredSession();
+      throw new Error(`Sign-in refresh failed (${resp.status}); uploads retained for retry.`);
+    }
     const data = await resp.json();
     const newSession = {
       access_token: data.access_token,
@@ -67,7 +73,8 @@ async function _refreshSession(refreshToken) {
     };
     await setStoredSession(newSession);
     return newSession;
-  } catch {
-    return null;
+  } catch (error) {
+    // A transient network failure must not erase a usable refresh token.
+    throw error;
   }
 }

@@ -18,17 +18,15 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import (
-    get_current_user,
-    is_org_member,
     require_org_member,
     require_session_member,
 )
 from app.db.base import get_db
-from app.db.models import BotSession, BotStatus, CaptureSession, Meeting, User
+from app.db.models import BotSession, BotStatus, CaptureSession, CaptureState, Meeting
 
 log = structlog.get_logger()
 
@@ -52,9 +50,9 @@ ESCALATION_WINDOW_MINUTES = 15
 # ---------------------------------------------------------------------------
 
 class CompanionSessionRequest(BaseModel):
-    title: str = ""
-    meeting_url: str = ""
-    platform: str = "meet"   # meet | zoom | teams
+    title: str = Field(default="", max_length=500)
+    meeting_url: str = Field(max_length=3000)
+    platform: str = Field(default="meet", pattern="^(meet|zoom|teams)$")
 
 
 class CompanionSessionResponse(BaseModel):
@@ -63,13 +61,19 @@ class CompanionSessionResponse(BaseModel):
 
 
 class CompanionFinalizeRequest(BaseModel):
-    total_chunks: int
-    roster: list[str] = []
+    total_chunks: int = Field(ge=1, le=MAX_CHUNKS)
+    roster: list[str] = Field(default_factory=list, max_length=500)
+    microphone_captured: bool = True
+    duration_s: float = Field(default=0, ge=0, le=5 * 3600)
 
 
 class CompanionFinalizeResponse(BaseModel):
     capture_session_id: str
     enqueued: bool
+
+
+class CompanionAbortRequest(BaseModel):
+    error: str = Field(default="Capture could not start", max_length=1000)
 
 
 class EscalationEntry(BaseModel):
@@ -94,15 +98,20 @@ async def create_companion_session(
     org_id: str,
     body: CompanionSessionRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
 ) -> CompanionSessionResponse:
-    if not is_org_member(db, org_id, user):
-        raise HTTPException(status_code=403, detail="not a member of this organisation")
+
+    from app.adapters.calendar_common import detect_conferencing
+
+    conferencing = detect_conferencing(body.meeting_url)
+    if conferencing is None or conferencing[0] != body.platform:
+        raise HTTPException(422, "meeting URL must match a supported meeting platform")
 
     meeting = Meeting(
         org_id=org_id,
         title=body.title or "Companion recording",
         platform=body.platform,
+        platform_meeting_id=conferencing[1],
     )
     db.add(meeting)
     db.flush()
@@ -126,9 +135,13 @@ async def upload_chunk(
     db: Session = Depends(get_db),
     session: CaptureSession = Depends(require_session_member),
 ) -> dict[str, object]:
+    if session.org_id != org_id:
+        raise HTTPException(404, "capture session not found in this org")
     if session.mode != "C":
         raise HTTPException(400, "not a companion session")
-    if seq < 0 or seq > MAX_CHUNKS:
+    if session.state != CaptureState.SCHEDULED:
+        raise HTTPException(409, "capture session no longer accepts uploads")
+    if seq < 0 or seq >= MAX_CHUNKS:
         raise HTTPException(400, f"seq out of range [0, {MAX_CHUNKS}]")
 
     chunk_bytes = await data.read(MAX_CHUNK_BYTES + 1)
@@ -164,9 +177,17 @@ async def upload_keyframe(
     db: Session = Depends(get_db),
     session: CaptureSession = Depends(require_session_member),
 ) -> dict[str, object]:
+    if session.org_id != org_id:
+        raise HTTPException(404, "capture session not found in this org")
     if session.mode != "C":
         raise HTTPException(400, "not a companion session")
 
+    import math
+
+    if session.state != CaptureState.SCHEDULED:
+        raise HTTPException(409, "capture session no longer accepts uploads")
+    if seq < 0 or seq >= 1800 or not math.isfinite(timestamp_s) or not 0 <= timestamp_s <= 18000:
+        raise HTTPException(422, "invalid keyframe sequence or timestamp")
     frame_bytes = await data.read(MAX_FRAME_BYTES + 1)
     if len(frame_bytes) > MAX_FRAME_BYTES:
         raise HTTPException(413, "keyframe exceeds 2 MB limit")
@@ -185,7 +206,12 @@ async def upload_keyframe(
     image_uri = await blob_store.put(key, frame_bytes, content_type="image/jpeg")
 
     # valid_to_s is a 30s estimate; the screen stage refines it with OCR timing.
-    db.add(Keyframe(
+    # Stable primary key makes keyframe retries idempotent across replicas.
+    from uuid import NAMESPACE_URL, uuid5
+
+    frame_id = str(uuid5(NAMESPACE_URL, f"visualsprint:{capture_session_id}:frame:{seq}"))
+    db.merge(Keyframe(
+        id=frame_id,
         org_id=org_id,
         capture_session_id=capture_session_id,
         valid_from_s=timestamp_s,
@@ -208,121 +234,66 @@ async def finalize_session(
     db: Session = Depends(get_db),
     session: CaptureSession = Depends(require_session_member),
 ) -> CompanionFinalizeResponse:
+    if session.org_id != org_id:
+        raise HTTPException(404, "capture session not found in this org")
     if session.mode != "C":
         raise HTTPException(400, "not a companion session")
-    if body.total_chunks < 1:
-        raise HTTPException(400, "total_chunks must be >= 1")
-
-    from app.db.models import CaptureState
-
-    if session.state != CaptureState.SCHEDULED:
-        # Already finalized — second call from the extension (tab-close + ended
-        # event fire simultaneously). Return success so the extension doesn't
-        # retry indefinitely; don't re-upload, re-persist, or re-enqueue.
-        log.info("companion.finalize.duplicate_skipped", session_id=capture_session_id,
-                 state=session.state)
-        return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
+    # Small immutable manifest + durable queue job. No ffmpeg/network download
+    # in the HTTP request; the acquire worker can retry after a crash.
+    import json
 
     from sqlalchemy import select
 
     from app.adapters.blobstore_s3 import get_blobstore
-    from app.capture.audio_utils import webm_chunks_to_wav
-    from app.capture.consent import record_disclosure
-    from app.capture.persist import persist_capture_artifacts
-    from app.db.models import Keyframe
-    from app.interfaces.platform import (
-        AudioTrack,
-        CaptureArtifacts,
-        CaptureMode,
-        RosterEntry,
-    )
     from app.orchestrator.queue import enqueue_pipeline
 
-    blob_store = get_blobstore()
+    session = db.execute(
+        select(CaptureSession).where(
+            CaptureSession.id == capture_session_id,
+            CaptureSession.org_id == org_id,
+        ).with_for_update()
+    ).scalar_one()
+    if session.state == CaptureState.FAILED:
+        raise HTTPException(409, session.error or "capture failed")
+    if session.state != CaptureState.SCHEDULED:
+        return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
 
-    # Release the DB connection before downloading chunks + encoding WAV +
-    # uploading WAV — all heavy I/O that can take many seconds. Pool slots are
-    # reacquired automatically when we next touch `db` below.
-    db.close()
-
-    # Collect uploaded chunks; allow partial sets (tab closed early — partial
-    # captures with disclosed gaps are better than nothing).
-    chunks: list[bytes] = []
-    missing: list[int] = []
-    for i in range(body.total_chunks):
-        uri = f"blob://companion-chunks/{org_id}/{capture_session_id}/{i:06d}.webm"
-        if not await blob_store.exists(uri):
-            missing.append(i)
-            continue
-        chunks.append(await blob_store.get(uri))
-
-    if missing:
-        log.warning("companion.finalize.missing_chunks", session_id=capture_session_id,
-                    count=len(missing), first_few=missing[:10])
-    if not chunks:
-        raise HTTPException(422, "no audio chunks found — nothing to finalize")
-
-    wav_bytes = webm_chunks_to_wav(chunks)
-    if not wav_bytes:
-        raise HTTPException(
-            500,
-            "audio transcode failed — ffmpeg unavailable or chunk data corrupt",
-        )
-
-    audio_uri = await blob_store.put(
-        f"companion-audio/{org_id}/{capture_session_id}.wav",
-        wav_bytes,
-        content_type="audio/wav",
-    )
-    if not audio_uri.startswith("blob://"):
-        # Defensive: blobstore.put() must always return a blob:// URI.
-        # Fail loudly here rather than committing an empty-string AudioTrack
-        # that silently breaks every downstream stage.
-        log.error("companion.finalize.bad_uri", session_id=capture_session_id,
-                  uri=audio_uri)
-        raise HTTPException(500, f"blob store returned invalid URI {audio_uri!r}")
-
-    # Refetch the session after db.close() — the object was detached and must
-    # be re-attached before we can pass it to persist_capture_artifacts.
-    session = db.get(CaptureSession, capture_session_id)
-    if session is None:
-        raise HTTPException(500, "capture session disappeared during finalize")
-
-    # Keyframe rows are already written incrementally by upload_keyframe; count
-    # them for logging only — don't pass them to persist_capture_artifacts or
-    # they'll be duplicated as new rows on top of what's already in the DB.
-    keyframe_count = db.execute(
-        select(Keyframe)
-        .where(Keyframe.capture_session_id == capture_session_id)
-    ).scalars().all()
-
-    roster = [RosterEntry(display_name=name) for name in body.roster if name.strip()]
-
-    artifacts = CaptureArtifacts(
-        mode=CaptureMode.DESKTOP,
-        audio_tracks=[AudioTrack(uri=audio_uri, participant=None)],
-        roster=roster,
-    )
-    persist_capture_artifacts(db, session, artifacts)
-    record_disclosure(
-        db,
-        session,
-        subject="all_participants",
-        method="companion_extension",
-        detail=(
-            "Meeting captured via VisualSprint companion Chrome extension "
-            "(Mode C). The signed-in user's own browser tab was captured; "
-            "no bot participant joined the meeting."
-        ),
+    manifest = body.model_dump()
+    await get_blobstore().put(
+        f"companion-manifests/{org_id}/{capture_session_id}.json",
+        json.dumps(manifest).encode(), content_type="application/json",
     )
     session.state = CaptureState.ACQUIRING
     enqueue_pipeline(db, org_id, session.id)
     db.commit()
-
-    log.info("companion.finalize.done", session_id=capture_session_id,
-             chunks_used=len(chunks), missing=len(missing),
-             keyframes=len(keyframe_count), roster=len(roster))
+    log.info("companion.finalize.queued", session_id=capture_session_id,
+             total_chunks=body.total_chunks)
     return CompanionFinalizeResponse(capture_session_id=capture_session_id, enqueued=True)
+
+
+@router.post("/sessions/{capture_session_id}/abort")
+async def abort_session(
+    org_id: str,
+    capture_session_id: str,
+    body: CompanionAbortRequest,
+    db: Session = Depends(get_db),
+    session: CaptureSession = Depends(require_session_member),
+) -> dict[str, bool]:
+    if session.org_id != org_id:
+        raise HTTPException(404, "capture session not found in this org")
+    if session.mode != "C":
+        raise HTTPException(400, "not a companion session")
+    from app.db.models import CoverageInterval, CoverageStatus
+
+    if session.state == CaptureState.SCHEDULED:
+        session.state = CaptureState.FAILED
+        session.error = body.error
+        db.add(CoverageInterval(
+            org_id=org_id, capture_session_id=session.id, start_s=0, end_s=0,
+            modality="audio", status=CoverageStatus.MISSING, reason=body.error,
+        ))
+        db.commit()
+    return {"aborted": session.state == CaptureState.FAILED}
 
 
 @router.get("/escalations", response_model=EscalationsResponse)

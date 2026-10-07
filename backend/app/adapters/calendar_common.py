@@ -11,7 +11,8 @@ import re
 # (app/capture/zoom_adapter.py) needs the numeric id to call the Cloud
 # Recording API. Vanity URLs (zoom.us/my/someone) can't be resolved to that
 # id from the link alone, so they're deliberately not matched here.
-ZOOM_RE = re.compile(r"https?://[\w.-]*zoom\.us/j/(\d{9,11})(?:\?\S*)?", re.IGNORECASE)
+ZOOM_RE = re.compile(r"https?://(?:[\w-]+\.)*zoom\.us/j/(\d{9,11})(?:\?\S*)?", re.IGNORECASE)
+ZOOM_WEB_RE = re.compile(r"https?://(?:[\w-]+\.)*zoom\.us/wc/(?:join/)?(\d{9,11})", re.IGNORECASE)
 
 # Google Meet: the standard 3-4-3 lowercase-letter room code.
 MEET_RE = re.compile(r"https?://meet\.google\.com/([a-z]{3}-[a-z]{4}-[a-z]{3})", re.IGNORECASE)
@@ -38,8 +39,9 @@ MEET_SHORT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_PATTERNS: list[tuple[str, re.Pattern]] = [
+_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("zoom", ZOOM_RE),
+    ("zoom", ZOOM_WEB_RE),
     ("meet", MEET_RE),
     ("meet", MEET_SHORT_RE),
     ("teams", TEAMS_RE),

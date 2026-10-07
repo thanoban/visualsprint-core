@@ -151,7 +151,7 @@ def zoom_config(settings: Settings) -> OAuthProviderConfig:
         # auth uses the separate Server-to-Server app credentials).
         # Mode A2 cloud-recording scopes can be added here later once RTMS
         # capture is proven end-to-end.
-        scope="user:read:user",
+        scope=settings.zoom_oauth_scopes,
     )
 
 

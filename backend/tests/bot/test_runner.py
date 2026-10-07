@@ -391,7 +391,7 @@ def test_webm_chunks_are_given_to_ffmpeg_as_a_concat_manifest(monkeypatch):
     monkeypatch.setattr(audio_utils.shutil, "which", lambda name: "ffmpeg")
     monkeypatch.setattr(audio_utils.subprocess, "run", fake_run)
 
-    assert REAL_WEBM_CHUNKS_TO_WAV([b"first", b"second"]) == b"wav"
+    assert REAL_WEBM_CHUNKS_TO_WAV([b"\x1a\x45\xdf\xa3first", b"\x1a\x45\xdf\xa3second"]) == b"wav"
     command, kwargs = calls[0]
     assert command[2:5] == ["-f", "concat", "-safe"]
     assert "input" not in kwargs

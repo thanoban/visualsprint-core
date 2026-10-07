@@ -52,8 +52,9 @@ $signinBtn.addEventListener("click", async () => {
       expires_at:    Math.floor(Date.now() / 1000) + data.expires_in,
     });
     // Eagerly cache org_id so the SW doesn't have to fetch it on first capture.
-    _cacheOrgId(data.access_token);
+    await _cacheOrgId(data.access_token);
     await pollStatus();
+    clearInterval(_pollTimer);
     _pollTimer = setInterval(pollStatus, 3000);
   } catch {
     showError("Network error — is the backend reachable?");
@@ -64,6 +65,7 @@ $signinBtn.addEventListener("click", async () => {
 });
 
 async function _cacheOrgId(accessToken) {
+  await chrome.storage.local.remove("vs_org_id");
   const { VS_API_BASE_URL } = await import("../lib/config.js");
   try {
     const resp = await fetch(`${VS_API_BASE_URL}/api/v1/me`, {
@@ -72,7 +74,7 @@ async function _cacheOrgId(accessToken) {
     if (!resp.ok) return;
     const data = await resp.json();
     const orgId = data.org?.id;
-    if (orgId) chrome.storage.local.set({ vs_org_id: orgId });
+    if (orgId) await chrome.storage.local.set({ vs_org_id: orgId });
   } catch { /* SW will fetch it lazily on first capture */ }
 }
 
@@ -99,8 +101,12 @@ $stopBtn.addEventListener("click", async () => {
 // ─── Status polling ───────────────────────────────────────────────────────────
 let _pollTimer = null;
 
+document.getElementById("microphone-btn").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("permissions/microphone.html") });
+});
+
 async function pollStatus() {
-  const r = await chrome.storage.session.get("vs_active_recordings");
+  const r = await chrome.storage.local.get("vs_active_recordings");
   const recordings = r.vs_active_recordings ?? {};
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const rec = tab ? recordings[tab.id] : null;
@@ -110,9 +116,22 @@ async function pollStatus() {
     $chunks.textContent  = rec.chunkSeq ?? 0;
     $frames.textContent  = rec.keyframeSeq ?? 0;
     $title.textContent   = rec.title ?? "";
-    showView("recording");
+    if (["stopping", "uploading", "failed"].includes(rec.state)) {
+      showView("processing");
+      views.processing.querySelector(".hint").textContent = rec.error
+        ? `Capture issue: ${rec.error}. Uploaded data is retained; check your dashboard.`
+        : "Uploading retained media. Network interruptions are retried automatically.";
+    } else {
+      showView("recording");
+      document.getElementById("capture-detail").textContent = rec.microphoneCaptured === false
+        ? "Tab audio only: your microphone was unavailable. Enable it before your next recording."
+        : "Meeting tab audio, microphone and changed screen frames are being captured.";
+    }
   } else if (rec?.finalized) {
     showView("processing");
+    views.processing.querySelector(".hint").textContent = rec.state === "failed"
+      ? `Capture failed: ${rec.error ?? "No audio was captured"}. Rejoin and click the icon to retry.`
+      : "Transcript and insights will appear in the VisualSprint dashboard.";
   } else {
     showView("idle");
   }

@@ -6,8 +6,9 @@ connection isolation, and unknown-provider handling."""
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -204,3 +205,62 @@ async def test_a_google_connection_with_no_oauth_app_configured_is_skipped_not_f
         await worker._sync_all_calendars(db)  # must not raise
     finally:
         get_settings.cache_clear()
+
+
+async def test_oauth_400_from_token_endpoint_prunes_connection(db):
+    """A revoked/expired refresh token surfaces as HTTP 400 from the OAuth
+    token endpoint. Google (and Microsoft) return 400, not 401, for this case.
+    The connection must be pruned so the sweep stops hammering it every 6 min.
+    A 400 from the Calendar API itself (different URL) must NOT prune the
+    connection, so _is_oauth_token_url discrimination matters."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    conn = _connection(db, org, "google")
+    conn_id = conn.id
+
+    # Simulate httpx.HTTPStatusError from oauth2.googleapis.com/token
+    fake_response = httpx.Response(400, request=httpx.Request("POST", "https://oauth2.googleapis.com/token"))
+    oauth_400 = httpx.HTTPStatusError(
+        "400 Bad Request", request=fake_response.request, response=fake_response
+    )
+
+    class FailsWith400Adapter:
+        async def list_upcoming_events(self, connection, within):
+            raise oauth_400
+
+    worker._calendar_adapters = {"google": FailsWith400Adapter(), "microsoft": FakeCalendarAdapter()}
+
+    await worker._sync_all_calendars(db)
+
+    # Connection must be pruned — it is permanently unusable
+    remaining = db.execute(select(CalendarConnection).where(CalendarConnection.id == conn_id)).scalar_one_or_none()
+    assert remaining is None, "revoked-token connection must be pruned, not left to retry forever"
+
+
+async def test_oauth_400_from_calendar_api_does_not_prune_connection(db):
+    """A 400 from the Calendar API itself (bad query, quota) is transient and
+    must NOT prune the connection — only OAuth token endpoint 400s are permanent."""
+    org = Org(name="Acme")
+    db.add(org)
+    db.flush()
+    conn = _connection(db, org, "google")
+    conn_id = conn.id
+
+    # Simulate httpx.HTTPStatusError from the Calendar API (NOT the token endpoint)
+    fake_response = httpx.Response(400, request=httpx.Request("GET", "https://www.googleapis.com/calendar/v3/calendars/primary/events"))
+    calendar_400 = httpx.HTTPStatusError(
+        "400 Bad Request", request=fake_response.request, response=fake_response
+    )
+
+    class FailsWithCalendar400Adapter:
+        async def list_upcoming_events(self, connection, within):
+            raise calendar_400
+
+    worker._calendar_adapters = {"google": FailsWithCalendar400Adapter(), "microsoft": FakeCalendarAdapter()}
+
+    await worker._sync_all_calendars(db)
+
+    # Connection must NOT be pruned — Calendar API 400 is transient
+    remaining = db.execute(select(CalendarConnection).where(CalendarConnection.id == conn_id)).scalar_one_or_none()
+    assert remaining is not None, "Calendar API 400 must not prune the connection"

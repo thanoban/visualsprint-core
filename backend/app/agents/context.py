@@ -82,8 +82,14 @@ class CandidateExtractionResult(BaseModel):
     abstained: bool = False
 
 
-def _format_utterance(u: Utterance) -> str:
-    return f"[utterance:{u.id}] t={u.start_s:.1f}-{u.end_s:.1f}s speaker={u.person_id or 'unknown'}: {u.text}"
+def _format_utterance(u: Utterance, person_name_map: dict[str, str] | None = None) -> str:
+    if u.person_id and person_name_map and u.person_id in person_name_map:
+        speaker = person_name_map[u.person_id]
+        if u.attribution_confidence and u.attribution_confidence < 1.0:
+            speaker = f"{speaker} (conf={u.attribution_confidence:.2f})"
+    else:
+        speaker = "unknown"
+    return f"[utterance:{u.id}] t={u.start_s:.1f}-{u.end_s:.1f}s speaker={speaker}: {u.text}"
 
 
 def _format_keyframe(k: Keyframe) -> str:
@@ -96,10 +102,14 @@ def _format_keyframe(k: Keyframe) -> str:
 
 
 def _build_user_content(
-    utterances: list[Utterance], keyframes: list[Keyframe], *, meeting_date: str
+    utterances: list[Utterance],
+    keyframes: list[Keyframe],
+    *,
+    meeting_date: str,
+    person_name_map: dict[str, str] | None = None,
 ) -> str:
     lines = [f"MEETING_DATE: {meeting_date}", "", "UTTERANCES:"]
-    lines.extend(_format_utterance(u) for u in utterances)
+    lines.extend(_format_utterance(u, person_name_map) for u in utterances)
     lines.append("")
     lines.append("KEYFRAMES:")
     lines.extend(_format_keyframe(k) for k in keyframes)
@@ -244,13 +254,21 @@ async def run_context_intelligence(
         .all()
     )
 
+    from app.db.models import Person
+    person_name_map: dict[str, str] = {
+        p.id: p.display_name
+        for p in db.query(Person).filter(Person.org_id == session.org_id).all()
+    }
+
     from app.config import get_settings
 
     model = model or get_settings().model_extract
     result, usage = await llm.complete_structured(
         model=model,
         system=SYSTEM_PROMPT,
-        user_content=_build_user_content(utterances, keyframes, meeting_date=meeting_date),
+        user_content=_build_user_content(
+            utterances, keyframes, meeting_date=meeting_date, person_name_map=person_name_map
+        ),
         schema=CandidateExtractionResult,
     )
     log.info(

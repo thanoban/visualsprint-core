@@ -56,6 +56,8 @@ export interface CaptureSessionStatus {
 }
 
 export interface InstantCaptureResponse {
+  capture_mode: "A1" | "A2" | "B" | "C" | "D";
+  status: "action_required" | "awaiting_stream" | "queued";
   platform: string;
   dispatched: boolean;
   meeting_id: string | null;

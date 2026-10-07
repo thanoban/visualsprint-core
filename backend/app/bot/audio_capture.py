@@ -27,10 +27,14 @@ log = structlog.get_logger()
 _CHUNK_MS = 5000
 
 _CAPTURE_JS = f"""
-() => {{
+async () => {{
     if (window.__vsAudioRecorder) return;
     window.__vsAudioChunks = [];
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    if (ctx.state !== 'running') throw new Error('Meeting audio context is suspended');
+    window.__vsAudioContext = ctx;
+    window.__vsAudioWrites = Promise.resolve();
     const combined = ctx.createMediaStreamDestination();
 
     const attach = (el) => {{
@@ -55,13 +59,15 @@ _CAPTURE_JS = f"""
     window.__vsAudioObserver = observer;
 
     const recorder = new MediaRecorder(combined.stream, {{ mimeType: 'audio/webm;codecs=opus' }});
-    recorder.ondataavailable = async (e) => {{
+    recorder.ondataavailable = (e) => {{
         if (e.data.size === 0) return;
-        const buf = await e.data.arrayBuffer();
-        let binary = '';
-        const bytes = new Uint8Array(buf);
-        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        window.__vsOnChunk(btoa(binary));
+        window.__vsAudioWrites = window.__vsAudioWrites.then(async () => {{
+            const buf = await e.data.arrayBuffer();
+            let binary = '';
+            const bytes = new Uint8Array(buf);
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            await window.__vsOnChunk(btoa(binary));
+        }});
     }};
     recorder.start({_CHUNK_MS});
     window.__vsAudioRecorder = recorder;
@@ -71,7 +77,10 @@ _CAPTURE_JS = f"""
 _STOP_JS = """
 () => new Promise((resolve) => {
     if (!window.__vsAudioRecorder) return resolve();
-    window.__vsAudioRecorder.onstop = () => resolve();
+    window.__vsAudioRecorder.onstop = async () => {
+        try { await window.__vsAudioWrites; }
+        finally { await window.__vsAudioContext?.close(); resolve(); }
+    };
     window.__vsAudioRecorder.stop();
     if (window.__vsAudioObserver) window.__vsAudioObserver.disconnect();
 })

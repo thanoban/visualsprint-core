@@ -55,6 +55,30 @@ def test_rejects_unknown_kind(client):
     assert resp.status_code == 422
 
 
+def test_rejects_name_over_max_length(client):
+    resp = client.post(
+        "/api/v1/leads",
+        json={"kind": "demo", "name": "N" * 101, "email": "nimal@acme.test"},
+    )
+    assert resp.status_code == 422
+
+
+def test_rejects_message_over_max_length(client):
+    resp = client.post(
+        "/api/v1/leads",
+        json={"kind": "demo", "name": "Nimal", "email": "nimal@acme.test", "message": "x" * 2001},
+    )
+    assert resp.status_code == 422
+
+
+def test_rejects_company_over_max_length(client):
+    resp = client.post(
+        "/api/v1/leads",
+        json={"kind": "demo", "name": "Nimal", "email": "nimal@acme.test", "company": "A" * 256},
+    )
+    assert resp.status_code == 422
+
+
 def test_does_not_require_authentication(client, monkeypatch):
     """The whole point of this endpoint -- anonymous marketing-site visitors
     have no account yet. Break get_current_user to prove auth is never

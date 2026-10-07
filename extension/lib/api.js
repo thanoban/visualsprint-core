@@ -61,13 +61,20 @@ export async function getEscalations(orgId) {
   return _apiFetch(`/api/v1/orgs/${orgId}/companion/escalations`);
 }
 
-export async function finalizeSession(orgId, sessionId, totalChunks, roster) {
+export async function abortSession(orgId, sessionId, error) {
+  return _apiFetch(`/api/v1/orgs/${orgId}/companion/sessions/${sessionId}/abort`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ error }),
+  });
+}
+
+export async function finalizeSession(orgId, sessionId, totalChunks, roster, metadata = {}) {
   return _apiFetch(
     `/api/v1/orgs/${orgId}/companion/sessions/${sessionId}/finalize`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ total_chunks: totalChunks, roster }),
+      body: JSON.stringify({ total_chunks: totalChunks, roster, ...metadata }),
     }
   );
 }

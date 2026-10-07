@@ -209,6 +209,7 @@ async def run_bot_session(bot_session_id: str) -> None:
     except Exception as exc:
         log.warning("bot.runner.join_failed", bot_session=bot_session_id, error=str(exc))
         _mark_status(bot_session_id, BotStatus.FAILED, error=f"join failed: {exc}")
+        await _safe_leave(joiner)
         return
 
     if outcome == JoinOutcome.FAILED:
@@ -255,15 +256,27 @@ async def run_bot_session(bot_session_id: str) -> None:
             await _safe_leave(joiner)
             return
 
-    _mark_status(bot_session_id, BotStatus.LIVE, joined_at=datetime.now(UTC))
+    if outcome != JoinOutcome.LIVE:
+        _mark_status(bot_session_id, BotStatus.FAILED, error=f"Meeting was not live: {outcome}")
+        await _safe_leave(joiner)
+        return
 
     from app.bot.audio_capture import PlaywrightAudioCapture
     from app.bot.screen_capture import PlaywrightScreenCapture
 
     audio = PlaywrightAudioCapture(joiner.page)
     screen = PlaywrightScreenCapture(joiner.page)
-    await audio.start()
-    await screen.start()
+    try:
+        await audio.start()
+        await screen.start()
+    except Exception as exc:
+        _mark_status(bot_session_id, BotStatus.FAILED, error=f"Capture could not start: {exc}")
+        with contextlib.suppress(Exception):
+            await audio.stop()
+            await screen.stop()
+        await _safe_leave(joiner)
+        return
+    _mark_status(bot_session_id, BotStatus.LIVE, joined_at=datetime.now(UTC))
 
     audio_chunks: list[bytes] = []
     kept_screen_frames: list[tuple[Path, float]] = []
@@ -337,6 +350,10 @@ async def run_bot_session(bot_session_id: str) -> None:
                 outcome = await joiner.poll_status()
                 if outcome in (JoinOutcome.ENDED, JoinOutcome.FAILED, JoinOutcome.DENIED):
                     break
+        except Exception as exc:
+            # Preserve captured data even if platform DOM/status polling breaks.
+            log.warning("bot.runner.poll_failed", bot_session=bot_session_id, error=str(exc))
+            _mark_status(bot_session_id, BotStatus.LIVE, error=f"Capture interrupted: {exc}")
         finally:
             try:
                 roster = await joiner.roster()

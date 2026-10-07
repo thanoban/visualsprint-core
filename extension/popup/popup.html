@@ -23,7 +23,8 @@
       <div id="status-idle" class="status status-idle">
         <span class="dot"></span> Ready to capture
       </div>
-      <p class="hint">Join a Google Meet, Zoom, or Teams meeting to start capturing automatically.</p>
+      <p class="hint">Join a meeting in this browser, then click the extension icon to start capture. Desktop Zoom/Teams apps require an official platform connection.</p>
+      <button id="microphone-btn" class="btn-secondary">Enable microphone capture</button>
       <button id="signout-btn" class="btn-secondary">Sign out</button>
     </div>
 
@@ -34,6 +35,7 @@
         <span class="dot pulse"></span> Recording
       </div>
       <div id="meeting-title" class="meeting-title"></div>
+      <p id="capture-detail" class="hint"></p>
       <div class="stats">
         <span id="elapsed-time">0:00</span> elapsed
         &nbsp;·&nbsp;
