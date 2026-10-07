@@ -86,6 +86,23 @@ Slice 3 evidence: all 101 capture tests passed; scoped Ruff and strict Mypy pass
 not invoked by the API or worker yet. Reconciliation consumption and authenticated v2 routes remain
 required before the new capture lane may be enabled.
 
+## Slice 4: authenticated capture-request API
+
+Published in `ebda34d`:
+
+- Added authenticated `POST /api/v2/workspaces/{org_id}/capture-requests` and scoped GET.
+- Requires an `Idempotency-Key`; exact retries return the original request and changed payloads return 409.
+- Stores the invitation URL in the configured SecretStore under a deterministic input-derived reference.
+- Performs idempotency preflight before secret writes and cleans up secrets for known scope/conflict failures.
+- Retains deterministic secret material when database commit outcome is unknown, allowing reconciliation
+  instead of deleting data that a successfully committed request may require.
+- Returns lifecycle metadata only; meeting URLs, passcodes, secret references and provider errors are absent.
+- Cross-workspace meeting IDs and capture request IDs return 404 without exposing tenant data.
+
+Slice 4 evidence: 114 capture and capture-API tests passed; scoped Ruff and strict Mypy passed.
+The endpoint persists intent only. Worker invocation, provider reconciliation, stop/status APIs and the
+frontend route switch remain gated.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
