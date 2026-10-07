@@ -4,19 +4,19 @@ Updated 2026-10-07. Source of truth for the target: [full plan](18-founder-platf
 
 ## Current phase: implementation resumed
 
-The owner resumed implementation on 2026-10-07. Work proceeds one reviewed slice at a time, starting
-with F00 baseline verification and the capture-provider foundation. The pre-pause local code below is
-unpublished and must be validated before integration; it is not a production fix.
+The owner resumed implementation on 2026-10-07. Work proceeds one reviewed slice at a time. The
+capture-provider foundation is published on the feature branch at `a7ccbe0`; it is isolated from the
+product route and is not a production capture fix.
 
 The engineering specification is now documented in [design and structure](20-engineering-design.md),
 [feature delivery](21-feature-delivery-plan.md), [data and API contracts](22-data-and-api-contracts.md),
 [testing and operations](23-testing-and-operations.md), and [decisions and traceability](24-decisions-and-traceability.md).
-These describe planned behavior, not implemented features. Resume with F00 baseline verification,
-then follow the dependencies and acceptance gates in the feature plan.
+These describe planned behavior, not implemented features. Continue F00 baseline verification, then
+follow the dependencies and acceptance gates in the feature plan.
 
-## Slice 1: provider contract and truthful failure UI
+## Slice 1: provider contract
 
-Implemented locally:
+Published in `a7ccbe0`:
 
 - Provider-neutral capture reference, lifecycle snapshot and transcript segment contracts.
 - Strict Meet/Zoom/Teams invitation URL parsing, including passcode preservation and hostname checks.
@@ -27,7 +27,8 @@ Implemented locally:
 - Transcript revisions preserve final segments and timing; malformed ranges fail loudly; unnamed speakers
   stay unknown. Provider labels are not verified person identities.
 - Read-only credential/API contract probe that never joins a meeting or fetches transcript contents.
-- Chat failure no longer inserts a fabricated demo answer. The question is restored for retry.
+
+The separate local chat failure change is not part of this published slice and remains unverified.
 
 Qualification mode explicitly sends `recording_enabled=false` and `transcribe_enabled=true`.
 It expects a configured Vexa STT backend. This is a development boundary, not the final temporary-audio
@@ -47,8 +48,8 @@ legacy behavior until the durable orchestration slice is complete. Do not advert
 
 ## Validation
 
-Before the pause: 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and
-Mypy checks passed. These are local results only. Frontend verification, live provider capture,
+For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
+checks passed. These are local results only. Frontend verification, live provider capture,
 capacity, retention enforcement and production qualification are not established by these results.
 Commands below are the local verification runbook; they do not authorize paid provisioning.
 
