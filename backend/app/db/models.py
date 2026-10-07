@@ -1417,3 +1417,49 @@ class CaptureMediaRef(TimestampMixin, Base):
     delete_attempts: Mapped[int] = mapped_column(Integer, default=0)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     overdue: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# --------------------------------------------------------------------------- #
+# F09 — Versioned project/customer memory
+# --------------------------------------------------------------------------- #
+
+
+class SummaryState(enum.StrEnum):
+    PENDING = "pending"
+    READY = "ready"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class SummaryVersion(TimestampMixin, Base):
+    """Incrementally maintained summary for a project or customer scope.
+
+    One row per (scope_kind, scope_id, input_revision_hash) triple.  The latest
+    READY row is the authoritative memory for that scope; older rows are kept for
+    audit and rollback.  scope_kind is "project" or "customer".
+
+    structured_summary carries the JSON payload (decisions, commitments,
+    open_questions, context_summary); it must not contain raw transcript text —
+    only verified claims with source_meeting_ids references.
+    """
+
+    __tablename__ = "summary_version"
+    __table_args__ = (
+        CheckConstraint("scope_kind IN ('project', 'customer')", name="ck_sv_scope_kind"),
+        Index("ix_sv_scope_state", "scope_kind", "scope_id", "state"),
+        Index("ix_sv_org_scope", "org_id", "scope_kind", "scope_id"),
+        UniqueConstraint("scope_kind", "scope_id", "input_revision_hash", name="uq_sv_scope_revision"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    scope_kind: Mapped[str] = mapped_column(String(16))
+    scope_id: Mapped[str] = mapped_column(String(36))
+    input_revision_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[SummaryState] = mapped_column(
+        Enum(SummaryState, native_enum=False, length=16),
+        default=SummaryState.PENDING,
+    )
+    structured_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_meeting_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, default=None)

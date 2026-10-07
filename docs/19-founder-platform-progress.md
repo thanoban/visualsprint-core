@@ -424,6 +424,36 @@ re-assign, move with/without source membership, non-member denied, unassign, ide
 non-member unassign denied, list, list non-member denied, 404 for unknown meeting/project. mypy clean
 on updated file.
 
+## Slice 20: F09 — Project/customer memory and decision tracking
+
+Published in this session:
+
+- **`SummaryVersion`** model added to `app/db/models.py` with Alembic migration `a1b2c3d4e5f6`:
+  tracks versioned project/customer memory keyed by `(scope_kind, scope_id, input_revision_hash)`.
+  Fields: `state` (pending/ready/partial/failed), `structured_summary` (JSON: decisions, commitments,
+  open_questions, blockers, context_summary), `source_meeting_ids`, `error`.  UniqueConstraint on
+  (scope_kind, scope_id, input_revision_hash) ensures idempotency.
+- **`app/memory/project_memory.py`**: deterministic aggregation service:
+  - `rebuild_project_memory(session_factory, org_id, project_id)` — aggregates `KnowledgeItem`s for
+    all meetings assigned to the project.  Idempotent by hash; returns existing READY row when
+    the meeting set hasn't changed.  New row created when meetings are added/removed.
+  - `rebuild_customer_memory(session_factory, org_id, customer_id)` — same logic across all projects
+    belonging to the customer.
+  - `latest_summary(db, scope_kind, scope_id)` — returns the latest READY row, or None.
+  - Only `VERIFIED`/`PARTIALLY_SUPPORTED` confidence items included (raw transcript never in summary).
+  - Items filtered to `NEW`/`RECURRING`/`REOPENED` lifecycle states only.
+- **`GET /api/v2/workspaces/{org_id}/projects/{project_id}/memory`** — returns `MemoryView`.
+  Project member access gate; computes synchronously on first call.
+- **`GET /api/v2/workspaces/{org_id}/customers/{customer_id}/memory`** — same shape for customers;
+  aggregates from all projects in the org linked to the customer.
+- Both endpoints wired into `app/main.py` via `memory_router`.
+
+Slice 20 evidence: 9 API tests pass in `tests/api/test_memory.py` (empty project, with knowledge
+items, confidence filter, idempotency, non-member 404, unknown project/customer 404, customer
+aggregation); 8 service unit tests pass in `tests/memory/test_project_memory.py` (hash stability,
+idempotency, new-version-after-assignment, knowledge-item aggregation, customer-across-projects,
+latest_summary None case). Alembic reports one head (a1b2c3d4e5f6). mypy clean on new files.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.
