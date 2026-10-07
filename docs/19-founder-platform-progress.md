@@ -533,6 +533,41 @@ correct hash, wrong hash 409, idempotent, unknown 404, rejected proposal 409; re
 idempotent, approved proposal 409, unknown 404). Alembic reports one head (e6f7a8b9c0d1). mypy
 clean on new file.
 
+## Slice 24: F13 — Usage, export and deletion operations
+
+Published in this session:
+
+- **`AsyncJobStatus`** enum added to `app/db/models.py`: PENDING/RUNNING/DONE/FAILED (distinct from
+  the existing pipeline `JobStatus` which has QUEUED, not PENDING).
+- **`ExportJob`** and **`DeletionJob`** models added to `app/db/models.py` with Alembic migration
+  `f7a8b9c0d1e2`: both track scope_kind ("project"/"workspace"), scope_id, created_by, status,
+  error, completed_at.  CheckConstraints enforce valid scope_kinds.
+- **`app/api/usage.py`** — `GET /api/v2/workspaces/{org_id}/usage`:
+  - Period filter by year/month (defaults to current UTC month).
+  - Reads `UsageReservation` rows for capture minutes (reserved vs. reconciled separately).
+  - Reads `LlmCall` rows for input/output token counts.
+  - Returns `UsageView` with capture and LLM sub-objects, configured limits from `Org`, and
+    `over_budget` flag when `monthly_llm_token_budget` is set and exceeded.
+  - No new tables; reads only what the capture worker and LLM accounting layer already write.
+- **`app/api/ops_v2.py`** — 4 endpoints under `/api/v2/workspaces/{org_id}`:
+  - `POST /exports` (202) — enqueue async export; workspace scope requires org owner;
+    project scope requires project membership.
+  - `GET /exports/{id}` — poll export job; only the creator can read it (404 for others).
+  - `POST /deletions` (202) — enqueue irreversible async deletion; workspace scope requires org owner;
+    project scope requires project owner (not just member).
+  - `GET /deletions/{id}` — poll deletion job; creator-only.
+  - Jobs are PENDING on creation; a background worker (out of scope for this slice) transitions
+    them. This slice provides the contract; execution is the next step.
+- Both routers wired into `app/main.py`.
+
+Slice 24 evidence: 17 new tests pass in `tests/api/test_usage_ops_v2.py` (usage empty/with LLM
+calls/over-budget/period filter; export workspace owner/member 403/project member/non-member 404/
+get/other-user 404/invalid scope 422; deletion workspace owner/member 403/project owner/member 403/
+get/invalid scope 422). Alembic reports one head (f7a8b9c0d1e2). mypy clean on both new files.
+
+F13 acceptance criteria status: usage metering ✅, export job API ✅, deletion job API ✅.
+Background worker execution and connection health diagnostics are deferred to F14 pilot ops.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

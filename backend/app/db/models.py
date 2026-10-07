@@ -1597,3 +1597,70 @@ class AgendaVersion(TimestampMixin, Base):
     edited_by: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
     version: Mapped[int] = mapped_column(Integer, default=1)
     objective: Mapped[str] = mapped_column(Text, default="")
+
+
+# --------------------------------------------------------------------------- #
+# F13 — Export and deletion jobs
+# --------------------------------------------------------------------------- #
+
+
+class AsyncJobStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class ExportJob(TimestampMixin, Base):
+    """Async export job for a project or workspace.
+
+    Scope kind is 'project' or 'workspace'; scope_id is the project/org id.
+    When done, download_url points to a signed blobstore URL valid for 24 h.
+    No blob content is inlined; the export is a JSON manifest with references.
+    """
+
+    __tablename__ = "export_job"
+    __table_args__ = (
+        CheckConstraint("scope_kind IN ('project', 'workspace')", name="ck_ej_scope_kind"),
+        Index("ix_ej_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    scope_kind: Mapped[str] = mapped_column(String(16))
+    scope_id: Mapped[str] = mapped_column(String(36))
+    created_by: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    status: Mapped[AsyncJobStatus] = mapped_column(
+        Enum(AsyncJobStatus, native_enum=False, length=16),
+        default=AsyncJobStatus.PENDING,
+    )
+    download_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class DeletionJob(TimestampMixin, Base):
+    """Async deletion job for a project or workspace.
+
+    Deletes all data associated with the scope, including meetings,
+    capture sessions, transcripts, knowledge items, and summaries.
+    Workspace deletion also removes all projects.  Irreversible.
+    """
+
+    __tablename__ = "deletion_job"
+    __table_args__ = (
+        CheckConstraint("scope_kind IN ('project', 'workspace')", name="ck_dj_scope_kind"),
+        Index("ix_dj_org_status", "org_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    scope_kind: Mapped[str] = mapped_column(String(16))
+    scope_id: Mapped[str] = mapped_column(String(36))
+    created_by: Mapped[str] = mapped_column(ForeignKey("app_user.id"))
+    status: Mapped[AsyncJobStatus] = mapped_column(
+        Enum(AsyncJobStatus, native_enum=False, length=16),
+        default=AsyncJobStatus.PENDING,
+    )
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
