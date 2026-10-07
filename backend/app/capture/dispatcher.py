@@ -124,9 +124,9 @@ def _owned_event(db: Session, claim: DispatchClaim, worker_id: str) -> OutboxEve
     ).scalar_one_or_none()
 
 
-def _enqueue_reconciliation(db: Session, request: CaptureRequest) -> None:
+def enqueue_reconciliation(db: Session, request: CaptureRequest) -> None:
     existing = db.execute(
-        select(OutboxEvent.id).where(
+        select(OutboxEvent).where(
             OutboxEvent.operation == "capture.reconcile",
             OutboxEvent.entity_id == request.id,
             OutboxEvent.input_revision == request.input_hash,
@@ -142,6 +142,10 @@ def _enqueue_reconciliation(db: Session, request: CaptureRequest) -> None:
                 payload={"capture_request_id": request.id},
             )
         )
+    elif existing.status == OutboxStatus.FAILED:
+        existing.status = OutboxStatus.PENDING
+        existing.run_at = datetime.now(UTC)
+        existing.error_code = None
 
 
 def _prepare(
@@ -154,8 +158,22 @@ def _prepare(
 ) -> PreparedDispatch | None:
     with session_factory() as db:
         event = _owned_event(db, claim, worker_id)
-        request = db.get(CaptureRequest, claim.request_id)
+        request = db.execute(
+            select(CaptureRequest)
+            .where(CaptureRequest.id == claim.request_id)
+            .with_for_update()
+        ).scalar_one_or_none()
         if event is None or request is None:
+            return None
+        if request.status in {
+            CaptureRequestStatus.CANCELLED,
+            CaptureRequestStatus.FINALIZED,
+            CaptureRequestStatus.FAILED,
+        }:
+            event.status = OutboxStatus.DONE
+            event.locked_by = None
+            event.locked_at = None
+            db.commit()
             return None
         db.execute(select(Org.id).where(Org.id == request.org_id).with_for_update()).scalar_one()
 
@@ -169,7 +187,7 @@ def _prepare(
             request.status = CaptureRequestStatus.RECONCILIATION_REQUIRED
             previous.state = CaptureAttemptState.UNKNOWN
             previous.error_code = "dispatch_ownership_recovered"
-            _enqueue_reconciliation(db, request)
+            enqueue_reconciliation(db, request)
             event.status = OutboxStatus.DONE
             event.locked_by = None
             event.locked_at = None
@@ -254,7 +272,7 @@ def _finish_failure(
         if uncertain:
             attempt.state = CaptureAttemptState.UNKNOWN
             request.status = CaptureRequestStatus.DISPATCH_UNKNOWN
-            _enqueue_reconciliation(db, request)
+            enqueue_reconciliation(db, request)
         else:
             attempt.state = CaptureAttemptState.FAILED
             request.status = CaptureRequestStatus.FAILED
@@ -345,7 +363,8 @@ async def dispatch_next(
         attempt.state = _STATE_MAP[snapshot.status]
         attempt.provider_status = snapshot.provider_status
         attempt.last_provider_contact_at = timestamp
-        request.status = CaptureRequestStatus.ACCEPTED
+        request.status = CaptureRequestStatus.MONITORING
+        enqueue_reconciliation(db, request)
         event.status = OutboxStatus.DONE
         event.locked_by = None
         event.locked_at = None

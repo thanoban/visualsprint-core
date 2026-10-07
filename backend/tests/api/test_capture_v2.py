@@ -1,5 +1,17 @@
 from app.api.capture_v2 import get_capture_secret_store
-from app.db.models import CaptureRequest, Meeting, Org, OrgMember, OutboxEvent, User
+from app.db.models import (
+    CaptureAttempt,
+    CaptureAttemptState,
+    CaptureRequest,
+    CaptureRequestStatus,
+    Meeting,
+    Org,
+    OrgMember,
+    OutboxEvent,
+    OutboxStatus,
+    ProviderBinding,
+    User,
+)
 from app.main import app
 
 USER_ID = "test-user-0000-0000-0000-000000000000"
@@ -148,3 +160,74 @@ def test_get_is_scoped_to_workspace(client, db_session):
     assert client.get(
         f"/api/v2/workspaces/not-the-org/capture-requests/{created['id']}"
     ).status_code == 404
+
+
+def test_stop_before_dispatch_cancels_intent_and_outbox(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "cancel-me"},
+        json=payload(meeting.id),
+    ).json()
+
+    response = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests/{created['id']}/stop"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "cancelled"
+    assert response.json()["stop_state"] == "confirmed"
+    event = db_session.query(OutboxEvent).filter_by(operation="capture.dispatch").one()
+    assert event.status == OutboxStatus.DONE
+
+
+def test_stop_live_attempt_queues_reconciliation_and_status_exposes_freshness(client, db_session):
+    org, meeting = seed(db_session)
+    install_secrets(MemorySecrets())
+    created = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests",
+        headers={"Idempotency-Key": "stop-live"},
+        json=payload(meeting.id),
+    ).json()
+    request = db_session.get(CaptureRequest, created["id"])
+    request.status = CaptureRequestStatus.MONITORING
+    binding = ProviderBinding(
+        org_id=org.id,
+        provider="vexa",
+        endpoint_ref="endpoint",
+        account_scope_id="account-stop",
+        secret_ref="key",
+    )
+    db_session.add(binding)
+    db_session.flush()
+    db_session.add(
+        CaptureAttempt(
+            org_id=org.id,
+            request_id=request.id,
+            attempt_no=1,
+            provider_binding_id=binding.id,
+            provider_record_id="record-live",
+            state=CaptureAttemptState.CAPTURING,
+            provider_status="active",
+        )
+    )
+    db_session.commit()
+
+    stopped = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop"
+    )
+    repeated = client.post(
+        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop"
+    )
+    status_response = client.get(
+        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}"
+    )
+
+    assert stopped.status_code == 202
+    assert stopped.json()["stop_state"] == "requested"
+    assert repeated.json()["stop_state"] == "requested"
+    assert repeated.json()["version"] == stopped.json()["version"]
+    assert status_response.json()["provider_state"] == "capturing"
+    assert status_response.json()["provider_status"] == "active"
+    assert db_session.query(OutboxEvent).filter_by(operation="capture.reconcile").count() == 1

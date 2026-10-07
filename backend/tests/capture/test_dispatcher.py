@@ -144,12 +144,17 @@ async def test_dispatch_commits_one_attempt_then_records_provider_reference(stat
         event = db.execute(
             select(OutboxEvent).where(OutboxEvent.operation == "capture.dispatch")
         ).scalar_one()
-        assert request.status == CaptureRequestStatus.ACCEPTED
+        assert request.status == CaptureRequestStatus.MONITORING
         assert attempt.state == CaptureAttemptState.JOINING
         assert attempt.provider_record_id == "record-1"
         assert attempt.last_provider_contact_at is not None
         assert event.status == OutboxStatus.DONE
         assert event.locked_by is None
+        assert db.scalar(
+            select(func.count())
+            .select_from(OutboxEvent)
+            .where(OutboxEvent.operation == "capture.reconcile")
+        ) == 1
     assert len(provider.calls) == 1
 
     assert not await run(state, provider)
@@ -256,3 +261,22 @@ async def test_recovered_claim_with_existing_attempt_requires_reconciliation(sta
             .select_from(OutboxEvent)
             .where(OutboxEvent.operation == "capture.reconcile")
         ) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_cannot_dispatch_after_worker_claim(state):
+    with state() as db:
+        request = db.execute(select(CaptureRequest)).scalar_one()
+        request.status = CaptureRequestStatus.CANCELLED
+        db.commit()
+    provider = FakeProvider()
+
+    assert await run(state, provider)
+
+    assert provider.calls == []
+    with state() as db:
+        assert db.scalar(select(func.count()).select_from(CaptureAttempt)) == 0
+        event = db.execute(
+            select(OutboxEvent).where(OutboxEvent.operation == "capture.dispatch")
+        ).scalar_one()
+        assert event.status == OutboxStatus.DONE
