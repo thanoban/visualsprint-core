@@ -1,5 +1,11 @@
 # External setup — accounts, apps, and env vars
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Everything VisualSprint's code needs from the outside world, with exact
 steps. This is a one-time setup done by the platform operator (not
 something end customers ever do — see "Who does this" at the bottom).

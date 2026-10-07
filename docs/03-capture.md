@@ -1,5 +1,11 @@
 # Capture Layer
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 **Key realization:** we don't want the platforms' transcripts — we want their **audio** and **speaker labels**. Their transcripts can't handle code-switching (our job); their capture infrastructure is free, official, and unbreakable by UI changes. The old browser screen-share approach is dead.
 
 ## Per-platform primary path (no bot)

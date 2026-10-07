@@ -1,7 +1,24 @@
 # VisualSprint Documentation
 
-**[PROJECT_PLAN.md](PROJECT_PLAN.md) is the approved full plan — single source of truth.**
-The numbered files below split it into focused, structured documents.
+**Current phase: incremental implementation (2026-10-07).** Build one reviewed feature slice at a time.
+[PROJECT_PLAN.md](PROJECT_PLAN.md) is the canonical index and defines precedence.
+
+## Current specification — read first
+
+| Document | Purpose |
+|---|---|
+| [18 — Founder architecture](18-founder-platform-architecture.md) | Product scope, architecture, research, cost and migration |
+| [20 — Engineering design](20-engineering-design.md) | Code structure, module boundaries, patterns and review standards |
+| [21 — Feature plan](21-feature-delivery-plan.md) | F00–F14 implementation slices, UI, dependencies and completion gates |
+| [22 — Data/API contracts](22-data-and-api-contracts.md) | Tables, permissions, endpoints, idempotency and background jobs |
+| [23 — Testing/operations](23-testing-and-operations.md) | Real-meeting tests, deployment, recovery, costs and release gates |
+| [24 — Decisions/traceability](24-decisions-and-traceability.md) | Owner choices, rejected assumptions, risks and requirements mapping |
+| [19 — Progress ledger](19-founder-platform-progress.md) | Actual local work, pause state and next implementation step |
+
+## Legacy references
+
+The documents below describe the earlier product or historical incidents. They remain useful
+for understanding existing code, but current specifications above supersede conflicting claims.
 
 | Doc | Contents |
 |---|---|

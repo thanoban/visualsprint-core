@@ -1,5 +1,11 @@
 # Vision & Competitive Position
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 ## The problem
 
 A transcript alone cannot give the full context of a meeting — the real information lives in *speech + what was on screen at that moment + who said it + what earlier meetings established*. VisualSprint captures all four, fuses them with a multi-agent system, and turns meetings into **searchable, evidence-grounded organizational memory** for teams that mix **Sinhala, Tamil, and English** mid-sentence.

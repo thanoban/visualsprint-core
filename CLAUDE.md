@@ -1,5 +1,21 @@
 # VisualSprint — Agent Instructions
 
+## Current direction — 2026-10-07
+
+**Incremental implementation phase:** the owner resumed development on 2026-10-07. Implement the
+numbered feature plan one bounded, tested slice at a time. Do not deploy incomplete orchestration or
+provision paid resources without a separate decision. Preserve unrelated local code changes.
+[docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) indexes the complete current spec.
+
+The user approved [docs/18-founder-platform-architecture.md](docs/18-founder-platform-architecture.md):
+founder customer/project memory, persistent chats and agendas; unattended capture; open-source-first
+Vexa qualification; inexpensive ASR/LLM APIs; English-first pilot; no permanent recordings.
+Temporary audio is allowed for recovery for at most 24 hours once deletion is implemented.
+This explicitly supersedes the older official-APIs-first capture and three-language launch priority
+below. Preserve vendor interfaces, evidence verification, tenant boundaries and approved actions.
+Read [docs/19-founder-platform-progress.md](docs/19-founder-platform-progress.md) before continuing.
+Do not infer that a provider adapter means the new capture pipeline is connected or deployed.
+
 Multilingual (Sinhala/Tamil/English) meeting-intelligence platform. Full plan: [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) (split topically in `docs/01`–`07`). Read those for depth — this file states only what a fresh session must not re-derive or re-litigate.
 
 **North star / acceptance test:** "why are we using MongoDB?" must return a traced answer across meetings — speaker, transcript span, screen evidence — correctly transcribed through code-switching, any capture gap disclosed honestly.

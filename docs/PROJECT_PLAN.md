@@ -1,5 +1,38 @@
 # VisualSprint — Full Project Plan
 
+## Current plan — founder platform, 2026-10-07
+
+**Incremental implementation phase.** Build one numbered feature slice at a time with its tests and
+evidence. Production deployment and paid provisioning remain separately gated; existing local code
+is not evidence that the target architecture is delivered.
+
+This document is the plan index. The current specification is the following linked set:
+
+1. [18 — Product architecture, low-cost stack, research and full delivery direction](18-founder-platform-architecture.md)
+2. [20 — Engineering boundaries, target folder structure and coding standards](20-engineering-design.md)
+3. [21 — Feature-by-feature development plan, F00–F14](21-feature-delivery-plan.md)
+4. [22 — Database, authorization, API, state and job contracts](22-data-and-api-contracts.md)
+5. [23 — Tests, live qualification, deployment, cost and operations](23-testing-and-operations.md)
+6. [19 — Actual progress, pause state and implementation resume order](19-founder-platform-progress.md)
+7. [24 — Decisions, risks and requirements traceability](24-decisions-and-traceability.md)
+
+Priority: latest explicit owner instruction -> current specification above -> legacy reference below.
+Future implementation should follow F00–F14 in order and update the progress ledger after each
+verified slice. A provider interface or green unit test is not evidence of live capture readiness.
+
+The current product is a founder workspace with customers, projects, automatic unattended meeting
+bots, cited meeting summaries, customer/project memory, persistent chats, agendas and approved
+integrations. English-first pilot. Open-source Vexa is a candidate requiring live qualification;
+Groq/Gemini are low-cost API candidates. Users upload nothing. No permanent recordings; temporary
+audio is allowed up to 24 hours only after retention controls are implemented.
+
+## Historical original plan — not current implementation instructions
+
+Everything below records the original multilingual/screen-first approach. Its locked decisions,
+competitor claims, phase status and provider assumptions are historical. In particular, the old
+claims about Fireflies lacking cross-meeting context, universal official capture availability,
+and day-one three-language delivery must not drive the new implementation.
+
 ## Context
 
 **The problem in one sentence:** a transcript alone cannot give the full context of a meeting — the real information lives in *speech + what was on screen at that moment + who said it + what earlier meetings established*. VisualSprint captures all four, fuses them with a multi-agent system, and turns meetings into **searchable, evidence-grounded organizational memory** for teams that mix **Sinhala, Tamil, and English** mid-sentence.

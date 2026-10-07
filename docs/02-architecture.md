@@ -1,5 +1,11 @@
 # Architecture
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 ## Non-negotiable spine
 
 **Deterministic software owns the workflow and decides what is true. Agents interpret content; they never call each other, never control orchestration, never self-certify.**

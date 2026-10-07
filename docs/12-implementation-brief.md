@@ -1,5 +1,11 @@
 # Implementation Brief — Participant Intelligence & Agent Accuracy
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 **Audience: a coding agent picking up this work with no prior context.** This is the
 single entry point — read this file first, then follow the links out to the four
 design documents it consolidates. Everything here has been reviewed and approved by

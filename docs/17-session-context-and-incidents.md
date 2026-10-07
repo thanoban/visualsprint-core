@@ -1,5 +1,11 @@
 # Full System Context — Architecture, Multi-Agent Roster, and the 2026-08-27 Incident Log
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 This document is a single-file snapshot of **everything relevant to the current
 debugging session**: the full system architecture, the complete multi-agent roster,
 every root cause found this session and the previous one, and their fixes. It exists

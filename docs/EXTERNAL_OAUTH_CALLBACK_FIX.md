@@ -1,5 +1,11 @@
 # Fix vendor OAuth redirect URLs — one-time console updates
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Our server already sends the correct production callback URL for every provider
 (`VS_OAUTH_REDIRECT_BASE_URL=https://visualsprint-api-5ieahiycsa-uw.a.run.app`, confirmed
 live in production). The remaining risk is entirely on each vendor's own dashboard: these

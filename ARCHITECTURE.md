@@ -1,5 +1,10 @@
 # ARCHITECTURE — as-built review
 
+> Historical review below. The current replacement architecture is
+> [the founder platform plan](docs/18-founder-platform-architecture.md), approved 2026-10-07.
+> [Current implementation status](docs/19-founder-platform-progress.md) separates local code
+> from live proof. Historical statements such as "all findings fixed" are scoped to that review.
+
 **Scope.** [docs/02-architecture.md](docs/02-architecture.md) states the *intended* architecture — the spine, the five agents, the anti-hallucination rules. This file documents the system **as it actually exists in code**, and records an architecture review of it: what holds up, what does not, and what to change.
 
 **Review date:** 2026-08-18 · **Method:** static reading of `backend/app/**`, `backend/alembic/**`, `backend/tests/**`, `.github/workflows/**`, `infra/docker-compose.yml`.

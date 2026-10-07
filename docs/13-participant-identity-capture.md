@@ -1,5 +1,11 @@
 # Participant Identity Capture — getting real names, on every platform
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Speaker names are table stakes. Otter, Read.ai, and Fireflies all show "Nimal said X",
 not "Speaker 2 said X". Per-person decision tracking — this product's differentiator
 ([09](09-participant-intelligence.md), [10](10-longitudinal-intelligence.md)) — is

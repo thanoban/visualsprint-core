@@ -1,5 +1,11 @@
 # Agent Architecture — the complete roster and how it gets accurate
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Per-participant decision tracking is the product's core claim. It is also the highest-risk
 output we produce: telling someone their decisions get reversed, or that they raise the
 same blocker without progress, must be **right**, **reproducible**, and **traceable** —

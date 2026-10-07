@@ -1,5 +1,11 @@
 # Production Status — Capture Layer
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Live-verified state of the deployed system, kept current as incidents are found and
 fixed. Unlike `06-roadmap.md` (what's built) this tracks **what's actually working in
 `visualsprint-agent`** — verified against Cloud Run logs, IAM, and the production DB,

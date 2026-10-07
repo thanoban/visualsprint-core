@@ -1,5 +1,11 @@
 # Bot reliability correction — 2026-08-26
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 This document records the production investigation and permanent code/configuration
 corrections for VisualSprint's Mode B meeting bot. It is intentionally specific:
 the bot is a browser guest, so Google Meet and Teams host-access policies remain

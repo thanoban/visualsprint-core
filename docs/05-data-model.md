@@ -1,5 +1,11 @@
 # Data Model
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 Implemented in [`backend/app/db/models.py`](../backend/app/db/models.py). UUID string PKs; `org_id` on every tenant-scoped row; timestamps everywhere.
 
 ## Tenancy & identity

@@ -1,5 +1,11 @@
 # VisualSprint
 
+**Current direction (2026-10-07):** [Founder platform architecture and full delivery plan](docs/18-founder-platform-architecture.md).
+**Implementation resumed on 2026-10-07.** Build one reviewed feature slice at a time, starting at
+[the master plan index](docs/PROJECT_PLAN.md), then see [actual progress](docs/19-founder-platform-progress.md)
+for local work versus planned features. The older capture paths below
+describe the legacy product and are not evidence that the replacement is deployed.
+
 Core platform for multilingual meeting intelligence, transforming Sinhala, Tamil, and English conversations, shared screens, and meeting history into searchable knowledge, organizational memory, and actions.
 
 **Product loop:** Capture → Understand → Verify → Remember → Act

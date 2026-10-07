@@ -1,5 +1,11 @@
 # Longitudinal Intelligence — the multi-agent analysis layer
 
+> Historical reference — reviewed 2026-10-07. This document preserves earlier design,
+> setup or incident context; its completion claims are not current production proof.
+> Use the [current master plan](PROJECT_PLAN.md) and [founder architecture](18-founder-platform-architecture.md)
+> for new work. Conflicting priorities and implementation instructions below are superseded.
+> Current implementation follows the numbered current plan; do not execute superseded instructions below.
+
 The unique selling point, stated plainly: **anyone can summarise a meeting. We can tell
 you that Nimal has raised the same blocker in four consecutive standups and nothing has
 moved.** That claim requires reasoning *across* meetings about *a person*, which no part
