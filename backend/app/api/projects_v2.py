@@ -1,4 +1,4 @@
-"""Customer directory and private project APIs."""
+"""Customer directory, private project and meeting assignment APIs."""
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +11,9 @@ from app.db.models import (
     Customer,
     CustomerContact,
     CustomerStatus,
+    Meeting,
+    MeetingAssignment,
+    MeetingAssignmentSource,
     OrgMember,
     Project,
     ProjectMember,
@@ -387,3 +390,187 @@ def remove_project_member(
     db.delete(target)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# F08 — Meeting assignment
+# --------------------------------------------------------------------------- #
+
+
+class AssignmentIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1, max_length=36)
+
+
+class AssignmentView(BaseModel):
+    id: str
+    meeting_id: str
+    project_id: str
+    source: str
+    version: int
+
+
+class ProjectMeetingListItem(BaseModel):
+    meeting_id: str
+    title: str
+    platform: str
+    scheduled_start: str | None = None
+    source: str
+
+
+@router.put("/meetings/{meeting_id}/assignment", response_model=AssignmentView)
+def assign_meeting(
+    org_id: str,
+    meeting_id: str,
+    body: AssignmentIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> AssignmentView:
+    """Assign or move a meeting to a project.
+
+    The caller must be a member of the target project.  If the meeting is
+    already assigned to a different project the assignment is replaced;
+    moving is only allowed when the caller is also a member of the source
+    project (otherwise the source project's data would silently become
+    inaccessible to its members).
+    """
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is None or meeting.org_id != org_id:
+        raise HTTPException(404, "meeting not found")
+
+    project = db.get(Project, body.project_id)
+    if project is None or project.org_id != org_id:
+        raise HTTPException(404, "project not found")
+
+    # Caller must be a member of the target project.
+    target_member = db.execute(
+        select(ProjectMember).where(
+            ProjectMember.org_id == org_id,
+            ProjectMember.project_id == body.project_id,
+            ProjectMember.user_id == user.id,
+        )
+    ).scalar_one_or_none()
+    if target_member is None:
+        raise HTTPException(403, "must be a project member to assign meetings")
+
+    existing = db.execute(
+        select(MeetingAssignment).where(MeetingAssignment.meeting_id == meeting_id)
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        if existing.project_id == body.project_id:
+            # Already assigned to this project — idempotent.
+            return AssignmentView(
+                id=existing.id,
+                meeting_id=meeting_id,
+                project_id=existing.project_id,
+                source=existing.source.value,
+                version=existing.version,
+            )
+        # Moving to a different project — caller must be a member of the source project too.
+        source_member = db.execute(
+            select(ProjectMember).where(
+                ProjectMember.org_id == org_id,
+                ProjectMember.project_id == existing.project_id,
+                ProjectMember.user_id == user.id,
+            )
+        ).scalar_one_or_none()
+        if source_member is None:
+            raise HTTPException(403, "must be a member of the source project to move a meeting")
+        existing.project_id = body.project_id
+        existing.assigned_by = user.id
+        existing.source = MeetingAssignmentSource.MANUAL
+        existing.version += 1
+        db.commit()
+        return AssignmentView(
+            id=existing.id,
+            meeting_id=meeting_id,
+            project_id=existing.project_id,
+            source=existing.source.value,
+            version=existing.version,
+        )
+
+    assignment = MeetingAssignment(
+        org_id=org_id,
+        meeting_id=meeting_id,
+        project_id=body.project_id,
+        assigned_by=user.id,
+        source=MeetingAssignmentSource.MANUAL,
+    )
+    db.add(assignment)
+    db.commit()
+    return AssignmentView(
+        id=assignment.id,
+        meeting_id=meeting_id,
+        project_id=assignment.project_id,
+        source=assignment.source.value,
+        version=assignment.version,
+    )
+
+
+@router.delete("/meetings/{meeting_id}/assignment", status_code=204)
+def unassign_meeting(
+    org_id: str,
+    meeting_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> Response:
+    """Remove a meeting's project assignment.  Caller must be a project member."""
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is None or meeting.org_id != org_id:
+        raise HTTPException(404, "meeting not found")
+
+    existing = db.execute(
+        select(MeetingAssignment).where(MeetingAssignment.meeting_id == meeting_id)
+    ).scalar_one_or_none()
+    if existing is None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    member = db.execute(
+        select(ProjectMember).where(
+            ProjectMember.org_id == org_id,
+            ProjectMember.project_id == existing.project_id,
+            ProjectMember.user_id == user.id,
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise HTTPException(403, "must be a project member to unassign")
+
+    db.delete(existing)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/projects/{project_id}/meetings", response_model=list[ProjectMeetingListItem])
+def list_project_meetings(
+    org_id: str,
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> list[ProjectMeetingListItem]:
+    """List meetings assigned to this project.  Only project members can access."""
+    _membership(db, org_id, project_id, user.id)
+
+    rows = db.execute(
+        select(MeetingAssignment, Meeting)
+        .join(Meeting, Meeting.id == MeetingAssignment.meeting_id)
+        .where(
+            MeetingAssignment.org_id == org_id,
+            MeetingAssignment.project_id == project_id,
+        )
+        .order_by(Meeting.scheduled_start.desc())
+    ).all()
+
+    return [
+        ProjectMeetingListItem(
+            meeting_id=meeting.id,
+            title=meeting.title or "Untitled meeting",
+            platform=meeting.platform,
+            scheduled_start=meeting.scheduled_start.isoformat() if meeting.scheduled_start else None,
+            source=assignment.source.value,
+        )
+        for assignment, meeting in rows
+    ]

@@ -384,6 +384,46 @@ tests pass; scoped Mypy clean on new files. Alembic reports one head (f7b8c9d0e1
 now wired from capture-ENDED through Utterance rows to the "screen" pipeline stage. Audio recording
 remains disabled — the Groq ASR lane for temporary audio is the next F06 slice.
 
+## Slice 18: F07 — Meeting capture-status endpoint
+
+Published in this session:
+
+- **`_pipeline_progress(state) -> int`** added to `app/api/meetings.py`: maps every `CaptureState`
+  value to a 0–100 completion percentage using an ordered `_PIPELINE_STAGES` list; DONE → 100,
+  FAILED → 0, others proportional.
+- **`_STATE_TO_STAGE`** mapping added: routes states to named pipeline stages (ACQUIRED maps to
+  "screen" for provider-transcript sessions).
+- **`MeetingListItem`** extended with `latest_capture_request_id`, `latest_capture_request_status`,
+  and `report_ready` fields; `GET /api/v1/orgs/{org_id}/meetings` now surfaces these from the latest
+  `CaptureRequest` and `CaptureSession` rows.
+- **`GET /api/v1/orgs/{org_id}/meetings/{meeting_id}/capture-status`** — new endpoint returning
+  `SessionStatus`: `state`, `report_ready`, `pipeline_progress_pct`, `report_title`, `report_summary`,
+  `has_coverage_gap`, `error`. Returns 404 when no `CaptureSession` exists.
+
+Slice 18 evidence: 7 new tests pass in `tests/api/test_meetings.py` (list surfacing, report_ready,
+processing/done/404/gap states). mypy clean on new endpoint.
+
+## Slice 19: F08 — Meeting assignment API
+
+Published in this session:
+
+- **`PUT /api/v2/workspaces/{org_id}/meetings/{meeting_id}/assignment`**: assigns or moves a meeting
+  to a project. Caller must be an org member and target-project member. Moving requires source-project
+  membership too (prevents silent data inaccessibility). Idempotent if already at same project.
+  Returns `AssignmentView` with `id`, `meeting_id`, `project_id`, `source`, `version`.
+- **`DELETE /api/v2/workspaces/{org_id}/meetings/{meeting_id}/assignment`**: removes the assignment.
+  Caller must be a project member. Idempotent (204) when not assigned.
+- **`GET /api/v2/workspaces/{org_id}/projects/{project_id}/meetings`**: lists meetings assigned to a
+  project in descending `scheduled_start` order. Only project members can access (`_membership` gate
+  returns 404 to non-members to avoid leaking project existence).
+- Three response models added to `projects_v2.py`: `AssignmentIn`, `AssignmentView`,
+  `ProjectMeetingListItem`.
+
+Slice 19 evidence: 11 new tests pass in `tests/api/test_projects_v2.py` covering: assign, idempotent
+re-assign, move with/without source membership, non-member denied, unassign, idempotent unassign,
+non-member unassign denied, list, list non-member denied, 404 for unknown meeting/project. mypy clean
+on updated file.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

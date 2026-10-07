@@ -1,5 +1,14 @@
 from app.auth import dependency as auth_dep
-from app.db.models import Customer, Org, OrgMember, Project, ProjectMember, User
+from app.db.models import (
+    Customer,
+    Meeting,
+    MeetingAssignment,
+    Org,
+    OrgMember,
+    Project,
+    ProjectMember,
+    User,
+)
 from app.main import app
 
 USER_1 = "test-user-0000-0000-0000-000000000000"
@@ -172,3 +181,201 @@ def test_archived_customer_cannot_receive_new_projects(client, db_session):
         json={"name": "Should not start", "customer_id": customer["id"]},
     )
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# F08 — Meeting assignment
+# --------------------------------------------------------------------------- #
+
+
+def _make_meeting(db, org_id, title="Standup", platform="zoom"):
+    m = Meeting(org_id=org_id, title=title, platform=platform)
+    db.add(m)
+    db.flush()
+    return m
+
+
+def test_assign_meeting_to_project(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "Sprint"}).json()
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    resp = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["meeting_id"] == meeting.id
+    assert body["project_id"] == project["id"]
+    assert body["source"] == "manual"
+    assert body["version"] == 1
+
+
+def test_assign_meeting_idempotent_same_project(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    first = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    second = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # idempotent — version unchanged, only one row
+    assert second.json()["version"] == 1
+    assert db_session.query(MeetingAssignment).count() == 1
+
+
+def test_move_meeting_to_different_project_requires_source_membership(client, db_session):
+    org = seed(db_session)
+    proj_a = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "A"}).json()
+    # Create proj_b as USER_2 (both are org members; USER_2 needs to own proj_b)
+    as_user(USER_2, "colleague@example.com")
+    proj_b = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "B"}).json()
+
+    # USER_1 assigns meeting to proj_a (USER_1 is owner of proj_a)
+    as_user(USER_1, "founder@example.com")
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+    client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": proj_a["id"]},
+    )
+
+    # USER_2 tries to move to proj_b; they own proj_b but NOT proj_a → 403
+    as_user(USER_2, "colleague@example.com")
+    denied = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": proj_b["id"]},
+    )
+    assert denied.status_code == 403
+
+    # Add USER_1 to proj_b and USER_2 to proj_a so USER_2 can move
+    as_user(USER_1, "founder@example.com")
+    client.put(
+        f"/api/v2/workspaces/{org.id}/projects/{proj_a['id']}/members",
+        json={"user_id": USER_2, "role": "editor"},
+    )
+    as_user(USER_2, "colleague@example.com")
+    moved = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": proj_b["id"]},
+    )
+    assert moved.status_code == 200
+    assert moved.json()["project_id"] == proj_b["id"]
+    assert moved.json()["version"] == 2
+
+
+def test_assign_meeting_non_project_member_is_denied(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    # USER_2 is org member but not project member
+    as_user(USER_2, "colleague@example.com")
+    resp = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    assert resp.status_code == 403
+
+
+def test_unassign_meeting_removes_assignment(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    resp = client.delete(f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment")
+    assert resp.status_code == 204
+    assert db_session.query(MeetingAssignment).count() == 0
+
+
+def test_unassign_meeting_idempotent_when_not_assigned(client, db_session):
+    org = seed(db_session)
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    resp = client.delete(f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment")
+    assert resp.status_code == 204
+
+
+def test_unassign_meeting_denied_for_non_project_member(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+
+    client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    as_user(USER_2, "colleague@example.com")
+    resp = client.delete(f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment")
+    assert resp.status_code == 403
+
+
+def test_list_project_meetings_returns_assigned_meetings(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    m1 = _make_meeting(db_session, org.id, title="Meeting A")
+    m2 = _make_meeting(db_session, org.id, title="Meeting B")
+    db_session.commit()
+
+    client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{m1.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+    client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{m2.id}/assignment",
+        json={"project_id": project["id"]},
+    )
+
+    resp = client.get(f"/api/v2/workspaces/{org.id}/projects/{project['id']}/meetings")
+    assert resp.status_code == 200, resp.text
+    titles = {item["meeting_id"] for item in resp.json()}
+    assert m1.id in titles
+    assert m2.id in titles
+
+
+def test_list_project_meetings_denied_for_non_member(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "Private"}).json()
+    as_user(USER_2, "colleague@example.com")
+    resp = client.get(f"/api/v2/workspaces/{org.id}/projects/{project['id']}/meetings")
+    # _membership raises 404 to avoid leaking project existence to non-members
+    assert resp.status_code == 404
+
+
+def test_assign_meeting_unknown_meeting_is_404(client, db_session):
+    org = seed(db_session)
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "P"}).json()
+    resp = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/does-not-exist/assignment",
+        json={"project_id": project["id"]},
+    )
+    assert resp.status_code == 404
+
+
+def test_assign_meeting_unknown_project_is_404(client, db_session):
+    org = seed(db_session)
+    meeting = _make_meeting(db_session, org.id)
+    db_session.commit()
+    resp = client.put(
+        f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
+        json={"project_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert resp.status_code == 404
