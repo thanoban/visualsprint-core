@@ -322,6 +322,40 @@ Slice 14 evidence: 12 new tests pass — 5 in `test_capture_v2.py` (is_stale fla
 exposure) and 7 in `test_reconciler.py` (transcript freshness update, lobby timeout, max runtime
 timeout, state_entered_at tracking). Alembic reports one head (d4e5f6a7b8c9). Scoped Mypy clean.
 
+## Slice 15: F05 edge-case tests
+
+Published in `87917f6`:
+
+- **Reconciler**: BLOCKED state preserved + rescheduled (not auto-stopped); retryable error
+  reschedules; non-retryable fails event + marks request RECONCILIATION_REQUIRED; stale lease
+  reclaimed by a second worker; fencing prevents stale write overwriting newer state; stop before
+  dispatch fires finds no reconcile event (returns False).
+- **Capture API**: recurring meeting URL + distinct idempotency keys → separate requests; stop on
+  FINALIZED request is idempotent (confirmed, no new outbox events).
+
+F05 done criteria now fully covered: duplicate/out-of-order events (fencing), API/worker restart
+(lease recovery), stop/create races, recurring URL reuse, host removal (BLOCKED), provider
+disconnect (retryable/non-retryable), and meeting overrun (Slice 14 timeouts).
+
+## Slice 16: F06 — Temporary media deletion lifecycle
+
+Published in this session:
+
+- **`CaptureMediaRef`** model added to `app/db/models.py` with Alembic migration `e5f6a7b8c9d0`:
+  tracks each media artifact (AUDIO_CHUNK, FULL_AUDIO, PROVIDER_RECORDING) with its blobstore
+  reference, hard-deadline `delete_after` (capped at 24 h from capture start), deletion state
+  (PENDING/DELETED/FAILED), attempt count, `deleted_at`, and `overdue` flag.
+- **`app/capture/media_deleter.py`**: `register_media_ref()` creates a deletion record capped at
+  24 h; `delete_pending()` async worker deletes refs whose deadline has passed, sets `overdue=True`
+  when past deadline, marks FAILED after 5 attempts; `list_overdue()` queries pending refs past
+  their deadline; `capture_started_at_for_request()` returns the request's created_at as the
+  deletion anchor.
+- Audio recording **remains disabled** — this slice provides the lifecycle infrastructure; the
+  actual audio→ASR path is F06's next slice (Vexa STT bridge + Groq integration).
+
+Slice 16 evidence: 7 media-deleter tests pass; mypy clean on both new files; Alembic reports one
+head (e5f6a7b8c9d0).
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

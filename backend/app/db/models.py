@@ -1371,3 +1371,45 @@ class LandingLead(TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class MediaRefKind(enum.StrEnum):
+    AUDIO_CHUNK = "audio_chunk"
+    FULL_AUDIO = "full_audio"
+    PROVIDER_RECORDING = "provider_recording"
+
+
+class MediaDeletionState(enum.StrEnum):
+    PENDING = "pending"
+    DELETED = "deleted"
+    FAILED = "failed"
+
+
+class CaptureMediaRef(TimestampMixin, Base):
+    """Tracks a temporary media artifact that must be deleted within a hard deadline.
+
+    Audio recording is disabled until the full deletion lifecycle is verified.
+    No artifact should outlive its delete_after timestamp under any failure mode.
+    """
+
+    __tablename__ = "capture_media_ref"
+    __table_args__ = (
+        Index("ix_capture_media_ref_pending", "state", "delete_after"),
+        Index("ix_capture_media_ref_request", "request_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
+    request_id: Mapped[str] = mapped_column(ForeignKey("capture_request.id"))
+    kind: Mapped[MediaRefKind] = mapped_column(
+        Enum(MediaRefKind, native_enum=False, length=24),
+    )
+    store_ref: Mapped[str] = mapped_column(String(1024))
+    delete_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    state: Mapped[MediaDeletionState] = mapped_column(
+        Enum(MediaDeletionState, native_enum=False, length=16),
+        default=MediaDeletionState.PENDING,
+    )
+    delete_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    overdue: Mapped[bool] = mapped_column(Boolean, default=False)
