@@ -46,6 +46,28 @@ NOT implemented by this slice:
 This adapter is not yet called by the product's Capture now button. Existing capture behavior remains
 legacy behavior until the durable orchestration slice is complete. Do not advertise the new path as live.
 
+## Slice 2: durable capture intent
+
+Published in `d9fd08f`:
+
+- Added tenant-owned provider bindings whose credentials and endpoints remain secret/config references.
+- Added capture requests and attempts with normalized lifecycle and stop states.
+- Added usage reservations and a transactional outbox; provider I/O does not occur in the request transaction.
+- Added an idempotent request service that checks workspace membership and meeting ownership before writes.
+- Reusing a key with the same canonical payload returns the original request; a different payload conflicts.
+- Meeting invitation URLs and passcodes are excluded from rows and outbox payloads; only a secret reference
+  and one-way input digest are retained.
+- Added an additive Alembic migration with one head and reversible table/index creation.
+
+Still intentionally disconnected: no API route calls this service, no dispatcher consumes the outbox,
+and no provider credentials were provisioned. Existing bot routes therefore keep their legacy behavior.
+
+Slice 2 evidence: 44 combined request/provider tests passed initially; the complete capture suite then
+passed 93 tests and the existing capture API passed 8 tests. Ruff and Mypy passed, Alembic reports one
+head, and PostgreSQL offline SQL generation succeeded. The broader API suite had 124 passing, one skipped,
+and five pre-existing failures in action approval/rejection actor attribution from unrelated dirty files.
+Those failures were not modified or hidden by this slice.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
