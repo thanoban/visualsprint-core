@@ -592,6 +592,10 @@ class CaptureRequest(TimestampMixin, Base):
         default=CaptureStopState.NOT_REQUESTED,
     )
     version: Mapped[int] = mapped_column(Integer, default=1)
+    # Set once the provider transcript has been ingested into the pipeline.
+    capture_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("capture_session.id"), default=None
+    )
 
 
 class CaptureAttemptState(enum.StrEnum):

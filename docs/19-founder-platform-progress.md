@@ -356,6 +356,34 @@ Published in this session:
 Slice 16 evidence: 7 media-deleter tests pass; mypy clean on both new files; Alembic reports one
 head (e5f6a7b8c9d0).
 
+## Slice 17: F06 — Provider transcript ingestion bridge
+
+Published in this session:
+
+- **`capture_session_id`** (nullable FK) added to `CaptureRequest` with Alembic migration
+  `f7b8c9d0e1a2`: set once the provider transcript is ingested and a `CaptureSession` created.
+- **`app/capture/transcript_bridge.py`**: `ingest_next()` async worker claimed by the capture
+  pass loop; `enqueue_ingest()` creates the outbox event after FINALIZED. The bridge:
+  - Fetches final Vexa transcript via `provider_resolver.resolve(binding).transcript(reference)`.
+  - Creates a `CaptureSession` (mode="B") linked to the request's Meeting.
+  - Writes `Utterance` rows for every final segment (non-final segments filtered out); sets
+    `speaker_cluster_id` from the provider's `speaker_label`, `asr_confidence` from `confidence`.
+  - Writes `CoverageInterval` rows (MISSING for empty-text segments, DEGRADED for confidence < 0.4).
+  - Updates `CaptureRequest.capture_session_id`; operation is idempotent (early exit if already set).
+  - Enqueues pipeline at the **"screen"** stage — acquire/diarize/identify/transcribe are all skipped.
+  - Retries up to 5 times on `CaptureProviderError`; marks `OutboxStatus.FAILED` on exhaustion.
+- **Reconciler** (`reconciler.py`): calls `enqueue_ingest(db, request)` when ENDED/FINALIZED,
+  alongside marking `event.status = OutboxStatus.DONE`.
+- **Capture worker** (`worker.py`): `ingest_next` added to the pass loop alongside `dispatch_next`
+  and `reconcile_next`; return dict gains `"ingest_events"` key.
+- **Worker tests** (`test_capture_worker.py`): updated to monkeypatch `ingest_next` and assert the
+  new result key.
+
+Slice 17 evidence: 10 new tests pass in `tests/capture/test_transcript_bridge.py`; all 147 capture
+tests pass; scoped Mypy clean on new files. Alembic reports one head (f7b8c9d0e1a2). Pipeline is
+now wired from capture-ENDED through Utterance rows to the "screen" pipeline stage. Audio recording
+remains disabled — the Groq ASR lane for temporary audio is the next F06 slice.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

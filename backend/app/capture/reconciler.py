@@ -216,6 +216,8 @@ async def reconcile_next(
         if snapshot.status == CaptureStatus.ENDED:
             request.status = CaptureRequestStatus.FINALIZED
             event.status = OutboxStatus.DONE
+            from app.capture.transcript_bridge import enqueue_ingest
+            enqueue_ingest(db, request)
         elif snapshot.status == CaptureStatus.FAILED:
             request.status = CaptureRequestStatus.FAILED
             event.status = OutboxStatus.DONE
