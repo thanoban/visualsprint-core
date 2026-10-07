@@ -1078,6 +1078,9 @@ class ProposedAction(TimestampMixin, Base):
     external_id: Mapped[str | None] = mapped_column(String(255), default=None)
     external_url: Mapped[str | None] = mapped_column(String(1000), default=None)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    # F12: immutable hash of the approved payload (sha256 of JSON-serialised payload).
+    # Changed payload requires a new approval — the check is in app/api/actions_v2.py.
+    approved_payload_hash: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class WorkStatus(enum.StrEnum):

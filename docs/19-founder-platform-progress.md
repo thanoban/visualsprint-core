@@ -505,6 +505,34 @@ Slice 22 evidence: 8 new tests pass in `tests/api/test_agenda.py` (generate with
 different objective creates new row, get latest, get 404 when none, update saves edits, version conflict,
 404 unknown occurrence). Alembic reports one head (c3d4e5f6a7b8). mypy clean on new file.
 
+## Slice 23: F12 — Approved integrations and payload immutability
+
+Published in this session:
+
+- **`approved_payload_hash`** column added to `ProposedAction` in `app/db/models.py`
+  with Alembic migration `e6f7a8b9c0d1` (revises `c3d4e5f6a7b8`): `String(64)` nullable column
+  storing sha256(JSON-serialised payload) written atomically with `approved_by_person_id` at
+  approval time. Payload immutability is enforced in app code; the existing DB CHECK constraint
+  (`ck_action_requires_approval`) ensures `approved_by_person_id IS NOT NULL` on any approved row.
+- **`app/api/actions_v2.py`** with 3 endpoints under `/api/v2/workspaces/{org_id}`:
+  - `GET /proposals` — list proposed actions for the org. Optional `status` filter (422 on invalid
+    values) and `project_id` scope filter (caller must be project member; 404 for non-member);
+    scoped list returns only actions whose `CaptureSession` is linked to a meeting assigned to the
+    project.
+  - `POST /proposals/{id}/approve` — approves a proposal. `payload_hash` in the body must match
+    `sha256(json.dumps(payload, sort_keys=True, separators=(",",":"))`; mismatch → 409. Idempotent
+    if already approved with the same hash. Rejected actions cannot be re-approved (409). Actor
+    comes from JWT, not request body.
+  - `POST /proposals/{id}/reject` — rejects a pending proposal. Idempotent if already rejected.
+    Approved actions cannot be rejected (409).
+- Router wired into `app/main.py` via `actions_v2_router` (already present from prior wiring).
+
+Slice 23 evidence: 15 new tests pass in `tests/api/test_actions_v2.py` (list empty/pending, status
+filter, invalid status 422, project scope non-member 404, project scope member sees actions; approve
+correct hash, wrong hash 409, idempotent, unknown 404, rejected proposal 409; reject pending,
+idempotent, approved proposal 409, unknown 404). Alembic reports one head (e6f7a8b9c0d1). mypy
+clean on new file.
+
 ## Next capture slice
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.
