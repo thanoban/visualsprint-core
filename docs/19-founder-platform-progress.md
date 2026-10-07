@@ -123,6 +123,22 @@ Slice 5 evidence: 129 capture and capture-API tests passed; scoped Ruff and stri
 This is local contract evidence. A worker service/job has not been deployed, Vexa has not been provisioned,
 and no real meeting admission/capture claim is made.
 
+## Slice 6: workspace capture onboarding
+
+Published in `41af1aa`:
+
+- Added explicit workspace timezone, English-pilot language, retention, capture policy, concurrency and
+  monthly-minute settings.
+- Capture defaults off. Enabling manual or calendar capture requires a recorded disclosure acknowledgement.
+- The policy is enforced in the durable application service, not only in the UI/API route.
+- Added member-readable and owner/admin-writable workspace endpoints with IANA timezone validation.
+- Enforced the selected pilot ceilings of five concurrent captures and 6,000 capture minutes per month.
+- Added an additive migration that backfills existing workspaces to safe capture-off defaults.
+
+Slice 6 evidence: 134 capture/workspace API tests passed; scoped Ruff and strict Mypy passed; Alembic
+reports one head and generated valid PostgreSQL migration SQL. Member invitation delivery and the
+customer/private-project model remain for the next F01/F02 slices.
+
 ## Validation
 
 For `a7ccbe0`, 35 targeted provider tests and 84 capture-suite tests passed; scoped Ruff and Mypy
