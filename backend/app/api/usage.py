@@ -10,8 +10,7 @@ LLM accounting layer.  This endpoint is read-only and exposes IDs/numbers,
 not meeting content.
 """
 
-from datetime import UTC, datetime, timezone
-from decimal import Decimal
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -80,22 +79,27 @@ def get_usage(
     period_start, period_end = _period_bounds(y, m)
 
     # --- capture minutes -------------------------------------------------
-    reservations = db.execute(
-        select(UsageReservation).where(
-            UsageReservation.org_id == org_id,
-            UsageReservation.created_at >= period_start,
-            UsageReservation.created_at < period_end,
-            UsageReservation.unit == "capture_minutes",
+    reservations = (
+        db.execute(
+            select(UsageReservation).where(
+                UsageReservation.org_id == org_id,
+                UsageReservation.created_at >= period_start,
+                UsageReservation.created_at < period_end,
+                UsageReservation.unit.in_({"bot_second", "capture_minutes"}),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     reserved_minutes = sum(
-        float(r.estimated_quantity)
+        float(r.estimated_quantity) / (60 if r.unit == "bot_second" else 1)
         for r in reservations
         if r.status == UsageReservationStatus.RESERVED
     )
     reconciled_minutes = sum(
-        float(r.actual_quantity or r.estimated_quantity)
+        float(r.actual_quantity if r.actual_quantity is not None else r.estimated_quantity)
+        / (60 if r.unit == "bot_second" else 1)
         for r in reservations
         if r.status == UsageReservationStatus.RECONCILED
     )

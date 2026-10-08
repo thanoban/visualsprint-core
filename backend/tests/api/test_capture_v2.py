@@ -16,7 +16,7 @@ from app.db.models import (
 )
 from app.main import app
 
-USER_ID = "test-user-0000-0000-0000-000000000000"
+USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
 class MemorySecrets:
@@ -46,6 +46,7 @@ def seed(db):
     db.add(org)
     db.flush()
     db.add(User(id=USER_ID, email="test@example.com"))
+    db.flush()
     db.add(OrgMember(org_id=org.id, user_id=USER_ID, role="owner"))
     meeting = Meeting(org_id=org.id, title="Customer call", platform="meet")
     db.add(meeting)
@@ -160,12 +161,14 @@ def test_get_is_scoped_to_workspace(client, db_session):
         json=payload(meeting.id),
     ).json()
 
-    assert client.get(
-        f"/api/v2/workspaces/{org.id}/capture-requests/{created['id']}"
-    ).status_code == 200
-    assert client.get(
-        f"/api/v2/workspaces/not-the-org/capture-requests/{created['id']}"
-    ).status_code == 404
+    assert (
+        client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{created['id']}").status_code
+        == 200
+    )
+    assert (
+        client.get(f"/api/v2/workspaces/not-the-org/capture-requests/{created['id']}").status_code
+        == 404
+    )
 
 
 def test_capture_is_rejected_when_workspace_policy_is_off(client, db_session):
@@ -195,9 +198,7 @@ def test_stop_before_dispatch_cancels_intent_and_outbox(client, db_session):
         json=payload(meeting.id),
     ).json()
 
-    response = client.post(
-        f"/api/v2/workspaces/{org.id}/capture-requests/{created['id']}/stop"
-    )
+    response = client.post(f"/api/v2/workspaces/{org.id}/capture-requests/{created['id']}/stop")
 
     assert response.status_code == 202
     assert response.json()["status"] == "cancelled"
@@ -238,15 +239,9 @@ def test_stop_live_attempt_queues_reconciliation_and_status_exposes_freshness(cl
     )
     db_session.commit()
 
-    stopped = client.post(
-        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop"
-    )
-    repeated = client.post(
-        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop"
-    )
-    status_response = client.get(
-        f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}"
-    )
+    stopped = client.post(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop")
+    repeated = client.post(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}/stop")
+    status_response = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
 
     assert stopped.status_code == 202
     assert stopped.json()["stop_state"] == "requested"
@@ -257,8 +252,15 @@ def test_stop_live_attempt_queues_reconciliation_and_status_exposes_freshness(cl
     assert db_session.query(OutboxEvent).filter_by(operation="capture.reconcile").count() == 1
 
 
-def _add_live_attempt(db, org_id, request_id, *, state=CaptureAttemptState.CAPTURING,
-                      last_contact_offset_seconds=0, last_transcript_offset_seconds=None):
+def _add_live_attempt(
+    db,
+    org_id,
+    request_id,
+    *,
+    state=CaptureAttemptState.CAPTURING,
+    last_contact_offset_seconds=0,
+    last_transcript_offset_seconds=None,
+):
     """Helper: add a CaptureAttempt in a live state with controlled timestamps."""
     binding = ProviderBinding(
         org_id=org_id,
@@ -337,9 +339,13 @@ def test_last_transcript_at_exposed_when_present(client, db_session):
     request = db_session.get(CaptureRequest, created["id"])
     request.status = CaptureRequestStatus.MONITORING
     db_session.flush()
-    _add_live_attempt(db_session, org.id, request.id,
-                      last_contact_offset_seconds=10,
-                      last_transcript_offset_seconds=20)
+    _add_live_attempt(
+        db_session,
+        org.id,
+        request.id,
+        last_contact_offset_seconds=10,
+        last_transcript_offset_seconds=20,
+    )
 
     resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
     assert resp.status_code == 200
@@ -377,9 +383,13 @@ def test_stale_flag_not_set_for_terminal_state(client, db_session):
     request = db_session.get(CaptureRequest, created["id"])
     request.status = CaptureRequestStatus.FINALIZED
     db_session.flush()
-    _add_live_attempt(db_session, org.id, request.id,
-                      state=CaptureAttemptState.ENDED,
-                      last_contact_offset_seconds=600)
+    _add_live_attempt(
+        db_session,
+        org.id,
+        request.id,
+        state=CaptureAttemptState.ENDED,
+        last_contact_offset_seconds=600,
+    )
 
     resp = client.get(f"/api/v2/workspaces/{org.id}/capture-requests/{request.id}")
     assert resp.status_code == 200

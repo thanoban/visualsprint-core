@@ -11,19 +11,20 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependency import require_org_member
+from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
 from app.db.models import (
     BotSession,
     CaptureRequest,
-    CaptureRequestStatus,
     CaptureSession,
     CaptureState,
     CoverageInterval,
     CoverageStatus,
     Meeting,
     Org,
+    User,
 )
+from app.modules.projects.access import can_read_meeting, visible_meeting_ids
 
 router = APIRouter(prefix="/api/v1/orgs/{org_id}/meetings", tags=["meetings"])
 
@@ -111,13 +112,19 @@ def _pipeline_progress(state: CaptureState) -> int:
 async def list_meetings(
     org_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> list[MeetingListItem]:
     if db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")
 
     meetings = (
-        db.execute(select(Meeting).where(Meeting.org_id == org_id).order_by(Meeting.created_at.desc()))
+        db.execute(
+            select(Meeting)
+            .where(Meeting.id.in_(visible_meeting_ids(org_id, user.id)))
+            .order_by(Meeting.created_at.desc())
+            .limit(100)
+        )
         .scalars()
         .all()
     )
@@ -176,7 +183,9 @@ async def list_meetings(
                 id=meeting.id,
                 title=meeting.title or "Untitled meeting",
                 platform=meeting.platform,
-                scheduled_start=meeting.scheduled_start.isoformat() if meeting.scheduled_start else None,
+                scheduled_start=meeting.scheduled_start.isoformat()
+                if meeting.scheduled_start
+                else None,
                 scheduled_end=meeting.scheduled_end.isoformat() if meeting.scheduled_end else None,
                 latest_capture_session_id=latest_session.id if latest_session else None,
                 latest_capture_mode=latest_session.mode if latest_session else None,
@@ -186,7 +195,9 @@ async def list_meetings(
                 latest_bot_status=latest_bot.status.value if latest_bot else None,
                 latest_bot_error=latest_bot.error if latest_bot else None,
                 latest_capture_request_id=latest_request.id if latest_request else None,
-                latest_capture_request_status=latest_request.status.value if latest_request else None,
+                latest_capture_request_status=latest_request.status.value
+                if latest_request
+                else None,
                 has_coverage_gap=has_gap,
                 report_ready=report_ready,
             )
@@ -200,6 +211,7 @@ async def get_capture_status(
     org_id: str,
     meeting_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> SessionStatus:
     """Return the processing status of the most recent CaptureSession for a meeting.
@@ -212,6 +224,8 @@ async def get_capture_status(
         raise HTTPException(404, "org not found")
     meeting = db.get(Meeting, meeting_id)
     if meeting is None or meeting.org_id != org_id:
+        raise HTTPException(404, "meeting not found")
+    if not can_read_meeting(db, org_id, meeting_id, user.id):
         raise HTTPException(404, "meeting not found")
 
     session = (

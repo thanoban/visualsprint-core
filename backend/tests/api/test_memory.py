@@ -16,7 +16,6 @@ from app.db.models import (
     OrgMember,
     Project,
     ProjectMember,
-    SummaryState,
     SummaryVersion,
     User,
 )
@@ -34,6 +33,11 @@ def _seed(db):
         [
             User(id=USER_1, email="founder@example.com"),
             User(id=USER_2, email="other@example.com"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             OrgMember(org_id=org.id, user_id=USER_1, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_2, role="member"),
         ]
@@ -72,7 +76,9 @@ def _make_meeting_assignment(db, org_id, project_id, owner_id, title="Sprint rev
     return m
 
 
-def _make_knowledge_item(db, org_id, session_id, ki_type, statement, confidence=Confidence.VERIFIED):
+def _make_knowledge_item(
+    db, org_id, session_id, ki_type, statement, confidence=Confidence.VERIFIED
+):
     ki = KnowledgeItem(
         org_id=org_id,
         capture_session_id=session_id,
@@ -123,12 +129,18 @@ def test_get_project_memory_with_knowledge_items(client, db_session):
     db_session.flush()
 
     _make_knowledge_item(
-        db_session, org.id, capture_session.id,
-        KnowledgeType.DECISION, "We will use Postgres for storage."
+        db_session,
+        org.id,
+        capture_session.id,
+        KnowledgeType.DECISION,
+        "We will use Postgres for storage.",
     )
     _make_knowledge_item(
-        db_session, org.id, capture_session.id,
-        KnowledgeType.COMMITMENT, "Alice will write the migration by Friday."
+        db_session,
+        org.id,
+        capture_session.id,
+        KnowledgeType.COMMITMENT,
+        "Alice will write the migration by Friday.",
     )
     db_session.commit()
 
@@ -153,8 +165,11 @@ def test_get_project_memory_excludes_unsupported_confidence(client, db_session):
     db_session.flush()
 
     _make_knowledge_item(
-        db_session, org.id, capture_session.id,
-        KnowledgeType.DECISION, "Unsupported claim.",
+        db_session,
+        org.id,
+        capture_session.id,
+        KnowledgeType.DECISION,
+        "Unsupported claim.",
         confidence=Confidence.UNSUPPORTED,
     )
     db_session.commit()
@@ -176,9 +191,12 @@ def test_get_project_memory_idempotent_same_hash(client, db_session):
     assert resp2.status_code == 200
     # Same hash → same row returned, not duplicated
     assert resp1.json()["id"] == resp2.json()["id"]
-    assert db_session.query(SummaryVersion).filter_by(
-        scope_kind="project", scope_id=project.id
-    ).count() == 1
+    assert (
+        db_session.query(SummaryVersion)
+        .filter_by(scope_kind="project", scope_id=project.id)
+        .count()
+        == 1
+    )
 
 
 def test_get_project_memory_404_for_non_member(client, db_session):

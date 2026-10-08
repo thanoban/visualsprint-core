@@ -21,7 +21,7 @@ import hashlib
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,10 +35,11 @@ from app.db.models import (
     Org,
     Project,
     ProjectMember,
-    SummaryState,
     SummaryVersion,
     User,
 )
+from app.memory.project_memory import current_memory
+from app.modules.projects.access import can_read_meeting
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["agenda"])
 
@@ -62,9 +63,27 @@ def _occurrence(db: Session, org_id: str, occurrence_id: str) -> CalendarOccurre
     return occ
 
 
-def _project_for_occurrence(
-    db: Session, org_id: str, occurrence_id: str
-) -> Project | None:
+def _require_occurrence_access(
+    db: Session, org_id: str, occ: CalendarOccurrence, user_id: str, *, edit: bool = False
+) -> None:
+    if occ.meeting_id is None:
+        return  # Calendar ownership migration is a separate F03 gate.
+    if not can_read_meeting(db, org_id, occ.meeting_id, user_id):
+        raise HTTPException(404, "occurrence not found")
+    project = _project_for_occurrence(db, org_id, occ.id)
+    if edit and project is not None:
+        role = db.scalar(
+            select(ProjectMember.role).where(
+                ProjectMember.org_id == org_id,
+                ProjectMember.project_id == project.id,
+                ProjectMember.user_id == user_id,
+            )
+        )
+        if role not in {"owner", "editor"}:
+            raise HTTPException(403, "project edit access required")
+
+
+def _project_for_occurrence(db: Session, org_id: str, occurrence_id: str) -> Project | None:
     """Return the project assigned to the meeting linked from this occurrence, if any."""
     occ = db.get(CalendarOccurrence, occurrence_id)
     if occ is None or occ.meeting_id is None:
@@ -181,19 +200,12 @@ def generate_agenda(
     """
     _require_org(db, org_id)
     occurrence = _occurrence(db, org_id, occurrence_id)
+    _require_occurrence_access(db, org_id, occurrence, user.id, edit=True)
 
     project = _project_for_occurrence(db, org_id, occurrence_id)
     memory: SummaryVersion | None = None
     if project is not None:
-        memory = db.execute(
-            select(SummaryVersion).where(
-                SummaryVersion.scope_kind == "project",
-                SummaryVersion.scope_id == project.id,
-                SummaryVersion.state == SummaryState.READY,
-            )
-            .order_by(SummaryVersion.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        memory = current_memory(db, org_id, "project", project.id, user.id)
 
     rev_hash = _input_hash(occurrence, memory.id if memory else None, body.objective)
 
@@ -215,6 +227,18 @@ def generate_agenda(
         )
 
     sections = _build_sections(occurrence.title, memory, body.objective)
+    # Serialize version allocation across edits and generation requests.
+    db.execute(
+        select(CalendarOccurrence.id)
+        .where(CalendarOccurrence.id == occurrence_id)
+        .with_for_update()
+    ).scalar_one()
+    previous = db.scalar(
+        select(AgendaVersion)
+        .where(AgendaVersion.org_id == org_id, AgendaVersion.occurrence_id == occurrence_id)
+        .order_by(AgendaVersion.version.desc())
+        .limit(1)
+    )
     agenda = AgendaVersion(
         org_id=org_id,
         occurrence_id=occurrence_id,
@@ -222,7 +246,7 @@ def generate_agenda(
         sections=sections,
         objective=body.objective,
         edited_by=None,
-        version=1,
+        version=(previous.version + 1) if previous else 1,
     )
     db.add(agenda)
     db.commit()
@@ -247,7 +271,8 @@ def get_agenda(
 ) -> AgendaView:
     """Return the latest agenda version for an occurrence."""
     _require_org(db, org_id)
-    _occurrence(db, org_id, occurrence_id)
+    occurrence = _occurrence(db, org_id, occurrence_id)
+    _require_occurrence_access(db, org_id, occurrence, user.id)
 
     agenda = db.execute(
         select(AgendaVersion)
@@ -288,6 +313,14 @@ def update_agenda(
     ).scalar_one_or_none()
     if agenda is None:
         raise HTTPException(404, "agenda not found")
+
+    occurrence = _occurrence(db, org_id, agenda.occurrence_id)
+    _require_occurrence_access(db, org_id, occurrence, user.id, edit=True)
+    db.execute(
+        select(CalendarOccurrence.id)
+        .where(CalendarOccurrence.id == occurrence.id)
+        .with_for_update()
+    ).scalar_one()
 
     if agenda.version != body.version:
         raise HTTPException(409, "version conflict")

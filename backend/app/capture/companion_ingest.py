@@ -23,11 +23,11 @@ from app.interfaces.platform import AudioTrack as Track
 from app.interfaces.platform import CaptureArtifacts, CaptureMode, RosterEntry
 
 
-async def assemble_companion_capture(db: "Session", session: CaptureSession) -> None:
+async def assemble_companion_capture(db: Session, session: CaptureSession) -> None:
     """Keep source fragments until assembly succeeds; never compact missing time."""
-    if db.execute(select(AudioTrack.id).where(
-        AudioTrack.capture_session_id == session.id
-    ).limit(1)).scalar_one_or_none():
+    if db.execute(
+        select(AudioTrack.id).where(AudioTrack.capture_session_id == session.id).limit(1)
+    ).scalar_one_or_none():
         return
     org_id, session_id = session.org_id, session.id
     # No staged writes yet; release the pool slot during blob/ffmpeg work.
@@ -64,17 +64,35 @@ async def assemble_companion_capture(db: "Session", session: CaptureSession) -> 
     reloaded = db.get(CaptureSession, session_id)
     if reloaded is None:
         raise RuntimeError("companion capture disappeared during assembly")
-    persist_capture_artifacts(db, reloaded, CaptureArtifacts(
-        mode=CaptureMode.DESKTOP, audio_tracks=[Track(uri=audio_uri)],
-        roster=[RosterEntry(display_name=name[:255]) for name in dict.fromkeys(manifest["roster"])
-                if name.strip()],
-    ))
+    persist_capture_artifacts(
+        db,
+        reloaded,
+        CaptureArtifacts(
+            mode=CaptureMode.DESKTOP,
+            audio_tracks=[Track(uri=audio_uri)],
+            roster=[
+                RosterEntry(display_name=name[:255])
+                for name in dict.fromkeys(manifest["roster"])
+                if name.strip()
+            ],
+        ),
+    )
     if not manifest.get("microphone_captured", True):
-        db.add(CoverageInterval(
-            org_id=org_id, capture_session_id=session_id, start_s=0,
-            end_s=manifest.get("duration_s", 0), modality="audio", status=CoverageStatus.MISSING,
-            reason="companion_local_microphone_unavailable: owner's voice was not captured",
-        ))
-    record_disclosure(db, reloaded, subject="recording_owner", method="companion_extension",
-                      detail="Owner initiated browser-tab capture; chat notice is best-effort, not proof of participant consent.")
-
+        db.add(
+            CoverageInterval(
+                org_id=org_id,
+                capture_session_id=session_id,
+                start_s=0,
+                end_s=manifest.get("duration_s", 0),
+                modality="audio",
+                status=CoverageStatus.MISSING,
+                reason="companion_local_microphone_unavailable: owner's voice was not captured",
+            )
+        )
+    record_disclosure(
+        db,
+        reloaded,
+        subject="recording_owner",
+        method="companion_extension",
+        detail="Owner initiated browser-tab capture; chat notice is best-effort, not proof of participant consent.",
+    )

@@ -2,8 +2,9 @@
 
 Threads are creator-private in the pilot.  Scope is "project" or "customer".
 Messages are stored and returned in chronological order.  The assistant message
-for a POST /messages is created synchronously with state=PENDING; the caller
-polls or SSE-streams GET /generations/{generation_id}/events.
+for a POST /messages is created synchronously with state=PENDING. Generation
+consumption and streaming endpoints are not yet implemented; this API alone
+does not produce a completed assistant answer.
 
 Architecture rules observed:
 - Agents interpret content; they never call each other or choose the next stage.
@@ -13,11 +14,10 @@ Architecture rules observed:
 """
 
 import uuid
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import get_current_user, require_org_member
@@ -27,6 +27,7 @@ from app.db.models import (
     ChatMessage,
     ChatThread,
     Customer,
+    MeetingAssignment,
     MessageRole,
     MessageState,
     Org,
@@ -35,6 +36,7 @@ from app.db.models import (
     ThreadStatus,
     User,
 )
+from app.modules.projects.access import can_read_meeting
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["threads"])
 
@@ -80,18 +82,21 @@ def _require_scope_read(
 
 
 def _get_thread(
-    db: Session, org_id: str, thread_id: str, user_id: str
+    db: Session, org_id: str, thread_id: str, user_id: str, *, lock: bool = False
 ) -> ChatThread:
     """Return a thread that belongs to this org and user (creator-private)."""
-    thread = db.execute(
-        select(ChatThread).where(
-            ChatThread.id == thread_id,
-            ChatThread.org_id == org_id,
-            ChatThread.creator_id == user_id,
-        )
-    ).scalar_one_or_none()
+    query = select(ChatThread).where(
+        ChatThread.id == thread_id,
+        ChatThread.org_id == org_id,
+        ChatThread.creator_id == user_id,
+    )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    thread = db.execute(query).scalar_one_or_none()
     if thread is None:
         raise HTTPException(404, "thread not found")
+    _resolve_scope(db, org_id, thread.scope_kind, thread.scope_id)
+    _require_scope_read(db, org_id, thread.scope_kind, thread.scope_id, user_id)
     return thread
 
 
@@ -196,7 +201,19 @@ def list_threads(
         q = q.where(ChatThread.scope_kind == scope_kind)
     if scope_id is not None:
         q = q.where(ChatThread.scope_id == scope_id)
-    q = q.order_by(ChatThread.updated_at.desc())
+    project_access = exists().where(
+        ProjectMember.org_id == org_id,
+        ProjectMember.project_id == ChatThread.scope_id,
+        ProjectMember.user_id == user.id,
+    )
+    customer_exists = exists().where(Customer.org_id == org_id, Customer.id == ChatThread.scope_id)
+    q = q.where(
+        or_(
+            and_(ChatThread.scope_kind == "project", project_access),
+            and_(ChatThread.scope_kind == "customer", customer_exists),
+        )
+    )
+    q = q.order_by(ChatThread.updated_at.desc(), ChatThread.id).limit(100)
 
     threads = db.execute(q).scalars().all()
     return [
@@ -223,7 +240,7 @@ def update_thread(
 ) -> ThreadView:
     """Update thread title or archive it.  Creator only; optimistic version check."""
     _require_org(db, org_id)
-    thread = _get_thread(db, org_id, thread_id, user.id)
+    thread = _get_thread(db, org_id, thread_id, user.id, lock=True)
 
     if thread.version != body.version:
         raise HTTPException(409, "version conflict")
@@ -233,8 +250,8 @@ def update_thread(
     if body.status is not None:
         try:
             thread.status = ThreadStatus(body.status)
-        except ValueError:
-            raise HTTPException(422, f"invalid status: {body.status}")
+        except ValueError as exc:
+            raise HTTPException(422, "invalid thread status") from exc
 
     thread.version += 1
     db.commit()
@@ -263,13 +280,56 @@ def list_messages(
 ) -> list[MessageView]:
     """Return messages for a thread in chronological order."""
     _require_org(db, org_id)
-    _get_thread(db, org_id, thread_id, user.id)
+    thread = _get_thread(db, org_id, thread_id, user.id)
 
-    messages = db.execute(
-        select(ChatMessage)
-        .where(ChatMessage.thread_id == thread_id)
-        .order_by(ChatMessage.created_at.asc())
-    ).scalars().all()
+    messages = (
+        db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.org_id == org_id, ChatMessage.thread_id == thread_id)
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(100)
+        )
+        .scalars()
+        .all()
+    )
+
+    # Revoke the whole generated answer when any cited source is unavailable.
+    # Filtering the chips alone still exposes hidden facts in assistant text.
+    for message in messages:
+        if message.role != MessageRole.ASSISTANT or message.state != MessageState.DONE:
+            continue
+        citations = db.scalars(
+            select(AnswerCitation).where(
+                AnswerCitation.org_id == org_id, AnswerCitation.message_id == message.id
+            )
+        ).all()
+        for citation in citations:
+            assignment = db.scalar(
+                select(MeetingAssignment).where(
+                    MeetingAssignment.org_id == org_id,
+                    MeetingAssignment.meeting_id == citation.meeting_id,
+                )
+            )
+            in_scope = assignment is not None and (
+                assignment.project_id == thread.scope_id
+                if thread.scope_kind == "project"
+                else db.scalar(
+                    select(Project.id).where(
+                        Project.org_id == org_id,
+                        Project.id == assignment.project_id,
+                        Project.customer_id == thread.scope_id,
+                    )
+                )
+                is not None
+            )
+            if not in_scope or not can_read_meeting(db, org_id, citation.meeting_id, user.id):
+                # Do not mutate the stored row while creating a read projection.
+                break
+        else:
+            continue
+        db.expunge(message)
+        message.content = "Source access changed. Ask again using your current meeting access."
+        message.state = MessageState.FAILED
 
     return [
         MessageView(
@@ -280,7 +340,7 @@ def list_messages(
             content=m.content,
             generation_id=m.generation_id,
         )
-        for m in messages
+        for m in reversed(messages)
     ]
 
 
@@ -303,7 +363,7 @@ def send_message(
     existing user message is returned (202 with its original content).
     """
     _require_org(db, org_id)
-    thread = _get_thread(db, org_id, thread_id, user.id)
+    thread = _get_thread(db, org_id, thread_id, user.id, lock=True)
     if thread.status == ThreadStatus.ARCHIVED:
         raise HTTPException(409, "thread is archived")
 
@@ -315,6 +375,8 @@ def send_message(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if existing.content != body.text:
+            raise HTTPException(409, "client request ID was already used for different text")
         return MessageView(
             id=existing.id,
             thread_id=existing.thread_id,

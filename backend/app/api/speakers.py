@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependency import require_session_member
+from app.auth.dependency import require_session_editor, require_session_member
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
@@ -41,7 +41,7 @@ class UtteranceOut(BaseModel):
     session_speaker_id: str | None
     person_id: str | None
     attribution_confidence: float
-    asr_confidence: float
+    asr_confidence: float | None
     repaired: bool
 
 
@@ -114,17 +114,15 @@ async def list_utterances(
     if person_ids:
         people_by_id = {
             person.id: person
-            for person in db.execute(
-                select(Person).where(Person.id.in_(person_ids))
-            ).scalars().all()
+            for person in db.execute(select(Person).where(Person.id.in_(person_ids)))
+            .scalars()
+            .all()
         }
 
     speakers_by_cluster: dict[str, SessionSpeaker] = {}
     session_speakers = (
         db.execute(
-            select(SessionSpeaker).where(
-                SessionSpeaker.capture_session_id == capture_session_id
-            )
+            select(SessionSpeaker).where(SessionSpeaker.capture_session_id == capture_session_id)
         )
         .scalars()
         .all()
@@ -134,7 +132,9 @@ async def list_utterances(
 
     rows: list[UtteranceOut] = []
     for u in utterances:
-        utt_ss = speakers_by_cluster.get(u.speaker_cluster_id or "") if u.speaker_cluster_id else None
+        utt_ss = (
+            speakers_by_cluster.get(u.speaker_cluster_id or "") if u.speaker_cluster_id else None
+        )
         rows.append(
             UtteranceOut(
                 id=u.id,
@@ -163,9 +163,7 @@ async def list_speakers(
     session = _session_or_404(db, capture_session_id)
     session_speakers = (
         db.execute(
-            select(SessionSpeaker).where(
-                SessionSpeaker.capture_session_id == capture_session_id
-            )
+            select(SessionSpeaker).where(SessionSpeaker.capture_session_id == capture_session_id)
         )
         .scalars()
         .all()
@@ -174,8 +172,7 @@ async def list_speakers(
     utterance_counts: dict[str, int] = {}
     for u in (
         db.execute(
-            select(Utterance.speaker_cluster_id)
-            .where(
+            select(Utterance.speaker_cluster_id).where(
                 Utterance.capture_session_id == capture_session_id,
                 Utterance.speaker_cluster_id.isnot(None),
             )
@@ -186,11 +183,7 @@ async def list_speakers(
         if u is not None:
             utterance_counts[u] = utterance_counts.get(u, 0) + 1
 
-    people = (
-        db.execute(select(Person).where(Person.org_id == session.org_id))
-        .scalars()
-        .all()
-    )
+    people = db.execute(select(Person).where(Person.org_id == session.org_id)).scalars().all()
     people_by_id = {p.id: p for p in people}
 
     speaker_rows = [
@@ -198,7 +191,9 @@ async def list_speakers(
             id=ss.id,
             cluster_id=ss.cluster_id,
             person_id=ss.person_id,
-            display_name=people_by_id[ss.person_id].display_name if ss.person_id and ss.person_id in people_by_id else None,
+            display_name=people_by_id[ss.person_id].display_name
+            if ss.person_id and ss.person_id in people_by_id
+            else None,
             resolution_method=ss.resolution_method.value,
             confidence=ss.confidence,
             utterance_count=utterance_counts.get(ss.cluster_id, 0),
@@ -221,7 +216,7 @@ async def correct_speaker(
     session_speaker_id: str,
     body: SpeakerCorrectionIn,
     db: Session = Depends(get_db),
-    _: None = Depends(require_session_member),
+    _: CaptureSession = Depends(require_session_editor),
 ) -> SpeakerCorrectionResponse:
     session = _session_or_404(db, capture_session_id)
     speaker = db.get(SessionSpeaker, session_speaker_id)
@@ -289,6 +284,7 @@ async def correct_speaker(
     # Recompute the person's voiceprint from all MANUAL+ROSTER sessions.
     if person is not None:
         from app.speakers.identity import recompute_voiceprint
+
         recompute_voiceprint(db, person.id)
 
     db.commit()

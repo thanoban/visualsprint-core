@@ -17,12 +17,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import dependency as auth_dep
-from app.auth.dependency import get_current_user, require_org_member
+from app.auth.dependency import (
+    get_current_user,
+    require_action_access,
+    require_org_member,
+    resolve_actor_person,
+)
+from app.capture.token_provider import TokenProvider
 from app.connectors.errors import ConnectorError
 from app.db.base import get_db
-from app.db.models import ActionStatus, Person, ProposedAction, User
-from app.capture.token_provider import TokenProvider
+from app.db.models import ActionStatus, CaptureSession, Person, ProposedAction, User
 from app.interfaces.actions import ActionConnector, ActionKind, ActionPayload
+from app.modules.projects.access import visible_meeting_ids
 from app.oauth.connection import build_org_token_provider as _build_org_token_provider
 from app.oauth.connection import get_org_connection as _get_org_connection
 from app.orchestrator.audit import log_audit_event
@@ -130,9 +136,18 @@ async def list_actions(
     org_id: str,
     status: str | None = None,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> list[ProposedActionOut]:
     q = db.query(ProposedAction).filter(ProposedAction.org_id == org_id)
+    q = q.filter(
+        ProposedAction.capture_session_id.in_(
+            select(CaptureSession.id).where(
+                CaptureSession.org_id == org_id,
+                CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user.id)),
+            )
+        )
+    )
     if status:
         try:
             status_enum = ActionStatus(status)
@@ -144,15 +159,6 @@ async def list_actions(
     return [_to_out(db, r) for r in rows]
 
 
-def _person_id_for_user(db: Session, org_id: str, user: User) -> str | None:
-    """Resolve the Person row for the JWT-authenticated user within an org.
-    Returns None when the user has no linked Person (external approver path)."""
-    person = db.execute(
-        select(Person).where(Person.org_id == org_id, Person.user_id == user.id)
-    ).scalar_one_or_none()
-    return person.id if person else None
-
-
 @router.post("/actions/{action_id}/approve", response_model=ProposedActionOut)
 async def approve_action(
     action_id: str,
@@ -162,17 +168,20 @@ async def approve_action(
     # org_id isn't a path/body param here -- it only exists on the action
     # row itself once looked up, so this can't use Depends(require_org_member)
     # the way path-param routes do; same reasoning as chat.py/upload.py.
-    action = db.get(ProposedAction, action_id)
+    action = db.execute(
+        select(ProposedAction).where(ProposedAction.id == action_id).with_for_update()
+    ).scalar_one_or_none()
     if action is None:
         raise HTTPException(404, "action not found")
     if not auth_dep.is_org_member(db, action.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    require_action_access(db, action, user)
     if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.FAILED):
         raise HTTPException(409, f"action is not approvable (status={action.status.value})")
 
     # approved_by comes from the JWT, not the request body -- the body field
     # was forgeable by any org member (H-1/M-14 from the 2026-08-31 audit).
-    actor_person_id = _person_id_for_user(db, action.org_id, user)
+    actor_person_id = resolve_actor_person(db, action.org_id, user)
 
     # The approval record itself is written and committed unconditionally,
     # before execution is even attempted -- this is what rule 5 requires,
@@ -223,15 +232,18 @@ async def reject_action(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> ProposedActionOut:
-    action = db.get(ProposedAction, action_id)
+    action = db.execute(
+        select(ProposedAction).where(ProposedAction.id == action_id).with_for_update()
+    ).scalar_one_or_none()
     if action is None:
         raise HTTPException(404, "action not found")
     if not auth_dep.is_org_member(db, action.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    require_action_access(db, action, user)
     if action.status != ActionStatus.PENDING_APPROVAL:
         raise HTTPException(409, f"action is not pending approval (status={action.status.value})")
 
-    actor_person_id = _person_id_for_user(db, action.org_id, user)
+    actor_person_id = resolve_actor_person(db, action.org_id, user)
     action.status = ActionStatus.REJECTED
     # See approve_action's comment above -- same reasoning against storing
     # free-text content in an AuditLog row that has no purge path.

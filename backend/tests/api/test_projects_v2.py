@@ -11,7 +11,7 @@ from app.db.models import (
 )
 from app.main import app
 
-USER_1 = "test-user-0000-0000-0000-000000000000"
+USER_1 = "11111111-1111-1111-1111-111111111111"
 USER_2 = "22222222-2222-2222-2222-222222222222"
 
 
@@ -23,6 +23,11 @@ def seed(db):
         [
             User(id=USER_1, email="founder@example.com"),
             User(id=USER_2, email="colleague@example.com"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             OrgMember(org_id=org.id, user_id=USER_1, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_2, role="admin"),
         ]
@@ -55,7 +60,9 @@ def test_duplicate_customer_names_are_allowed_and_contacts_are_normalized(client
     assert duplicate.status_code == 409
 
 
-def test_private_project_is_visible_only_to_explicit_members_even_workspace_admin(client, db_session):
+def test_private_project_is_visible_only_to_explicit_members_even_workspace_admin(
+    client, db_session
+):
     org = seed(db_session)
     customer = client.post(
         f"/api/v2/workspaces/{org.id}/customers", json={"name": "Customer"}
@@ -83,9 +90,9 @@ def test_private_project_is_visible_only_to_explicit_members_even_workspace_admi
     projects = client.get(f"/api/v2/workspaces/{org.id}/projects").json()
     assert len(projects) == 1
     assert projects[0]["role"] == "viewer"
-    assert client.get(f"/api/v2/workspaces/{org.id}/customers").json()[0][
-        "visible_project_count"
-    ] == 1
+    assert (
+        client.get(f"/api/v2/workspaces/{org.id}/customers").json()[0]["visible_project_count"] == 1
+    )
 
 
 def test_project_rejects_customer_from_another_workspace(client, db_session):
@@ -106,9 +113,7 @@ def test_project_rejects_customer_from_another_workspace(client, db_session):
 
 def test_only_project_owner_can_update_and_version_conflicts_are_rejected(client, db_session):
     org = seed(db_session)
-    project = client.post(
-        f"/api/v2/workspaces/{org.id}/projects", json={"name": "Launch"}
-    ).json()
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "Launch"}).json()
     client.put(
         f"/api/v2/workspaces/{org.id}/projects/{project['id']}/members",
         json={"user_id": USER_2, "role": "editor"},
@@ -139,9 +144,7 @@ def test_target_project_member_must_belong_to_workspace(client, db_session):
     outsider = User(id="33333333-3333-3333-3333-333333333333", email="outside@example.com")
     db_session.add(outsider)
     db_session.commit()
-    project = client.post(
-        f"/api/v2/workspaces/{org.id}/projects", json={"name": "Private"}
-    ).json()
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "Private"}).json()
     response = client.put(
         f"/api/v2/workspaces/{org.id}/projects/{project['id']}/members",
         json={"user_id": outsider.id, "role": "viewer"},
@@ -152,9 +155,7 @@ def test_target_project_member_must_belong_to_workspace(client, db_session):
 
 def test_removing_member_revokes_private_project_and_last_owner_is_protected(client, db_session):
     org = seed(db_session)
-    project = client.post(
-        f"/api/v2/workspaces/{org.id}/projects", json={"name": "Private"}
-    ).json()
+    project = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "Private"}).json()
     member_url = f"/api/v2/workspaces/{org.id}/projects/{project['id']}/members"
     assert client.put(member_url, json={"user_id": USER_2, "role": "viewer"}).status_code == 200
     assert client.delete(f"{member_url}/{USER_2}").status_code == 204
@@ -172,9 +173,7 @@ def test_archived_customer_cannot_receive_new_projects(client, db_session):
     customer = client.post(
         f"/api/v2/workspaces/{org.id}/customers", json={"name": "Former customer"}
     ).json()
-    archived = client.post(
-        f"/api/v2/workspaces/{org.id}/customers/{customer['id']}/archive"
-    )
+    archived = client.post(f"/api/v2/workspaces/{org.id}/customers/{customer['id']}/archive")
     assert archived.status_code == 200
     response = client.post(
         f"/api/v2/workspaces/{org.id}/projects",
@@ -189,7 +188,7 @@ def test_archived_customer_cannot_receive_new_projects(client, db_session):
 
 
 def _make_meeting(db, org_id, title="Standup", platform="zoom"):
-    m = Meeting(org_id=org_id, title=title, platform=platform)
+    m = Meeting(org_id=org_id, title=title, platform=platform, owner_user_id=USER_1)
     db.add(m)
     db.flush()
     return m
@@ -234,7 +233,7 @@ def test_assign_meeting_idempotent_same_project(client, db_session):
     assert db_session.query(MeetingAssignment).count() == 1
 
 
-def test_move_meeting_to_different_project_requires_source_membership(client, db_session):
+def test_move_meeting_requires_meeting_ownership_and_target_edit_access(client, db_session):
     org = seed(db_session)
     proj_a = client.post(f"/api/v2/workspaces/{org.id}/projects", json={"name": "A"}).json()
     # Create proj_b as USER_2 (both are org members; USER_2 needs to own proj_b)
@@ -256,15 +255,15 @@ def test_move_meeting_to_different_project_requires_source_membership(client, db
         f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
         json={"project_id": proj_b["id"]},
     )
-    assert denied.status_code == 403
+    assert denied.status_code == 404
 
     # Add USER_1 to proj_b and USER_2 to proj_a so USER_2 can move
-    as_user(USER_1, "founder@example.com")
-    client.put(
-        f"/api/v2/workspaces/{org.id}/projects/{proj_a['id']}/members",
-        json={"user_id": USER_2, "role": "editor"},
-    )
     as_user(USER_2, "colleague@example.com")
+    client.put(
+        f"/api/v2/workspaces/{org.id}/projects/{proj_b['id']}/members",
+        json={"user_id": USER_1, "role": "editor"},
+    )
+    as_user(USER_1, "founder@example.com")
     moved = client.put(
         f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
         json={"project_id": proj_b["id"]},
@@ -286,7 +285,7 @@ def test_assign_meeting_non_project_member_is_denied(client, db_session):
         f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment",
         json={"project_id": project["id"]},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_unassign_meeting_removes_assignment(client, db_session):
@@ -325,7 +324,7 @@ def test_unassign_meeting_denied_for_non_project_member(client, db_session):
     )
     as_user(USER_2, "colleague@example.com")
     resp = client.delete(f"/api/v2/workspaces/{org.id}/meetings/{meeting.id}/assignment")
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_list_project_meetings_returns_assigned_meetings(client, db_session):

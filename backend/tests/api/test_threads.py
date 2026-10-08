@@ -3,7 +3,6 @@
 from app.auth import dependency as auth_dep
 from app.db.models import (
     ChatMessage,
-    ChatThread,
     Customer,
     MessageRole,
     MessageState,
@@ -11,7 +10,6 @@ from app.db.models import (
     OrgMember,
     Project,
     ProjectMember,
-    ThreadStatus,
     User,
 )
 from app.main import app
@@ -28,6 +26,11 @@ def _seed(db):
         [
             User(id=USER_1, email="founder@example.com"),
             User(id=USER_2, email="other@example.com"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             OrgMember(org_id=org.id, user_id=USER_1, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_2, role="member"),
         ]
@@ -270,9 +273,7 @@ def test_send_message_idempotent(client, db_session):
     assert resp1.json()["id"] == resp2.json()["id"]
     # Only one user msg created
     user_msgs = (
-        db_session.query(ChatMessage)
-        .filter_by(thread_id=thread["id"], role=MessageRole.USER)
-        .all()
+        db_session.query(ChatMessage).filter_by(thread_id=thread["id"], role=MessageRole.USER).all()
     )
     assert len(user_msgs) == 1
 

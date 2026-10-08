@@ -266,7 +266,7 @@ export interface UtteranceOut {
   session_speaker_id: string | null;
   person_id: string | null;
   attribution_confidence: number;
-  asr_confidence: number;
+  asr_confidence: number | null;
   repaired: boolean;
 }
 

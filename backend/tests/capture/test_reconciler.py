@@ -26,7 +26,6 @@ from app.db.models import (
 )
 from app.interfaces.capture_provider import (
     CaptureProviderError,
-    CaptureReference,
     CaptureSnapshot,
     CaptureStatus,
     TranscriptSegment,
@@ -168,6 +167,78 @@ async def test_ended_capture_finalizes_once(state):
         assert event.status == OutboxStatus.DONE
     assert not await run(state, provider)
     assert provider.status_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_unchanged_transcript_does_not_fake_freshness(state):
+    first = datetime(2026, 10, 8, tzinfo=UTC)
+    provider = Provider(
+        CaptureStatus.CAPTURING,
+        transcript_segments=[
+            TranscriptSegment(id="s1", start_s=0, end_s=3, text="Hello", final=True)
+        ],
+    )
+    await run(state, provider)
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=first + timedelta(seconds=20),
+    )
+    with state() as db:
+        attempt = db.get(CaptureAttempt, "attempt-1")
+        assert attempt.last_transcript_at == first.replace(tzinfo=None)
+        assert len(attempt.transcript_revision_hash) == 64
+    provider._transcript_segments[0].text = "Hello corrected"
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(provider),
+        worker_id="monitor-1",
+        now=first + timedelta(seconds=40),
+    )
+    with state() as db:
+        assert db.get(CaptureAttempt, "attempt-1").last_transcript_at == (
+            first + timedelta(seconds=40)
+        ).replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_terminal_attempt_cannot_be_resurrected(state):
+    with state() as db:
+        db.get(CaptureAttempt, "attempt-1").state = CaptureAttemptState.ENDED
+        db.get(CaptureRequest, "request-1").status = CaptureRequestStatus.FINALIZED
+        db.commit()
+    await run(state, Provider(CaptureStatus.CAPTURING))
+    with state() as db:
+        assert db.get(CaptureAttempt, "attempt-1").state == CaptureAttemptState.ENDED
+        assert db.get(CaptureRequest, "request-1").status == CaptureRequestStatus.FINALIZED
+        assert db.get(OutboxEvent, "event-1").status == OutboxStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_successful_poll_resets_consecutive_error_budget(state):
+    first = datetime(2026, 10, 8, tzinfo=UTC)
+    with state() as db:
+        event = db.get(OutboxEvent, "event-1")
+        event.attempts = event.max_attempts - 1
+        db.commit()
+    await run(state, Provider(CaptureStatus.CAPTURING))
+    with state() as db:
+        assert db.get(OutboxEvent, "event-1").attempts == 0
+    outage = Provider(
+        CaptureStatus.CAPTURING,
+        status_error=CaptureProviderError("temporarily_unavailable", retryable=True),
+    )
+    await reconcile_next(
+        state,
+        provider_resolver=Resolver(outage),
+        worker_id="monitor-1",
+        now=first + timedelta(seconds=20),
+    )
+    with state() as db:
+        event = db.get(OutboxEvent, "event-1")
+        assert event.attempts == 1
+        assert event.status == OutboxStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -367,6 +438,7 @@ async def test_state_entered_at_not_updated_when_state_unchanged(state):
 
 # ── F05 edge-case tests ────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_blocked_state_is_persisted_and_event_rescheduled(state):
     """BLOCKED means host denied admission — system records it but does not auto-stop."""
@@ -439,10 +511,10 @@ async def test_stale_lease_is_reclaimed_by_another_worker(state):
 @pytest.mark.asyncio
 async def test_fencing_prevents_stale_write_from_overwriting_newer_state(state):
     """If fencing_version advanced between provider I/O and the write, skip the write."""
-    from app.capture.reconciler import reconcile_next as _reconcile
 
     class SlowProvider:
         """Simulates a slow status call; lets another worker advance the fence first."""
+
         def __init__(self):
             self.status_calls = 0
             self._barrier = None
@@ -452,9 +524,7 @@ async def test_fencing_prevents_stale_write_from_overwriting_newer_state(state):
             # Advance the fencing_version while we are "in flight"
             with state() as db:
                 event = db.execute(
-                    __import__("sqlalchemy").select(OutboxEvent).where(
-                        OutboxEvent.id == "event-1"
-                    )
+                    __import__("sqlalchemy").select(OutboxEvent).where(OutboxEvent.id == "event-1")
                 ).scalar_one()
                 event.fencing_version += 99  # simulate a concurrent worker
                 db.commit()

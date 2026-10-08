@@ -4,12 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
 from app.db.models import CalendarConnection, CalendarOccurrence, CalendarOccurrenceStatus, User
+from app.modules.projects.access import can_edit_meeting, visible_meeting_ids
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["calendar-v2"])
 
@@ -62,16 +63,24 @@ def list_occurrences(
     if days < 1 or days > 90:
         raise HTTPException(422, "days must be between 1 and 90")
     cutoff = datetime.now(UTC) + timedelta(days=days)
-    rows = db.execute(
-        select(CalendarOccurrence)
-        .where(
-            CalendarOccurrence.org_id == org_id,
-            CalendarOccurrence.start_time >= datetime.now(UTC),
-            CalendarOccurrence.start_time <= cutoff,
-            CalendarOccurrence.status != CalendarOccurrenceStatus.CANCELLED,
+    rows = (
+        db.execute(
+            select(CalendarOccurrence)
+            .where(
+                CalendarOccurrence.org_id == org_id,
+                CalendarOccurrence.start_time >= datetime.now(UTC),
+                CalendarOccurrence.start_time <= cutoff,
+                CalendarOccurrence.status != CalendarOccurrenceStatus.CANCELLED,
+                or_(
+                    CalendarOccurrence.meeting_id.is_(None),
+                    CalendarOccurrence.meeting_id.in_(visible_meeting_ids(org_id, _user.id)),
+                ),
+            )
+            .order_by(CalendarOccurrence.start_time)
         )
-        .order_by(CalendarOccurrence.start_time)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_view(occ) for occ in rows]
 
 
@@ -81,7 +90,8 @@ def set_capture_override(
     occurrence_id: str,
     body: SetCaptureOverride,
     db: Session = Depends(get_db),
-    _: User = Depends(require_org_member),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
 ) -> OccurrenceView:
     if body.capture_override is not None and body.capture_override not in _VALID_CAPTURE_OVERRIDES:
         raise HTTPException(422, "capture_override must be 'on', 'off', or null")
@@ -92,6 +102,8 @@ def set_capture_override(
         )
     ).scalar_one_or_none()
     if occurrence is None:
+        raise HTTPException(404, "occurrence not found")
+    if occurrence.meeting_id and not can_edit_meeting(db, org_id, occurrence.meeting_id, user.id):
         raise HTTPException(404, "occurrence not found")
     occurrence.capture_override = body.capture_override
     db.commit()
@@ -114,9 +126,11 @@ def list_calendar_connections(
     _: None = Depends(require_org_member),
 ) -> list[ConnectionView]:
     """Return connected calendar accounts and their health state."""
-    connections = db.execute(
-        select(CalendarConnection).where(CalendarConnection.org_id == org_id)
-    ).scalars().all()
+    connections = (
+        db.execute(select(CalendarConnection).where(CalendarConnection.org_id == org_id))
+        .scalars()
+        .all()
+    )
     now = datetime.now(UTC)
     return [
         ConnectionView(

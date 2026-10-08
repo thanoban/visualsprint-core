@@ -1,7 +1,7 @@
 """Aggregate KnowledgeItems for a project or customer into a SummaryVersion.
 
-The summary is keyed by a hash of the meeting IDs in scope so it can be
-incremented when new meetings are assigned.  Deterministic software owns this
+The summary is keyed by the authorized meeting set and its source revision, so
+processing, corrections and assignment changes invalidate cached memory. Deterministic software owns this
 aggregation — no LLM is called here; the structured_summary is built from
 already-verified KnowledgeItem rows only.
 
@@ -20,11 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     Confidence,
+    Customer,
     KnowledgeItem,
     KnowledgeType,
     LifecycleState,
-    Meeting,
     MeetingAssignment,
+    Project,
+    ProjectMember,
     SummaryState,
     SummaryVersion,
 )
@@ -36,35 +38,52 @@ _ACTIVE_STATES = {LifecycleState.NEW, LifecycleState.RECURRING, LifecycleState.R
 
 
 def _meeting_ids_for_project(db: Session, org_id: str, project_id: str) -> list[str]:
-    rows = db.execute(
-        select(MeetingAssignment.meeting_id).where(
-            MeetingAssignment.org_id == org_id,
-            MeetingAssignment.project_id == project_id,
+    rows = (
+        db.execute(
+            select(MeetingAssignment.meeting_id).where(
+                MeetingAssignment.org_id == org_id,
+                MeetingAssignment.project_id == project_id,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return sorted(rows)
 
 
-def _meeting_ids_for_customer(db: Session, org_id: str, customer_id: str) -> list[str]:
-    """Return meeting IDs from all projects assigned to this customer."""
-    from app.db.models import Project
+def _meeting_ids_for_customer(
+    db: Session, org_id: str, customer_id: str, user_id: str
+) -> list[str]:
+    """Resolve the reader's source set before aggregation or cache lookup."""
 
-    project_ids = db.execute(
-        select(Project.id).where(
-            Project.org_id == org_id,
-            Project.customer_id == customer_id,
+    project_ids = (
+        db.execute(
+            select(Project.id)
+            .join(ProjectMember, ProjectMember.project_id == Project.id)
+            .where(
+                Project.org_id == org_id,
+                Project.customer_id == customer_id,
+                ProjectMember.org_id == org_id,
+                ProjectMember.user_id == user_id,
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not project_ids:
         return []
 
-    rows = db.execute(
-        select(MeetingAssignment.meeting_id).where(
-            MeetingAssignment.org_id == org_id,
-            MeetingAssignment.project_id.in_(project_ids),
+    rows = (
+        db.execute(
+            select(MeetingAssignment.meeting_id).where(
+                MeetingAssignment.org_id == org_id,
+                MeetingAssignment.project_id.in_(project_ids),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return sorted(set(rows))
 
 
@@ -91,12 +110,16 @@ def _build_structured_summary(
     # Fetch capture sessions associated with these meetings.
     from app.db.models import CaptureSession
 
-    session_ids = db.execute(
-        select(CaptureSession.id).where(
-            CaptureSession.org_id == org_id,
-            CaptureSession.meeting_id.in_(meeting_ids),
+    session_ids = (
+        db.execute(
+            select(CaptureSession.id).where(
+                CaptureSession.org_id == org_id,
+                CaptureSession.meeting_id.in_(meeting_ids),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not session_ids:
         return {
@@ -107,14 +130,18 @@ def _build_structured_summary(
             "context_summary": "No processed capture sessions for assigned meetings.",
         }
 
-    items = db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.org_id == org_id,
-            KnowledgeItem.capture_session_id.in_(session_ids),
-            KnowledgeItem.confidence.in_([c.value for c in _INCLUDED_CONFIDENCE]),
-            KnowledgeItem.lifecycle_state.in_([s.value for s in _ACTIVE_STATES]),
+    items = (
+        db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.org_id == org_id,
+                KnowledgeItem.capture_session_id.in_(session_ids),
+                KnowledgeItem.confidence.in_([c.value for c in _INCLUDED_CONFIDENCE]),
+                KnowledgeItem.lifecycle_state.in_([s.value for s in _ACTIVE_STATES]),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     buckets: dict[str, list[dict[str, Any]]] = {
         "decisions": [],
@@ -129,6 +156,9 @@ def _build_structured_summary(
             "confidence": item.confidence,
             "lifecycle_state": item.lifecycle_state,
             "capture_session_id": item.capture_session_id,
+            "owner_person_id": item.owner_person_id,
+            "due_at": item.due_at.isoformat() if item.due_at else None,
+            "coverage_gap": item.overlaps_coverage_gap,
         }
         if item.type == KnowledgeType.DECISION:
             buckets["decisions"].append(record)
@@ -148,6 +178,114 @@ def _build_structured_summary(
     }
 
 
+def _source_revision(db: Session, org_id: str, meeting_ids: list[str]) -> str:
+    """Invalidate on evidence/correction changes as well as meeting assignment.
+
+    The old meeting-ID-only hash cached empty memory forever when processing later
+    finished. Source rows participate, so changing a claim, transcript or coverage
+    does not serve a previously generated summary under a new source revision.
+    """
+    from app.db.models import CaptureSession, CoverageInterval, KnowledgeEvidence, Utterance
+
+    sessions = select(CaptureSession.id).where(
+        CaptureSession.org_id == org_id, CaptureSession.meeting_id.in_(meeting_ids)
+    )
+    items = select(KnowledgeItem.id).where(
+        KnowledgeItem.org_id == org_id, KnowledgeItem.capture_session_id.in_(sessions)
+    )
+    sources: dict[str, Any] = {"meetings": sorted(meeting_ids), "schema": "authorized-memory-v2"}
+    for model, condition in (
+        (CaptureSession, CaptureSession.id.in_(sessions)),
+        (KnowledgeItem, KnowledgeItem.id.in_(items)),
+        (Utterance, Utterance.capture_session_id.in_(sessions)),
+        (CoverageInterval, CoverageInterval.capture_session_id.in_(sessions)),
+        (KnowledgeEvidence, KnowledgeEvidence.knowledge_item_id.in_(items)),
+    ):
+        rows = db.scalars(
+            select(model).where(model.org_id == org_id, condition).order_by(model.id)
+        ).all()
+        sources[model.__tablename__] = [
+            {
+                column.name: str(getattr(row, column.name))
+                for column in model.__table__.columns
+                if column.name != "embedding"
+            }
+            for row in rows
+        ]
+    return hashlib.sha256(
+        json.dumps(sources, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def current_memory(
+    db: Session, org_id: str, scope_kind: str, scope_id: str, user_id: str | None = None
+) -> SummaryVersion:
+    """Build/cache the current authorized revision using a caller-owned session.
+
+    Customer memory always requires a reader. The scope lock serializes publication;
+    each version is keyed by its complete source set, never by 'latest customer'.
+    """
+    if scope_kind == "project":
+        scope = db.scalar(
+            select(Project)
+            .where(Project.org_id == org_id, Project.id == scope_id)
+            .with_for_update()
+        )
+        if scope is None:
+            raise LookupError("project not found")
+        if (
+            user_id is not None
+            and db.scalar(
+                select(ProjectMember.id).where(
+                    ProjectMember.org_id == org_id,
+                    ProjectMember.project_id == scope_id,
+                    ProjectMember.user_id == user_id,
+                )
+            )
+            is None
+        ):
+            raise LookupError("project not found")
+        meeting_ids = _meeting_ids_for_project(db, org_id, scope_id)
+    elif scope_kind == "customer":
+        if user_id is None:
+            raise ValueError("customer memory requires an authorized reader")
+        customer_scope = db.scalar(
+            select(Customer)
+            .where(Customer.org_id == org_id, Customer.id == scope_id)
+            .with_for_update()
+        )
+        if customer_scope is None:
+            raise LookupError("customer not found")
+        meeting_ids = _meeting_ids_for_customer(db, org_id, scope_id, user_id)
+    else:
+        raise ValueError("unknown memory scope")
+    revision = _source_revision(db, org_id, meeting_ids)
+    existing = db.scalar(
+        select(SummaryVersion).where(
+            SummaryVersion.org_id == org_id,
+            SummaryVersion.scope_kind == scope_kind,
+            SummaryVersion.scope_id == scope_id,
+            SummaryVersion.input_revision_hash == revision,
+            SummaryVersion.state == SummaryState.READY,
+        )
+    )
+    if existing is not None:
+        return existing
+    summary = SummaryVersion(
+        org_id=org_id,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        input_revision_hash=revision,
+        state=SummaryState.READY,
+        structured_summary=_build_structured_summary(db, org_id, meeting_ids),
+        source_meeting_ids=meeting_ids,
+    )
+    db.add(summary)
+    db.commit()
+    db.refresh(summary)
+    return summary
+
+
 def rebuild_project_memory(
     session_factory: Callable[[], Session],
     org_id: str,
@@ -155,40 +293,12 @@ def rebuild_project_memory(
 ) -> SummaryVersion:
     """Rebuild or retrieve a SummaryVersion for a project.
 
-    Idempotent: if the current meeting set hasn't changed (same hash), returns
+    Idempotent: if the authorized sources haven't changed (same hash), returns
     the existing READY row.  Creates a new READY row otherwise.
     """
     db = session_factory()
     try:
-        meeting_ids = _meeting_ids_for_project(db, org_id, project_id)
-        rev_hash = _revision_hash(meeting_ids)
-
-        existing = db.execute(
-            select(SummaryVersion).where(
-                SummaryVersion.scope_kind == "project",
-                SummaryVersion.scope_id == project_id,
-                SummaryVersion.input_revision_hash == rev_hash,
-                SummaryVersion.state == SummaryState.READY,
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return existing
-
-        structured = _build_structured_summary(db, org_id, meeting_ids)
-        sv = SummaryVersion(
-            org_id=org_id,
-            scope_kind="project",
-            scope_id=project_id,
-            input_revision_hash=rev_hash,
-            state=SummaryState.READY,
-            structured_summary=structured,
-            source_meeting_ids=meeting_ids,
-        )
-        db.add(sv)
-        db.commit()
-        db.refresh(sv)
-        log.info("project_memory_rebuilt", project_id=project_id, meetings=len(meeting_ids))
-        return sv
+        return current_memory(db, org_id, "project", project_id)
     except Exception:
         db.rollback()
         raise
@@ -200,39 +310,12 @@ def rebuild_customer_memory(
     session_factory: Callable[[], Session],
     org_id: str,
     customer_id: str,
+    user_id: str,
 ) -> SummaryVersion:
     """Rebuild or retrieve a SummaryVersion for a customer (all visible projects)."""
     db = session_factory()
     try:
-        meeting_ids = _meeting_ids_for_customer(db, org_id, customer_id)
-        rev_hash = _revision_hash(meeting_ids)
-
-        existing = db.execute(
-            select(SummaryVersion).where(
-                SummaryVersion.scope_kind == "customer",
-                SummaryVersion.scope_id == customer_id,
-                SummaryVersion.input_revision_hash == rev_hash,
-                SummaryVersion.state == SummaryState.READY,
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return existing
-
-        structured = _build_structured_summary(db, org_id, meeting_ids)
-        sv = SummaryVersion(
-            org_id=org_id,
-            scope_kind="customer",
-            scope_id=customer_id,
-            input_revision_hash=rev_hash,
-            state=SummaryState.READY,
-            structured_summary=structured,
-            source_meeting_ids=meeting_ids,
-        )
-        db.add(sv)
-        db.commit()
-        db.refresh(sv)
-        log.info("customer_memory_rebuilt", customer_id=customer_id, meetings=len(meeting_ids))
-        return sv
+        return current_memory(db, org_id, "customer", customer_id, user_id)
     except Exception:
         db.rollback()
         raise

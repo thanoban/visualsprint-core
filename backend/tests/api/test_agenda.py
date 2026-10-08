@@ -21,12 +21,9 @@ def _seed(db):
     org = Org(name="AgendaOrg")
     db.add(org)
     db.flush()
-    db.add_all(
-        [
-            User(id=USER_1, email="founder@example.com"),
-            OrgMember(org_id=org.id, user_id=USER_1, role="owner"),
-        ]
-    )
+    db.add(User(id=USER_1, email="founder@example.com"))
+    db.flush()
+    db.add(OrgMember(org_id=org.id, user_id=USER_1, role="owner"))
     db.commit()
     return org
 

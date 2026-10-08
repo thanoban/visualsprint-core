@@ -15,33 +15,38 @@ Architecture rules:
 
 import hashlib
 import json
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import dependency as auth_dep
-from app.auth.dependency import get_current_user, require_org_member
+from app.auth.dependency import (
+    get_current_user,
+    require_action_access,
+    require_org_member,
+    resolve_actor_person,
+)
 from app.db.base import get_db
 from app.db.models import (
     ActionStatus,
     CaptureSession,
-    Meeting,
     MeetingAssignment,
     Org,
-    Person,
-    Project,
     ProjectMember,
     ProposedAction,
     User,
 )
+from app.modules.projects.access import visible_meeting_ids
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["actions-v2"])
 
 
 def _payload_hash(payload: dict[str, object]) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 class ProposalView(BaseModel):
@@ -81,13 +86,6 @@ def _require_org(db: Session, org_id: str) -> None:
         raise HTTPException(404, "workspace not found")
 
 
-def _person_id_for_user(db: Session, org_id: str, user_id: str) -> str | None:
-    person = db.execute(
-        select(Person).where(Person.org_id == org_id, Person.user_id == user_id)
-    ).scalar_one_or_none()
-    return person.id if person else None
-
-
 @router.get("/proposals", response_model=list[ProposalView])
 def list_proposals(
     org_id: str,
@@ -105,6 +103,14 @@ def list_proposals(
     _require_org(db, org_id)
 
     q = select(ProposedAction).where(ProposedAction.org_id == org_id)
+    q = q.where(
+        ProposedAction.capture_session_id.in_(
+            select(CaptureSession.id).where(
+                CaptureSession.org_id == org_id,
+                CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user.id)),
+            )
+        )
+    )
     if status is not None:
         try:
             q = q.where(ProposedAction.status == ActionStatus(status))
@@ -124,20 +130,28 @@ def list_proposals(
             raise HTTPException(404, "project not found")
 
         # Find meeting IDs assigned to this project
-        assigned_meeting_ids = db.execute(
-            select(MeetingAssignment.meeting_id).where(
-                MeetingAssignment.org_id == org_id,
-                MeetingAssignment.project_id == project_id,
+        assigned_meeting_ids = (
+            db.execute(
+                select(MeetingAssignment.meeting_id).where(
+                    MeetingAssignment.org_id == org_id,
+                    MeetingAssignment.project_id == project_id,
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Find capture sessions for those meetings
-        session_ids = db.execute(
-            select(CaptureSession.id).where(
-                CaptureSession.org_id == org_id,
-                CaptureSession.meeting_id.in_(assigned_meeting_ids),
+        session_ids = (
+            db.execute(
+                select(CaptureSession.id).where(
+                    CaptureSession.org_id == org_id,
+                    CaptureSession.meeting_id.in_(assigned_meeting_ids),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         q = q.where(ProposedAction.capture_session_id.in_(session_ids))
 
@@ -163,13 +177,16 @@ def approve_proposal(
     """
     _require_org(db, org_id)
     action = db.execute(
-        select(ProposedAction).where(
+        select(ProposedAction)
+        .where(
             ProposedAction.id == action_id,
             ProposedAction.org_id == org_id,
         )
+        .with_for_update()
     ).scalar_one_or_none()
     if action is None:
         raise HTTPException(404, "proposal not found")
+    require_action_access(db, action, user)
 
     expected_hash = _payload_hash(action.payload)
     if body.payload_hash != expected_hash:
@@ -182,11 +199,10 @@ def approve_proposal(
     if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.FAILED):
         raise HTTPException(409, f"proposal is not approvable (status={action.status.value})")
 
-    actor_person_id = _person_id_for_user(db, org_id, user.id)
+    actor_person_id = resolve_actor_person(db, org_id, user)
     action.approved_by_person_id = actor_person_id
     action.approved_payload_hash = expected_hash
     action.status = ActionStatus.APPROVED
-    from datetime import UTC, datetime
     action.approved_at = datetime.now(UTC)
     db.commit()
     return _to_view(action)
@@ -203,13 +219,16 @@ def reject_proposal(
     """Reject a pending proposal.  Idempotent if already rejected."""
     _require_org(db, org_id)
     action = db.execute(
-        select(ProposedAction).where(
+        select(ProposedAction)
+        .where(
             ProposedAction.id == action_id,
             ProposedAction.org_id == org_id,
         )
+        .with_for_update()
     ).scalar_one_or_none()
     if action is None:
         raise HTTPException(404, "proposal not found")
+    require_action_access(db, action, user)
     if action.status == ActionStatus.REJECTED:
         return
     if action.status not in (ActionStatus.PENDING_APPROVAL,):

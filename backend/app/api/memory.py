@@ -1,15 +1,16 @@
 """Project and customer memory endpoints (F09)."""
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import Any
 
 from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
-from app.db.models import Customer, Org, Project, ProjectMember, SummaryState, SummaryVersion, User
-from app.memory.project_memory import latest_summary, rebuild_customer_memory, rebuild_project_memory
+from app.db.models import Customer, Org, Project, ProjectMember, User
+from app.memory.project_memory import current_memory
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["memory"])
 
@@ -61,10 +62,7 @@ def get_project_memory(
         raise HTTPException(404, "project not found")
     _require_project_member(db, org_id, project_id, user.id)
 
-    sv = latest_summary(db, "project", project_id)
-    if sv is None:
-        # Build it synchronously — first call after meeting assignment.
-        sv = rebuild_project_memory(lambda: db, org_id, project_id)
+    sv = current_memory(db, org_id, "project", project_id, user.id)
 
     return MemoryView(
         id=sv.id,
@@ -95,9 +93,7 @@ def get_customer_memory(
     if customer is None or customer.org_id != org_id:
         raise HTTPException(404, "customer not found")
 
-    sv = latest_summary(db, "customer", customer_id)
-    if sv is None:
-        sv = rebuild_customer_memory(lambda: db, org_id, customer_id)
+    sv = current_memory(db, org_id, "customer", customer_id, user.id)
 
     return MemoryView(
         id=sv.id,

@@ -27,7 +27,8 @@ because no second account had ever connected).
 import asyncio
 import json
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -38,11 +39,11 @@ from app.capture.blob_ingest import pcm_to_flac_blob
 from app.capture.consent import record_disclosure
 from app.capture.persist import persist_capture_artifacts
 from app.capture.rtms_client import RtmsResult, RtmsSession, WebSocketConnector
-from app.capture.token_provider import TokenProvider
 from app.capture.rtms_protocol import (
     compute_webhook_validation_response,
     verify_webhook_signature,
 )
+from app.capture.token_provider import TokenProvider
 from app.config import get_settings
 from app.db.base import get_db
 from app.db.models import (
@@ -124,7 +125,9 @@ async def _get_s2s_token() -> str:
         return str(resp.json()["access_token"])
 
 
-async def _enable_rtms_for_meeting(meeting_id: str, token_provider: TokenProvider | None = None) -> None:
+async def _enable_rtms_for_meeting(
+    meeting_id: str, token_provider: TokenProvider | None = None
+) -> None:
     """Current Zoom RTMS REST contract; account-matched credentials only."""
     settings = get_settings()
     token = await token_provider.get_token() if token_provider else await _get_s2s_token()
@@ -141,11 +144,11 @@ async def _enable_rtms_for_meeting(meeting_id: str, token_provider: TokenProvide
     logger.info("RTMS activation accepted for meeting %s; awaiting stream-start event", meeting_id)
 
 
-async def _run_stream(
-    *, meeting_uuid: str, rtms_stream_id: str, signaling_url: str
-) -> RtmsResult:
+async def _run_stream(*, meeting_uuid: str, rtms_stream_id: str, signaling_url: str) -> RtmsResult:
     if _connector is None:
-        raise RuntimeError("no WebSocketConnector configured for RTMS -- Zoom app not registered yet")
+        raise RuntimeError(
+            "no WebSocketConnector configured for RTMS -- Zoom app not registered yet"
+        )
     settings = get_settings()
     client_id = settings.zoom_oauth_client_id or settings.zoom_client_id
     client_secret = settings.zoom_oauth_client_secret or settings.zoom_client_secret
@@ -161,12 +164,19 @@ async def _run_stream(
     )
 
 
-async def _persist_rtms_result(db: Session, org_id: str, session_id: str, result: RtmsResult) -> None:
+async def _persist_rtms_result(
+    db: Session, org_id: str, session_id: str, result: RtmsResult
+) -> None:
     blob_uri = await pcm_to_flac_blob(
         result.pcm_bytes, get_blobstore(), f"zoom-rtms/{org_id}/{session_id}"
     )
 
-    session = db.query(CaptureSession).filter(CaptureSession.id == session_id).with_for_update().one_or_none()
+    session = (
+        db.query(CaptureSession)
+        .filter(CaptureSession.id == session_id)
+        .with_for_update()
+        .one_or_none()
+    )
     if session is None:
         raise HTTPException(404, "capture session not found")
 
@@ -221,10 +231,18 @@ async def _persist_rtms_result(db: Session, org_id: str, session_id: str, result
     db.commit()
 
 
-async def _run_owned_stream(*, org_id: str, session_id: str, db_factory: Callable[[], Session],
-                            meeting_uuid: str, rtms_stream_id: str, signaling_url: str) -> RtmsResult:
-    result = await _run_stream(meeting_uuid=meeting_uuid, rtms_stream_id=rtms_stream_id,
-                               signaling_url=signaling_url)
+async def _run_owned_stream(
+    *,
+    org_id: str,
+    session_id: str,
+    db_factory: Callable[[], Session],
+    meeting_uuid: str,
+    rtms_stream_id: str,
+    signaling_url: str,
+) -> RtmsResult:
+    result = await _run_stream(
+        meeting_uuid=meeting_uuid, rtms_stream_id=rtms_stream_id, signaling_url=signaling_url
+    )
     with db_factory() as owned_db:
         await _persist_rtms_result(owned_db, org_id, session_id, result)
     return result
@@ -312,14 +330,22 @@ async def zoom_rtms_webhook(
             raise HTTPException(400, "server_urls missing from payload")
 
         org = _resolve_org_for_zoom_account(db, payload.get("account_id"))
-        existing = db.query(CaptureSession).filter(
-            CaptureSession.org_id == org.id, CaptureSession.rtms_stream_id == rtms_stream_id
-        ).first()
+        existing = (
+            db.query(CaptureSession)
+            .filter(
+                CaptureSession.org_id == org.id, CaptureSession.rtms_stream_id == rtms_stream_id
+            )
+            .first()
+        )
         if existing is not None:
             return {"status": "duplicate", "capture_session_id": existing.id}
         meeting = (
             db.query(Meeting)
-            .filter(Meeting.org_id == org.id, Meeting.platform == "zoom", Meeting.platform_meeting_id == meeting_uuid)
+            .filter(
+                Meeting.org_id == org.id,
+                Meeting.platform == "zoom",
+                Meeting.platform_meeting_id == meeting_uuid,
+            )
             .one_or_none()
         )
         if meeting is None:
@@ -337,9 +363,12 @@ async def zoom_rtms_webhook(
 
         task = asyncio.create_task(
             _run_owned_stream(
-                org_id=org.id, session_id=cap_session.id,
+                org_id=org.id,
+                session_id=cap_session.id,
                 db_factory=sessionmaker(bind=db.get_bind(), expire_on_commit=False),
-                meeting_uuid=meeting_uuid, rtms_stream_id=rtms_stream_id, signaling_url=signaling_url
+                meeting_uuid=meeting_uuid,
+                rtms_stream_id=rtms_stream_id,
+                signaling_url=signaling_url,
             )
         )
         _active_streams[rtms_stream_id] = (org.id, cap_session.id, task)
@@ -352,9 +381,11 @@ async def zoom_rtms_webhook(
         if entry is None:
             # The stop webhook may land on another replica, or be a retry.
             # Never turn a load-balancing event into an unknown capture.
-            session = db.query(CaptureSession).filter(
-                CaptureSession.rtms_stream_id == rtms_stream_id
-            ).first()
+            session = (
+                db.query(CaptureSession)
+                .filter(CaptureSession.rtms_stream_id == rtms_stream_id)
+                .first()
+            )
             if session is None:
                 raise HTTPException(404, f"no active RTMS stream for {rtms_stream_id!r}")
             if session.state not in (CaptureState.SCHEDULED, CaptureState.ACQUIRING):
@@ -405,5 +436,7 @@ async def zoom_rtms_webhook(
     # eventually throttle or suspend delivery. Return 200 and log so we
     # can see what Zoom is actually sending without breaking the channel.
     db.close()
-    logger.info("zoom webhook event %r ignored (not an RTMS event), keys=%s", event, list(payload.keys()))
+    logger.info(
+        "zoom webhook event %r ignored (not an RTMS event), keys=%s", event, list(payload.keys())
+    )
     return {"status": "ignored", "event": event}

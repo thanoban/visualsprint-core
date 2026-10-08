@@ -2,6 +2,10 @@
 
 import hashlib
 import json
+from datetime import UTC, datetime
+
+import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import dependency as auth_dep
 from app.db.models import (
@@ -12,6 +16,7 @@ from app.db.models import (
     MeetingAssignment,
     Org,
     OrgMember,
+    Person,
     Project,
     ProjectMember,
     ProposedAction,
@@ -19,8 +24,8 @@ from app.db.models import (
 )
 from app.main import app
 
-USER_1 = "actv2-user-0000-0000-0000-000000000001"
-USER_2 = "actv2-user-0000-0000-0000-000000000002"
+USER_1 = "44444444-4444-4444-4444-444444444441"
+USER_2 = "44444444-4444-4444-4444-444444444442"
 
 _PAYLOAD = {"title": "Create Jira issue", "body": "Track Q4 decision", "target": {"key": "val"}}
 
@@ -39,6 +44,11 @@ def _seed(db):
         [
             User(id=USER_1, email="founder@example.com"),
             User(id=USER_2, email="other@example.com"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             OrgMember(org_id=org.id, user_id=USER_1, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_2, role="member"),
         ]
@@ -188,6 +198,28 @@ def test_approve_correct_hash(client, db_session):
     body = resp.json()
     assert body["status"] == "approved"
     assert body["approved_payload_hash"] == expected
+    db_session.refresh(action)
+    actor = db_session.get(Person, action.approved_by_person_id)
+    assert actor.org_id == org.id
+    assert actor.user_id == USER_1
+    assert action.approved_at is not None
+
+
+@pytest.mark.parametrize("status", [ActionStatus.APPROVED, ActionStatus.EXECUTED])
+@pytest.mark.parametrize("missing", ["actor", "timestamp"])
+def test_database_blocks_orm_status_without_complete_approval(db_session, status, missing):
+    """SQLAlchemy stores enum names (uppercase), not the lowercase API values."""
+    org = _seed(db_session)
+    action = _make_action(db_session, org.id)
+    actor = Person(org_id=org.id, user_id=USER_1, display_name="Founder")
+    db_session.add(actor)
+    db_session.flush()
+    action.status = status
+    action.approved_by_person_id = actor.id if missing != "actor" else None
+    action.approved_at = datetime.now(UTC) if missing != "timestamp" else None
+    with pytest.raises(IntegrityError, match="ck_action_requires_approval"):
+        db_session.flush()
+    db_session.rollback()
 
 
 def test_approve_wrong_hash_409(client, db_session):

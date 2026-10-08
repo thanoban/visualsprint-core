@@ -36,6 +36,7 @@ from app.db.models import (
     User,
     Utterance,
 )
+from app.modules.projects.access import can_edit_meeting, can_read_meeting
 from app.speakers.identity import recompute_voiceprint
 
 router = APIRouter(prefix="/api/v1", tags=["corrections"])
@@ -52,7 +53,7 @@ class UtteranceOut(BaseModel):
     session_speaker_id: str | None = None
     person_id: str | None = None
     attribution_confidence: float
-    asr_confidence: float
+    asr_confidence: float | None
     repaired: bool
 
 
@@ -82,7 +83,7 @@ async def list_utterances(
         speaker = "Unknown speaker"
         if utt.person_id:
             person = db.get(Person, utt.person_id)
-            if person is not None:
+            if person is not None and person.org_id == session.org_id:
                 speaker = person.display_name
         session_speaker = speakers.get(utt.speaker_cluster_id or "")
         out.append(
@@ -136,6 +137,8 @@ async def list_meeting_speakers(
         raise HTTPException(404, "capture session not found")
     if not auth_dep.is_org_member(db, session.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    if not can_read_meeting(db, session.org_id, session.meeting_id, user.id):
+        raise HTTPException(404, "capture session not found")
 
     people = (
         db.execute(
@@ -211,6 +214,10 @@ async def correct_session_speaker(
         raise HTTPException(404, "capture session not found")
     if not auth_dep.is_org_member(db, session.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    if not can_read_meeting(db, session.org_id, session.meeting_id, user.id):
+        raise HTTPException(404, "capture session not found")
+    if not can_edit_meeting(db, session.org_id, session.meeting_id, user.id):
+        raise HTTPException(403, "meeting edit access required")
 
     speaker = db.get(SessionSpeaker, session_speaker_id)
     if speaker is None or speaker.capture_session_id != capture_session_id:
@@ -314,6 +321,11 @@ async def submit_correction(
     # itself -- same reasoning as chat.py/actions.py's approve/reject.
     if not auth_dep.is_org_member(db, utterance.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    session = db.get(CaptureSession, utterance.capture_session_id)
+    if session is None or not can_read_meeting(db, utterance.org_id, session.meeting_id, user.id):
+        raise HTTPException(404, "utterance not found")
+    if not can_edit_meeting(db, utterance.org_id, session.meeting_id, user.id):
+        raise HTTPException(403, "meeting edit access required")
 
     corrected_text = req.corrected_text.strip()
     if not corrected_text:
@@ -363,7 +375,11 @@ class GlossaryTermOut(BaseModel):
     created_at: str
 
 
-@router.get("/orgs/{org_id}/glossary", response_model=list[GlossaryTermOut])
+@router.get(
+    "/orgs/{org_id}/glossary",
+    response_model=list[GlossaryTermOut],
+    dependencies=[Depends(auth_dep.require_legacy_source_access)],
+)
 async def list_glossary(
     org_id: str, db: Session = Depends(get_db), _: None = Depends(require_org_member)
 ) -> list[GlossaryTermOut]:
@@ -392,7 +408,11 @@ class AddGlossaryTermRequest(BaseModel):
     added_by_person_id: str | None = None
 
 
-@router.post("/orgs/{org_id}/glossary", response_model=GlossaryTermOut)
+@router.post(
+    "/orgs/{org_id}/glossary",
+    response_model=GlossaryTermOut,
+    dependencies=[Depends(auth_dep.require_legacy_source_access)],
+)
 async def add_glossary_term(
     org_id: str,
     req: AddGlossaryTermRequest,
@@ -416,7 +436,11 @@ async def add_glossary_term(
     )
 
 
-@router.delete("/orgs/{org_id}/glossary/{term_id}", status_code=204)
+@router.delete(
+    "/orgs/{org_id}/glossary/{term_id}",
+    status_code=204,
+    dependencies=[Depends(auth_dep.require_legacy_source_access)],
+)
 async def delete_glossary_term(
     org_id: str,
     term_id: str,

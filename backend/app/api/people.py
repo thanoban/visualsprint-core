@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependency import require_org_member
+from app.auth.dependency import require_legacy_source_access, require_org_member
 from app.db.base import get_db
 from app.db.models import (
     Confidence,
@@ -25,7 +25,11 @@ from app.db.models import (
     Utterance,
 )
 
-router = APIRouter(prefix="/api/v1/orgs/{org_id}/people", tags=["people"])
+router = APIRouter(
+    prefix="/api/v1/orgs/{org_id}/people",
+    tags=["people"],
+    dependencies=[Depends(require_legacy_source_access)],
+)
 
 COUNTED_CONFIDENCES = {Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED}
 
@@ -210,7 +214,11 @@ def _coverage_for_person(db: Session, person: Person) -> CoverageDisclosure:
     utterances = (
         db.execute(select(Utterance).where(Utterance.person_id == person.id)).scalars().all()
     )
-    low = [u for u in utterances if u.attribution_confidence < 0.75 or u.asr_confidence < 0.60]
+    low = [
+        u
+        for u in utterances
+        if u.attribution_confidence < 0.75 or u.asr_confidence is None or u.asr_confidence < 0.60
+    ]
     excluded = (
         db.execute(
             select(KnowledgeItem).where(
@@ -319,15 +327,21 @@ async def get_latest_person_analysis(
         .order_by(PersonAnalysisRun.period_end.desc())
         .limit(1)
     ).scalar_one_or_none()
-    commitments = db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.org_id == org_id,
-            KnowledgeItem.owner_person_id == person_id,
-            KnowledgeItem.type == KnowledgeType.COMMITMENT,
-            KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+    commitments = (
+        db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.org_id == org_id,
+                KnowledgeItem.owner_person_id == person_id,
+                KnowledgeItem.type == KnowledgeType.COMMITMENT,
+                KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+            )
         )
-    ).scalars().all()
-    timeline = sorted((_item_out(db, item) for item in commitments), key=lambda item: item.occurred_at)
+        .scalars()
+        .all()
+    )
+    timeline = sorted(
+        (_item_out(db, item) for item in commitments), key=lambda item: item.occurred_at
+    )
     monthly: dict[str, list[KnowledgeItem]] = {}
     for item in commitments:
         meeting = _meeting_for_item(db, item)
@@ -341,7 +355,8 @@ async def get_latest_person_analysis(
             coverage_gap=any(item.overlaps_coverage_gap for item in items),
             evidence_url=(
                 f"/meetings/{items[0].capture_session_id}/report?item={items[0].id}"
-                if items else None
+                if items
+                else None
             ),
         )
         for period, items in sorted(monthly.items())
@@ -350,7 +365,10 @@ async def get_latest_person_analysis(
     funnel = FunnelOut(
         stated=len(commitments),
         open=sum(item.lifecycle_state != LifecycleState.RESOLVED for item in commitments),
-        recurring=sum(item.lifecycle_state in {LifecycleState.RECURRING, LifecycleState.REOPENED} for item in commitments),
+        recurring=sum(
+            item.lifecycle_state in {LifecycleState.RECURRING, LifecycleState.REOPENED}
+            for item in commitments
+        ),
         blocked=blocked,
         delivered=sum(item.lifecycle_state == LifecycleState.RESOLVED for item in commitments),
     )
@@ -358,14 +376,18 @@ async def get_latest_person_analysis(
         state.value: sum(item.lifecycle_state == state for item in commitments)
         for state in LifecycleState
     }
-    decisions = db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.org_id == org_id,
-            KnowledgeItem.owner_person_id == person_id,
-            KnowledgeItem.type == KnowledgeType.DECISION,
-            KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+    decisions = (
+        db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.org_id == org_id,
+                KnowledgeItem.owner_person_id == person_id,
+                KnowledgeItem.type == KnowledgeType.DECISION,
+                KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     decision_ids = [item.id for item in decisions]
     evolution: list[LifecycleHop] = []
     if decision_ids:
@@ -375,7 +397,10 @@ async def get_latest_person_analysis(
             .where(
                 KnowledgeEdge.org_id == org_id,
                 KnowledgeEdge.kind.in_([EdgeKind.SUPERSEDES, EdgeKind.CONTRADICTS]),
-                (KnowledgeEdge.from_item_id.in_(decision_ids) | KnowledgeEdge.to_item_id.in_(decision_ids)),
+                (
+                    KnowledgeEdge.from_item_id.in_(decision_ids)
+                    | KnowledgeEdge.to_item_id.in_(decision_ids)
+                ),
             )
         ).all()
         for edge, source in edge_rows:
@@ -391,9 +416,7 @@ async def get_latest_person_analysis(
                     from_statement=source.statement,
                     from_meeting_title=meeting.title or "Untitled meeting",
                     from_occurred_at=occurred.isoformat(),
-                    evidence_url=(
-                        f"/meetings/{source.capture_session_id}/report?item={source.id}"
-                    ),
+                    evidence_url=(f"/meetings/{source.capture_session_id}/report?item={source.id}"),
                 )
             )
         evolution.sort(key=lambda hop: hop.from_occurred_at)
@@ -406,19 +429,24 @@ async def get_latest_person_analysis(
             commitment_funnel=funnel,
             status_distribution=status_distribution,
         )
-    findings = db.execute(
-        select(LongitudinalFinding).where(
-            LongitudinalFinding.analysis_run_id == run.id,
-            LongitudinalFinding.audit_status.in_(
-                [FindingAuditStatus.SUPPORTED, FindingAuditStatus.PARTIALLY_SUPPORTED]
-            ),
+    findings = (
+        db.execute(
+            select(LongitudinalFinding).where(
+                LongitudinalFinding.analysis_run_id == run.id,
+                LongitudinalFinding.audit_status.in_(
+                    [FindingAuditStatus.SUPPORTED, FindingAuditStatus.PARTIALLY_SUPPORTED]
+                ),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     finding_rows: list[LongitudinalFindingOut] = []
     heat: list[list[PersonKnowledgeOut]] = []
     for finding in findings:
         evidence_items = [
-            item for item_id in finding.evidence_item_ids
+            item
+            for item_id in finding.evidence_item_ids
             if (item := db.get(KnowledgeItem, item_id)) is not None and item.org_id == org_id
         ]
         rendered = [_item_out(db, item) for item in evidence_items]
@@ -490,9 +518,7 @@ async def get_lifecycle_chain(
                     from_statement=source.statement,
                     from_meeting_title=meeting.title or "Untitled meeting",
                     from_occurred_at=occurred_at.isoformat(),
-                    evidence_url=(
-                        f"/meetings/{source.capture_session_id}/report?item={source.id}"
-                    ),
+                    evidence_url=(f"/meetings/{source.capture_session_id}/report?item={source.id}"),
                 )
             )
             if source.id not in visited_items:

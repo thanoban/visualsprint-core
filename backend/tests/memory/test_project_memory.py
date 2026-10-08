@@ -183,13 +183,13 @@ def test_rebuild_customer_memory_aggregates_projects(session_factory, db):
     m2 = _assign_meeting(db, org.id, p2.id, "M2")
     db.commit()
 
-    sv = rebuild_customer_memory(session_factory, org.id, customer.id)
+    sv = rebuild_customer_memory(session_factory, org.id, customer.id, USER_ID)
     assert sv.scope_kind == "customer"
     assert sv.scope_id == customer.id
     assert set(sv.source_meeting_ids) == {m1.id, m2.id}
 
 
 def test_latest_summary_returns_none_when_empty(db):
-    org = _seed(db)
+    _seed(db)
     result = latest_summary(db, "project", "no-such-id")
     assert result is None

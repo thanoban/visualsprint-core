@@ -22,9 +22,10 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from app.auth.dependency import require_org_member
+from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
-from app.db.models import CaptureSession, JobStatus, LlmCall, Meeting, Org, PipelineJob
+from app.db.models import CaptureSession, JobStatus, LlmCall, Meeting, Org, PipelineJob, User
+from app.modules.projects.access import can_edit_meeting, visible_meeting_ids
 from app.orchestrator.audit import log_audit_event
 from app.orchestrator.llm_accounting import org_tokens_used_this_month
 from app.orchestrator.queue import requeue_job
@@ -57,13 +58,23 @@ class LlmSpendOut(BaseModel):
 async def list_failed_jobs(
     org_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> list[FailedJobOut]:
     """Every job in this org that exhausted its retries."""
     jobs = (
         db.execute(
             select(PipelineJob)
-            .where(PipelineJob.org_id == org_id, PipelineJob.status == JobStatus.FAILED)
+            .where(
+                PipelineJob.org_id == org_id,
+                PipelineJob.status == JobStatus.FAILED,
+                PipelineJob.capture_session_id.in_(
+                    select(CaptureSession.id).where(
+                        CaptureSession.org_id == org_id,
+                        CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user.id)),
+                    )
+                ),
+            )
             .order_by(PipelineJob.updated_at.desc())
         )
         .scalars()
@@ -94,6 +105,7 @@ async def requeue_failed_job(
     org_id: str,
     job_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> FailedJobOut:
     """Return one exhausted job to the queue.
@@ -105,6 +117,9 @@ async def requeue_failed_job(
         select(PipelineJob).where(PipelineJob.id == job_id, PipelineJob.org_id == org_id)
     ).scalar_one_or_none()
     if job is None:
+        raise HTTPException(404, "job not found")
+    capture = db.get(CaptureSession, job.capture_session_id)
+    if capture is None or not can_edit_meeting(db, org_id, capture.meeting_id, user.id):
         raise HTTPException(404, "job not found")
     if job.status != JobStatus.FAILED:
         raise HTTPException(409, f"job is {job.status.value}, only failed jobs can be requeued")

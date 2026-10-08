@@ -160,15 +160,26 @@ def _build_engagement(db: Session, capture_session_id: str) -> EngagementSummary
     return EngagementSummary(total_talk_time_s=total_s, participants=participants)
 
 
-async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> EvidenceRef | None:
+async def _build_evidence(
+    db: Session,
+    blob,
+    row: KnowledgeEvidence,
+    *,
+    org_id: str | None = None,
+    capture_session_id: str | None = None,
+) -> EvidenceRef | None:
     if row.utterance_id:
         utt = db.get(Utterance, row.utterance_id)
-        if utt is None:
+        if (
+            utt is None
+            or (org_id is not None and utt.org_id != org_id)
+            or (capture_session_id is not None and utt.capture_session_id != capture_session_id)
+        ):
             return None
         speaker = "Unknown speaker"
         if utt.person_id:
             person = db.get(Person, utt.person_id)
-            if person is not None:
+            if person is not None and person.org_id == utt.org_id:
                 speaker = person.display_name
         return EvidenceRef(
             id=row.id,
@@ -179,7 +190,11 @@ async def _build_evidence(db: Session, blob, row: KnowledgeEvidence) -> Evidence
         )
     if row.keyframe_id:
         kf = db.get(Keyframe, row.keyframe_id)
-        if kf is None:
+        if (
+            kf is None
+            or (org_id is not None and kf.org_id != org_id)
+            or (capture_session_id is not None and kf.capture_session_id != capture_session_id)
+        ):
             return None
         thumb = await blob.presigned_url(kf.image_uri) if kf.image_uri else None
         caption = kf.vlm_caption or kf.ocr_text or None
@@ -211,9 +226,8 @@ async def get_meeting_report(
         db.query(KnowledgeItem)
         .filter(
             KnowledgeItem.capture_session_id == capture_session_id,
-            KnowledgeItem.confidence.in_(
-                [Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED]
-            ),
+            KnowledgeItem.org_id == session.org_id,
+            KnowledgeItem.confidence.in_([Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED]),
         )
         .order_by(KnowledgeItem.created_at)
         .all()
@@ -222,14 +236,16 @@ async def get_meeting_report(
         owner_name = None
         if item.owner_person_id:
             person = db.get(Person, item.owner_person_id)
-            owner_name = person.display_name if person else None
+            owner_name = person.display_name if person and person.org_id == session.org_id else None
 
         evidence_rows = (
             db.query(KnowledgeEvidence).filter(KnowledgeEvidence.knowledge_item_id == item.id).all()
         )
         evidence: list[EvidenceRef] = []
         for row in evidence_rows:
-            ref = await _build_evidence(db, blob, row)
+            ref = await _build_evidence(
+                db, blob, row, org_id=session.org_id, capture_session_id=capture_session_id
+            )
             if ref is not None:
                 evidence.append(ref)
 

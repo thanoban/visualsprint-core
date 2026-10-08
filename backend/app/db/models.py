@@ -81,9 +81,7 @@ class Org(TimestampMixin, Base):
     disclosure_ack_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
-    disclosure_ack_by: Mapped[str | None] = mapped_column(
-        ForeignKey("app_user.id"), default=None
-    )
+    disclosure_ack_by: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
 
 
 class Person(TimestampMixin, Base):
@@ -234,9 +232,7 @@ class Customer(TimestampMixin, Base):
 class CustomerContact(TimestampMixin, Base):
     __tablename__ = "customer_contact"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["org_id", "customer_id"], ["customer.org_id", "customer.id"]
-        ),
+        ForeignKeyConstraint(["org_id", "customer_id"], ["customer.org_id", "customer.id"]),
         UniqueConstraint("customer_id", "email", name="uq_customer_contact_email"),
         Index("ix_customer_contact_org_email", "org_id", "email"),
     )
@@ -261,9 +257,7 @@ class ProjectStatus(enum.StrEnum):
 class Project(TimestampMixin, Base):
     __tablename__ = "project"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["org_id", "customer_id"], ["customer.org_id", "customer.id"]
-        ),
+        ForeignKeyConstraint(["org_id", "customer_id"], ["customer.org_id", "customer.id"]),
         UniqueConstraint("org_id", "id", name="uq_project_org_id"),
         Index("ix_project_org_status", "org_id", "status"),
     )
@@ -350,7 +344,8 @@ class CalendarOccurrence(TimestampMixin, Base):
     __tablename__ = "calendar_occurrence"
     __table_args__ = (
         UniqueConstraint(
-            "connection_id", "provider_event_id",
+            "connection_id",
+            "provider_event_id",
             name="uq_occurrence_connection_event",
         ),
         Index("ix_occurrence_org_start", "org_id", "start_time"),
@@ -494,7 +489,9 @@ class BotSession(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     meeting_id: Mapped[str | None] = mapped_column(ForeignKey("meeting.id"), default=None)
-    platform: Mapped[str] = mapped_column(String(32))  # meet | teams | zoom -- matches Meeting.platform
+    platform: Mapped[str] = mapped_column(
+        String(32)
+    )  # meet | teams | zoom -- matches Meeting.platform
     join_url: Mapped[str] = mapped_column(Text)
     status: Mapped[BotStatus] = mapped_column(
         Enum(BotStatus, native_enum=False, length=32), default=BotStatus.SCHEDULED
@@ -639,12 +636,11 @@ class CaptureAttempt(TimestampMixin, Base):
     last_provider_contact_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
-    state_entered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    state_entered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     last_transcript_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    transcript_revision_hash: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class UsageReservationStatus(enum.StrEnum):
@@ -883,7 +879,7 @@ class Utterance(TimestampMixin, Base):
     end_s: Mapped[float] = mapped_column(Float)
     text: Mapped[str] = mapped_column(Text)
     lang_tags: Mapped[list[Any]] = mapped_column(JSON, default=list)  # ["si","en"] per plan
-    asr_confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    asr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Which diarized voice said this, when known. Distinct from person_id:
     # a cluster separates speakers without naming them, so a transcript can
     # show "Speaker 1 / Speaker 2" before identity fusion resolves who they
@@ -1062,7 +1058,8 @@ class ProposedAction(TimestampMixin, Base):
     __table_args__ = (
         Index("ix_action_org_status", "org_id", "status"),
         CheckConstraint(
-            "status NOT IN ('approved','executed') OR approved_by_person_id IS NOT NULL",
+            "status NOT IN ('APPROVED','EXECUTED','approved','executed') "
+            "OR (approved_by_person_id IS NOT NULL AND approved_at IS NOT NULL)",
             name="ck_action_requires_approval",
         ),
     )
@@ -1190,9 +1187,7 @@ class LongitudinalFinding(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     person_id: Mapped[str] = mapped_column(ForeignKey("person.id"))
     analysis_run_id: Mapped[str] = mapped_column(ForeignKey("person_analysis_run.id"))
-    kind: Mapped[FindingKind] = mapped_column(
-        Enum(FindingKind, native_enum=False, length=24)
-    )
+    kind: Mapped[FindingKind] = mapped_column(Enum(FindingKind, native_enum=False, length=24))
     statement: Mapped[str] = mapped_column(Text)
     confidence: Mapped[Confidence] = mapped_column(
         Enum(Confidence, native_enum=False, length=24), default=Confidence.AMBIGUOUS
@@ -1362,6 +1357,7 @@ class LlmCall(TimestampMixin, Base):
 # Landing-page lead capture (public, unauthenticated -- app/api/leads.py)
 # ---------------------------------------------------------------------------
 
+
 class LeadKind(enum.StrEnum):
     DEMO = "demo"
     COLLABORATE = "collaborate"
@@ -1374,9 +1370,7 @@ class LandingLead(TimestampMixin, Base):
     __table_args__ = (Index("ix_landing_lead_kind_created", "kind", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    kind: Mapped[str] = mapped_column(
-        Enum(LeadKind, native_enum=False, length=16), nullable=False
-    )
+    kind: Mapped[str] = mapped_column(Enum(LeadKind, native_enum=False, length=16), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -1454,7 +1448,9 @@ class SummaryVersion(TimestampMixin, Base):
         CheckConstraint("scope_kind IN ('project', 'customer')", name="ck_sv_scope_kind"),
         Index("ix_sv_scope_state", "scope_kind", "scope_id", "state"),
         Index("ix_sv_org_scope", "org_id", "scope_kind", "scope_id"),
-        UniqueConstraint("scope_kind", "scope_id", "input_revision_hash", name="uq_sv_scope_revision"),
+        UniqueConstraint(
+            "scope_kind", "scope_id", "input_revision_hash", name="uq_sv_scope_revision"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1565,7 +1561,9 @@ class AnswerCitation(Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     message_id: Mapped[str] = mapped_column(ForeignKey("chat_message.id"))
     meeting_id: Mapped[str] = mapped_column(ForeignKey("meeting.id"))
-    knowledge_item_id: Mapped[str | None] = mapped_column(ForeignKey("knowledge_item.id"), default=None)
+    knowledge_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_item.id"), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

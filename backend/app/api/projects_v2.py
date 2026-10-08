@@ -276,13 +276,13 @@ def update_project(
     if member.role != ProjectRole.OWNER:
         raise HTTPException(403, "project owner required")
     project = db.execute(
-        select(Project)
-        .where(Project.org_id == org_id, Project.id == project_id)
-        .with_for_update()
+        select(Project).where(Project.org_id == org_id, Project.id == project_id).with_for_update()
     ).scalar_one()
     if project.version != body.version:
         raise HTTPException(409, "project version mismatch")
     if body.name is not None:
+        if not body.name.strip():
+            raise HTTPException(422, "project name is required")
         project.name = body.name.strip()
     if "customer_id" in body.model_fields_set:
         if body.customer_id is not None:
@@ -315,6 +315,11 @@ def upsert_project_member(
     _: None = Depends(require_org_member),
 ) -> ProjectMemberView:
     owner = _membership(db, org_id, project_id, user.id)
+    db.execute(
+        select(Project.id)
+        .where(Project.org_id == org_id, Project.id == project_id)
+        .with_for_update()
+    ).scalar_one()
     if owner.role != ProjectRole.OWNER:
         raise HTTPException(403, "project owner required")
     try:
@@ -322,9 +327,7 @@ def upsert_project_member(
     except ValueError as exc:
         raise HTTPException(422, "role must be owner, editor, or viewer") from exc
     workspace_member = db.execute(
-        select(OrgMember.id).where(
-            OrgMember.org_id == org_id, OrgMember.user_id == body.user_id
-        )
+        select(OrgMember.id).where(OrgMember.org_id == org_id, OrgMember.user_id == body.user_id)
     ).scalar_one_or_none()
     if workspace_member is None:
         raise HTTPException(404, "workspace member not found")
@@ -365,6 +368,11 @@ def remove_project_member(
     _: None = Depends(require_org_member),
 ) -> Response:
     owner = _membership(db, org_id, project_id, user.id)
+    db.execute(
+        select(Project.id)
+        .where(Project.org_id == org_id, Project.id == project_id)
+        .with_for_update()
+    ).scalar_one()
     if owner.role != ProjectRole.OWNER:
         raise HTTPException(403, "project owner required")
     target = db.execute(
@@ -438,10 +446,15 @@ def assign_meeting(
     meeting = db.get(Meeting, meeting_id)
     if meeting is None or meeting.org_id != org_id:
         raise HTTPException(404, "meeting not found")
+    if meeting.owner_user_id != user.id:
+        raise HTTPException(404, "owned meeting not found")
+    db.execute(select(Meeting.id).where(Meeting.id == meeting_id).with_for_update()).scalar_one()
 
     project = db.get(Project, body.project_id)
     if project is None or project.org_id != org_id:
         raise HTTPException(404, "project not found")
+    if project.status != ProjectStatus.ACTIVE:
+        raise HTTPException(409, "archived projects do not accept new assignments")
 
     # Caller must be a member of the target project.
     target_member = db.execute(
@@ -452,7 +465,9 @@ def assign_meeting(
         )
     ).scalar_one_or_none()
     if target_member is None:
-        raise HTTPException(403, "must be a project member to assign meetings")
+        raise HTTPException(404, "project not found")
+    if target_member.role not in {ProjectRole.OWNER, ProjectRole.EDITOR}:
+        raise HTTPException(403, "project edit access required")
 
     existing = db.execute(
         select(MeetingAssignment).where(MeetingAssignment.meeting_id == meeting_id)
@@ -521,6 +536,8 @@ def unassign_meeting(
     meeting = db.get(Meeting, meeting_id)
     if meeting is None or meeting.org_id != org_id:
         raise HTTPException(404, "meeting not found")
+    if meeting.owner_user_id != user.id:
+        raise HTTPException(404, "owned meeting not found")
 
     existing = db.execute(
         select(MeetingAssignment).where(MeetingAssignment.meeting_id == meeting_id)
@@ -536,7 +553,9 @@ def unassign_meeting(
         )
     ).scalar_one_or_none()
     if member is None:
-        raise HTTPException(403, "must be a project member to unassign")
+        raise HTTPException(404, "project not found")
+    if member.role not in {ProjectRole.OWNER, ProjectRole.EDITOR}:
+        raise HTTPException(403, "project edit access required")
 
     db.delete(existing)
     db.commit()
@@ -569,7 +588,9 @@ def list_project_meetings(
             meeting_id=meeting.id,
             title=meeting.title or "Untitled meeting",
             platform=meeting.platform,
-            scheduled_start=meeting.scheduled_start.isoformat() if meeting.scheduled_start else None,
+            scheduled_start=meeting.scheduled_start.isoformat()
+            if meeting.scheduled_start
+            else None,
             source=assignment.source.value,
         )
         for assignment, meeting in rows

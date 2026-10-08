@@ -2,7 +2,7 @@ from app.auth import dependency as auth_dep
 from app.db.models import Org, OrgMember, User
 from app.main import app
 
-USER_ID = "test-user-0000-0000-0000-000000000000"
+USER_ID = "11111111-1111-1111-1111-111111111111"
 USER_2 = "22222222-2222-2222-2222-222222222222"
 
 
@@ -11,6 +11,7 @@ def seed(db, role="owner"):
     db.add(org)
     db.flush()
     db.add(User(id=USER_ID, email="founder@example.com"))
+    db.flush()
     db.add(OrgMember(org_id=org.id, user_id=USER_ID, role=role))
     db.commit()
     return org
@@ -133,6 +134,4 @@ def test_non_admin_cannot_add_or_remove_members(client, db_session):
         == 403
     )
     as_user(USER_ID, "founder@example.com")
-    assert (
-        client.delete(f"/api/v2/workspaces/{org.id}/members/{USER_2}").status_code == 403
-    )
+    assert client.delete(f"/api/v2/workspaces/{org.id}/members/{USER_2}").status_code == 403

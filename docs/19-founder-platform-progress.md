@@ -594,7 +594,23 @@ three changed files.
 F14 acceptance criteria status: pilot flag API ✅, capture-minute limit enforcement ✅.
 Operational qualification (5-concurrent soak, outage drills) is runtime work not tracked here.
 
-## Next capture slice
+## Current audit and continuation — 2026-10-08
+
+The prior slice entries record foundation/API implementation, not full feature acceptance. The
+current code-path audit, corrective changes, verification boundaries and remaining F00–F14 gates
+are in [25 — System audit and continuation](25-system-audit-and-continuation.md). Start there when
+resuming. Calendar-to-v2 capture, saved-chat generation/UI, real provider qualification and durable
+export/deletion execution are not complete. Do not enable the pilot based only on the API checkmarks.
+
+The corrective slice hardens private meeting/customer/thread/agenda access, owner-only assignment,
+memory freshness, capture fencing/unknown confidence, honest transcript freshness, quota/idempotency,
+calendar cancellation scope, the persisted enum approval constraint and CI test fixture validity.
+Legacy aggregate views fail closed for source-restricted readers. It adds migrations `h9b0c1d2e3f4`
+and `i0c1d2e3f4a5` plus adversarial regressions. Docker-enabled local PostgreSQL migration rehearsal
+was performed in an isolated disposable container. No production migration, deployment or paid
+provisioning was performed. Exact test evidence and remaining release gates are recorded in document 25.
+
+## Historical next-capture checklist — partly implemented in later slices
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.
    Persist one request per workspace/meeting occurrence/idempotency key. Include cancellation,
@@ -610,8 +626,8 @@ Operational qualification (5-concurrent soak, outage drills) is runtime work not
 6. Implement deletion deadlines before enabling temporary recordings. Add consent/onboarding,
    per-org limits and calendar scheduling before any production capture rollout.
 
-Then implement the customer/project and persistent chat stages from the full plan. Maintain a
-separate checklist for local checks, staging meetings and production rollout; never merge those claims.
+Customer/project and persistent chat foundations now exist; complete their missing lifecycle/workers
+and frontend using document 25. Maintain separate local, staging and production checklists.
 
 ## Publication
 

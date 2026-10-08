@@ -15,6 +15,7 @@ This document is the plan index. The current specification is the following link
 5. [23 — Tests, live qualification, deployment, cost and operations](23-testing-and-operations.md)
 6. [19 — Actual progress, pause state and implementation resume order](19-founder-platform-progress.md)
 7. [24 — Decisions, risks and requirements traceability](24-decisions-and-traceability.md)
+8. [25 — System audit, corrective evidence and continuation](25-system-audit-and-continuation.md)
 
 Priority: latest explicit owner instruction -> current specification above -> legacy reference below.
 Future implementation should follow F00–F14 in order and update the progress ledger after each

@@ -9,15 +9,15 @@ Steps:
   3. Create Utterance rows from final provider segments.
   4. Detect coverage gaps → CoverageInterval rows.
   5. Update CaptureRequest.capture_session_id.
-  6. Enqueue pipeline at the "screen" stage (acquire/diarize/identify/transcribe skipped).
+  6. Enqueue understanding directly; the English pilot collects no screen media.
 """
 
 from __future__ import annotations
 
-import structlog
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import structlog
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,7 @@ from app.db.models import (
 from app.interfaces.capture_provider import (
     CaptureProviderError,
     CaptureReference,
+    CaptureStatus,
     TranscriptSegment,
 )
 from app.orchestrator.queue import enqueue_stage
@@ -47,7 +48,7 @@ log = structlog.get_logger()
 
 # Pipeline entry point for provider-transcript sessions.
 # acquire / diarize / identify / transcribe are all skipped.
-_PROVIDER_TRANSCRIPT_ENTRY_STAGE = "screen"
+_PROVIDER_TRANSCRIPT_ENTRY_STAGE = "understand"
 
 # Segments below this confidence are flagged as DEGRADED coverage.
 _DEGRADED_CONFIDENCE = 0.4
@@ -57,13 +58,15 @@ def _detect_gaps(segments: list[TranscriptSegment]) -> list[dict[str, object]]:
     """Return gap spans from provider segments (no ASR cascade involved)."""
     gaps: list[dict[str, object]] = []
     for seg in segments:
-        if not seg.text.strip():
+        if not seg.final or not seg.text.strip():
             gaps.append(
                 dict(
                     start_s=seg.start_s,
                     end_s=seg.end_s,
                     status=CoverageStatus.MISSING,
-                    reason="provider returned no text for this span",
+                    reason="provider transcript not finalized for this span"
+                    if not seg.final
+                    else "provider returned no text for this span",
                 )
             )
         elif seg.confidence is not None and seg.confidence < _DEGRADED_CONFIDENCE:
@@ -88,9 +91,6 @@ async def ingest_next(
 ) -> bool:
     """Claim and process one pending ingest event.  Returns True if an event was processed."""
     timestamp = now or datetime.now(UTC)
-    stale = timestamp
-    from datetime import timedelta
-
     stale = timestamp - timedelta(seconds=lease_seconds)
 
     with session_factory() as db:
@@ -101,8 +101,7 @@ async def ingest_next(
                 OutboxEvent.run_at <= timestamp,
                 or_(
                     OutboxEvent.status == OutboxStatus.PENDING,
-                    (OutboxEvent.status == OutboxStatus.RUNNING)
-                    & (OutboxEvent.locked_at < stale),
+                    (OutboxEvent.status == OutboxStatus.RUNNING) & (OutboxEvent.locked_at < stale),
                 ),
             )
             .with_for_update(skip_locked=True)
@@ -114,23 +113,29 @@ async def ingest_next(
         event.locked_by = worker_id
         event.locked_at = timestamp
         event.attempts += 1
+        event.fencing_version += 1
+        event_id, fence, attempts = event.id, event.fencing_version, event.attempts
         db.commit()
-        request_id: str = event.payload["capture_request_id"]
+        request_id = event.payload.get("capture_request_id")
+
+    if not isinstance(request_id, str) or request_id != event.entity_id:
+        _mark_error(session_factory, event_id, "invalid_ingest_payload", fence, worker_id)
+        return True
 
     with session_factory() as db:
         request = db.get(CaptureRequest, request_id)
         if request is None:
-            _mark_done(session_factory, event.id)
+            _mark_done(session_factory, event_id, fence, worker_id)
             return True
 
         # Idempotent: already ingested.
         if request.capture_session_id is not None:
-            _mark_done(session_factory, event.id)
+            _mark_done(session_factory, event_id, fence, worker_id)
             return True
 
         if request.status != CaptureRequestStatus.FINALIZED:
             log.warning("ingest.skipped_not_finalized", request_id=request_id)
-            _mark_done(session_factory, event.id)
+            _mark_error(session_factory, event_id, "request_not_finalized", fence, worker_id)
             return True
 
         attempt = db.execute(
@@ -144,20 +149,23 @@ async def ingest_next(
         ).scalar_one_or_none()
         if attempt is None:
             log.warning("ingest.no_ended_attempt", request_id=request_id)
-            _mark_done(session_factory, event.id)
+            _mark_error(session_factory, event_id, "ended_attempt_missing", fence, worker_id)
             return True
 
         binding = db.get(ProviderBinding, attempt.provider_binding_id)
         if binding is None:
-            _mark_done(session_factory, event.id)
+            _mark_error(session_factory, event_id, "provider_binding_missing", fence, worker_id)
             return True
 
         org_id = request.org_id
         meeting_id = request.meeting_id
 
+    if not attempt.provider_record_id:
+        _mark_error(session_factory, event_id, "provider_record_id_missing", fence, worker_id)
+        return True
     reference = CaptureReference(
         provider=binding.provider,
-        record_id=attempt.provider_record_id or "",
+        record_id=attempt.provider_record_id,
         platform=request.platform,
         native_meeting_id=request.native_meeting_id,
     )
@@ -165,23 +173,51 @@ async def ingest_next(
     try:
         provider = await provider_resolver.resolve(binding)
         snapshot = await provider.transcript(reference)
+        if snapshot.capture.reference != reference:
+            raise CaptureProviderError("provider_transcript_identity_mismatch")
+        if snapshot.capture.status != CaptureStatus.ENDED or not snapshot.segments:
+            raise CaptureProviderError("final_transcript_unavailable", retryable=True)
     except CaptureProviderError as exc:
         log.error("ingest.transcript_fetch_failed", request_id=request_id, code=exc.code)
-        if event.attempts >= 5:
-            _mark_error(session_factory, event.id, exc.code)
+        if attempts >= 5 or not exc.retryable:
+            _mark_error(session_factory, event_id, exc.code, fence, worker_id)
         else:
-            _reschedule(session_factory, event.id, timestamp, delay_seconds=60)
+            _reschedule(session_factory, event_id, timestamp, 60, fence, worker_id)
+        return True
+    except Exception:
+        # Keep provider/secret errors out of logs, and preserve a bounded retry.
+        if attempts >= 5:
+            _mark_error(
+                session_factory, event_id, "transcript_ingest_unavailable", fence, worker_id
+            )
+        else:
+            _reschedule(session_factory, event_id, timestamp, 60, fence, worker_id)
         return True
 
     segments = [s for s in snapshot.segments if s.final]
+    if not any(s.text.strip() for s in segments):
+        if attempts >= 5:
+            _mark_error(session_factory, event_id, "final_transcript_unavailable", fence, worker_id)
+        else:
+            _reschedule(session_factory, event_id, timestamp, 60, fence, worker_id)
+        return True
 
     with session_factory() as db:
-        request = db.get(CaptureRequest, request_id)
-        if request is None or request.capture_session_id is not None:
-            _mark_done(session_factory, event.id)
+        event_row = db.scalar(
+            select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
+        )
+        if not _owns_event(event_row, fence, worker_id):
             return True
-
-        event_row = db.get(OutboxEvent, event.id)
+        request = db.scalar(
+            select(CaptureRequest).where(CaptureRequest.id == request_id).with_for_update()
+        )
+        if request is None or request.capture_session_id is not None:
+            assert event_row is not None
+            event_row.status = OutboxStatus.DONE
+            event_row.locked_by = None
+            event_row.locked_at = None
+            db.commit()
+            return True
         session = CaptureSession(
             org_id=org_id,
             meeting_id=meeting_id,
@@ -200,13 +236,14 @@ async def ingest_next(
                     end_s=seg.end_s,
                     text=seg.text,
                     lang_tags=[seg.language] if seg.language else [],
-                    asr_confidence=seg.confidence if seg.confidence is not None else 1.0,
+                    asr_confidence=seg.confidence,
+                    attribution_confidence=0.0,
                     speaker_cluster_id=seg.speaker_label,
                     provider=f"{binding.provider}:transcript",
                 )
             )
 
-        for gap in _detect_gaps(segments):
+        for gap in _detect_gaps(snapshot.segments):
             db.add(
                 CoverageInterval(
                     org_id=org_id,
@@ -266,10 +303,22 @@ def enqueue_ingest(db: Session, request: CaptureRequest) -> None:
 # --- private helpers ---
 
 
-def _mark_done(session_factory: Callable[[], Session], event_id: str) -> None:
+def _owns_event(event: OutboxEvent | None, fence: int, worker_id: str) -> bool:
+    return (
+        event is not None
+        and event.status == OutboxStatus.RUNNING
+        and event.fencing_version == fence
+        and event.locked_by == worker_id
+    )
+
+
+def _mark_done(
+    session_factory: Callable[[], Session], event_id: str, fence: int, worker_id: str
+) -> None:
     with session_factory() as db:
-        ev = db.get(OutboxEvent, event_id)
-        if ev is not None:
+        ev = db.scalar(select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update())
+        if _owns_event(ev, fence, worker_id):
+            assert ev is not None
             ev.status = OutboxStatus.DONE
             ev.locked_by = None
             ev.locked_at = None
@@ -277,11 +326,12 @@ def _mark_done(session_factory: Callable[[], Session], event_id: str) -> None:
 
 
 def _mark_error(
-    session_factory: Callable[[], Session], event_id: str, code: str
+    session_factory: Callable[[], Session], event_id: str, code: str, fence: int, worker_id: str
 ) -> None:
     with session_factory() as db:
-        ev = db.get(OutboxEvent, event_id)
-        if ev is not None:
+        ev = db.scalar(select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update())
+        if _owns_event(ev, fence, worker_id):
+            assert ev is not None
             ev.status = OutboxStatus.FAILED
             ev.error_code = code
             ev.locked_by = None
@@ -294,12 +344,13 @@ def _reschedule(
     event_id: str,
     now: datetime,
     delay_seconds: int,
+    fence: int,
+    worker_id: str,
 ) -> None:
-    from datetime import timedelta
-
     with session_factory() as db:
-        ev = db.get(OutboxEvent, event_id)
-        if ev is not None:
+        ev = db.scalar(select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update())
+        if _owns_event(ev, fence, worker_id):
+            assert ev is not None
             ev.status = OutboxStatus.PENDING
             ev.run_at = now + timedelta(seconds=delay_seconds)
             ev.locked_by = None

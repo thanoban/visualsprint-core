@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -18,7 +17,6 @@ from app.db.models import (
     CaptureRequest,
     CaptureRequestStatus,
     CaptureSession,
-    CaptureStopState,
     CoverageInterval,
     CoverageStatus,
     Meeting,
@@ -28,8 +26,8 @@ from app.db.models import (
     PipelineJob,
     ProviderBinding,
     ProviderBindingStatus,
-    Utterance,
     User,
+    Utterance,
 )
 from app.interfaces.capture_provider import (
     CaptureProviderError,
@@ -39,7 +37,6 @@ from app.interfaces.capture_provider import (
     TranscriptSegment,
     TranscriptSnapshot,
 )
-
 
 # --------------------------------------------------------------------------- #
 # Fixtures
@@ -75,7 +72,9 @@ def db():
         engine.dispose()
 
 
-def _make_request(db, *, request_id: str = "req-1", status: CaptureRequestStatus = CaptureRequestStatus.FINALIZED) -> None:
+def _make_request(
+    db, *, request_id: str = "req-1", status: CaptureRequestStatus = CaptureRequestStatus.FINALIZED
+) -> None:
     with db() as session:
         session.add(
             CaptureRequest(
@@ -136,13 +135,15 @@ def _make_snapshot(segments: list[TranscriptSegment]) -> TranscriptSnapshot:
 
 
 class FakeProvider:
-    def __init__(self, *, segments: list[TranscriptSegment] | None = None, error: str | None = None):
+    def __init__(
+        self, *, segments: list[TranscriptSegment] | None = None, error: str | None = None
+    ):
         self._segments = segments or []
         self._error = error
 
     async def transcript(self, reference: CaptureReference) -> TranscriptSnapshot:
         if self._error:
-            raise CaptureProviderError(self._error, retryable=False)
+            raise CaptureProviderError(self._error, retryable=True)
         return _make_snapshot(self._segments)
 
     async def start(self, target: Any) -> Any: ...
@@ -169,9 +170,7 @@ def test_enqueue_ingest_creates_outbox_event(db):
     _add_ingest_event(db)
     with db() as session:
         ev = session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.operation == "capture.ingest_provider_transcript"
-            )
+            select(OutboxEvent).where(OutboxEvent.operation == "capture.ingest_provider_transcript")
         ).scalar_one()
         assert ev.entity_id == "req-1"
         assert ev.status == OutboxStatus.PENDING
@@ -185,11 +184,15 @@ def test_enqueue_ingest_is_idempotent(db):
         enqueue_ingest(session, req)  # second call must not insert a duplicate
         session.commit()
     with db() as session:
-        rows = session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.operation == "capture.ingest_provider_transcript"
+        rows = (
+            session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.operation == "capture.ingest_provider_transcript"
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
 
 
@@ -198,8 +201,24 @@ async def test_ingest_creates_capture_session_and_utterances(db):
     _make_request(db)
     _add_ingest_event(db)
     segments = [
-        TranscriptSegment(id="s1", start_s=0.0, end_s=5.0, text="Hello world", final=True, speaker_label="Speaker A", confidence=0.95),
-        TranscriptSegment(id="s2", start_s=5.0, end_s=10.0, text="How are you", final=True, speaker_label="Speaker B", confidence=0.90),
+        TranscriptSegment(
+            id="s1",
+            start_s=0.0,
+            end_s=5.0,
+            text="Hello world",
+            final=True,
+            speaker_label="Speaker A",
+            confidence=0.95,
+        ),
+        TranscriptSegment(
+            id="s2",
+            start_s=5.0,
+            end_s=10.0,
+            text="How are you",
+            final=True,
+            speaker_label="Speaker B",
+            confidence=0.90,
+        ),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
 
@@ -212,20 +231,24 @@ async def test_ingest_creates_capture_session_and_utterances(db):
         cap_session = session.get(CaptureSession, req.capture_session_id)
         assert cap_session is not None
         assert cap_session.mode == "B"
-        utterances = session.execute(
-            select(Utterance).where(Utterance.capture_session_id == cap_session.id)
-        ).scalars().all()
+        utterances = (
+            session.execute(select(Utterance).where(Utterance.capture_session_id == cap_session.id))
+            .scalars()
+            .all()
+        )
         assert len(utterances) == 2
         assert {u.text for u in utterances} == {"Hello world", "How are you"}
         assert utterances[0].speaker_cluster_id in {"Speaker A", "Speaker B"}
 
 
 @pytest.mark.asyncio
-async def test_ingest_enqueues_pipeline_at_screen_stage(db):
+async def test_ingest_skips_screen_collection_for_pilot(db):
     _make_request(db)
     _add_ingest_event(db)
     segments = [
-        TranscriptSegment(id="s1", start_s=0.0, end_s=3.0, text="Hi there", final=True, confidence=0.9),
+        TranscriptSegment(
+            id="s1", start_s=0.0, end_s=3.0, text="Hi there", final=True, confidence=0.9
+        ),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
 
@@ -237,7 +260,7 @@ async def test_ingest_enqueues_pipeline_at_screen_stage(db):
             select(PipelineJob).where(PipelineJob.capture_session_id == req.capture_session_id)
         ).scalar_one_or_none()
         assert job is not None
-        assert job.stage == "screen"
+        assert job.stage == "understand"
 
 
 @pytest.mark.asyncio
@@ -246,7 +269,9 @@ async def test_ingest_skips_non_final_segments(db):
     _add_ingest_event(db)
     segments = [
         TranscriptSegment(id="s1", start_s=0.0, end_s=3.0, text="Draft text", final=False),
-        TranscriptSegment(id="s2", start_s=3.0, end_s=6.0, text="Final text", final=True, confidence=0.9),
+        TranscriptSegment(
+            id="s2", start_s=3.0, end_s=6.0, text="Final text", final=True, confidence=0.9
+        ),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
 
@@ -254,9 +279,13 @@ async def test_ingest_skips_non_final_segments(db):
 
     with db() as session:
         req = session.get(CaptureRequest, "req-1")
-        utterances = session.execute(
-            select(Utterance).where(Utterance.capture_session_id == req.capture_session_id)
-        ).scalars().all()
+        utterances = (
+            session.execute(
+                select(Utterance).where(Utterance.capture_session_id == req.capture_session_id)
+            )
+            .scalars()
+            .all()
+        )
         assert len(utterances) == 1
         assert utterances[0].text == "Final text"
 
@@ -266,7 +295,9 @@ async def test_ingest_creates_coverage_gap_for_empty_segment(db):
     _make_request(db)
     _add_ingest_event(db)
     segments = [
-        TranscriptSegment(id="s1", start_s=0.0, end_s=3.0, text="Hello", final=True, confidence=0.9),
+        TranscriptSegment(
+            id="s1", start_s=0.0, end_s=3.0, text="Hello", final=True, confidence=0.9
+        ),
         TranscriptSegment(id="s2", start_s=3.0, end_s=7.0, text="", final=True),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
@@ -275,11 +306,15 @@ async def test_ingest_creates_coverage_gap_for_empty_segment(db):
 
     with db() as session:
         req = session.get(CaptureRequest, "req-1")
-        gaps = session.execute(
-            select(CoverageInterval).where(
-                CoverageInterval.capture_session_id == req.capture_session_id
+        gaps = (
+            session.execute(
+                select(CoverageInterval).where(
+                    CoverageInterval.capture_session_id == req.capture_session_id
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(gaps) == 1
         assert gaps[0].status == CoverageStatus.MISSING
 
@@ -289,7 +324,9 @@ async def test_ingest_creates_degraded_gap_for_low_confidence(db):
     _make_request(db)
     _add_ingest_event(db)
     segments = [
-        TranscriptSegment(id="s1", start_s=0.0, end_s=5.0, text="Mumble something", final=True, confidence=0.2),
+        TranscriptSegment(
+            id="s1", start_s=0.0, end_s=5.0, text="Mumble something", final=True, confidence=0.2
+        ),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
 
@@ -297,11 +334,15 @@ async def test_ingest_creates_degraded_gap_for_low_confidence(db):
 
     with db() as session:
         req = session.get(CaptureRequest, "req-1")
-        gaps = session.execute(
-            select(CoverageInterval).where(
-                CoverageInterval.capture_session_id == req.capture_session_id
+        gaps = (
+            session.execute(
+                select(CoverageInterval).where(
+                    CoverageInterval.capture_session_id == req.capture_session_id
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(gaps) == 1
         assert gaps[0].status == CoverageStatus.DEGRADED
 
@@ -311,7 +352,9 @@ async def test_ingest_is_idempotent_after_session_created(db):
     _make_request(db)
     _add_ingest_event(db)
     segments = [
-        TranscriptSegment(id="s1", start_s=0.0, end_s=3.0, text="Hello", final=True, confidence=0.9),
+        TranscriptSegment(
+            id="s1", start_s=0.0, end_s=3.0, text="Hello", final=True, confidence=0.9
+        ),
     ]
     resolver = FakeResolver(FakeProvider(segments=segments))
 
@@ -326,16 +369,12 @@ async def test_ingest_is_idempotent_after_session_created(db):
 
     sessions_before = 0
     with db() as session:
-        sessions_before = session.execute(
-            select(CaptureSession)
-        ).scalars().all().__len__()
+        sessions_before = session.execute(select(CaptureSession)).scalars().all().__len__()
 
     await ingest_next(db, provider_resolver=resolver, worker_id="w1")
 
     with db() as session:
-        sessions_after = session.execute(
-            select(CaptureSession)
-        ).scalars().all().__len__()
+        sessions_after = session.execute(select(CaptureSession)).scalars().all().__len__()
         assert sessions_after == sessions_before  # no second session created
 
 
@@ -350,9 +389,7 @@ async def test_ingest_retries_on_provider_error(db):
     assert did is True
     with db() as session:
         ev = session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.operation == "capture.ingest_provider_transcript"
-            )
+            select(OutboxEvent).where(OutboxEvent.operation == "capture.ingest_provider_transcript")
         ).scalar_one()
         assert ev.status == OutboxStatus.PENDING  # rescheduled, not failed
         assert ev.attempts == 1
@@ -365,9 +402,7 @@ async def test_ingest_marks_failed_after_max_attempts(db):
         req = session.get(CaptureRequest, "req-1")
         enqueue_ingest(session, req)
         ev = session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.operation == "capture.ingest_provider_transcript"
-            )
+            select(OutboxEvent).where(OutboxEvent.operation == "capture.ingest_provider_transcript")
         ).scalar_one()
         ev.attempts = 4  # will become 5 after this call
         session.commit()
@@ -377,8 +412,116 @@ async def test_ingest_marks_failed_after_max_attempts(db):
 
     with db() as session:
         ev = session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.operation == "capture.ingest_provider_transcript"
-            )
+            select(OutboxEvent).where(OutboxEvent.operation == "capture.ingest_provider_transcript")
         ).scalar_one()
         assert ev.status == OutboxStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_missing_confidence_and_speaker_identity_remain_unknown(db):
+    _make_request(db)
+    _add_ingest_event(db)
+    provider = FakeProvider(
+        segments=[
+            TranscriptSegment(
+                id="s1", start_s=0, end_s=3, text="Decision", final=True, speaker_label="Speaker 1"
+            )
+        ]
+    )
+    await ingest_next(db, provider_resolver=FakeResolver(provider), worker_id="w1")
+    with db() as session:
+        utterance = session.scalar(select(Utterance))
+        assert utterance.asr_confidence is None
+        assert utterance.attribution_confidence == 0
+        assert utterance.person_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "segments", [[], [TranscriptSegment(id="s1", start_s=0, end_s=3, text="", final=True)]]
+)
+async def test_empty_transcript_never_publishes_a_successful_session(db, segments):
+    _make_request(db)
+    event_id = _add_ingest_event(db)
+    await ingest_next(
+        db, provider_resolver=FakeResolver(FakeProvider(segments=segments)), worker_id="w1"
+    )
+    with db() as session:
+        assert session.get(CaptureRequest, "req-1").capture_session_id is None
+        assert session.get(OutboxEvent, event_id).status == OutboxStatus.PENDING
+        assert session.scalar(select(CaptureSession)) is None
+
+
+@pytest.mark.asyncio
+async def test_provider_identity_mismatch_is_terminal_not_a_retry(db):
+    _make_request(db)
+    event_id = _add_ingest_event(db)
+
+    class WrongProvider(FakeProvider):
+        async def transcript(self, reference):
+            snapshot = _make_snapshot([])
+            snapshot.capture.reference = reference.model_copy(update={"record_id": "other-record"})
+            return snapshot
+
+    await ingest_next(db, provider_resolver=FakeResolver(WrongProvider()), worker_id="w1")
+    with db() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.status == OutboxStatus.FAILED
+        assert event.error_code == "provider_transcript_identity_mismatch"
+        assert session.scalar(select(CaptureSession)) is None
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_event_cannot_be_published_by_stale_worker(db):
+    _make_request(db)
+    event_id = _add_ingest_event(db)
+
+    class ReclaimedProvider(FakeProvider):
+        async def transcript(self, reference):
+            with db() as session:
+                event = session.get(OutboxEvent, event_id)
+                event.fencing_version += 1
+                event.locked_by = "new-worker"
+                session.commit()
+            return _make_snapshot(
+                [TranscriptSegment(id="s1", start_s=0, end_s=3, text="Text", final=True)]
+            )
+
+    await ingest_next(
+        db, provider_resolver=FakeResolver(ReclaimedProvider()), worker_id="old-worker"
+    )
+    with db() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.status == OutboxStatus.RUNNING
+        assert event.locked_by == "new-worker"
+        assert session.scalar(select(CaptureSession)) is None
+
+
+@pytest.mark.asyncio
+async def test_unfinalized_spans_are_disclosed_as_missing_coverage(db):
+    _make_request(db)
+    _add_ingest_event(db)
+    provider = FakeProvider(
+        segments=[
+            TranscriptSegment(id="draft", start_s=0, end_s=3, text="Draft", final=False),
+            TranscriptSegment(id="final", start_s=3, end_s=6, text="Final", final=True),
+        ]
+    )
+    await ingest_next(db, provider_resolver=FakeResolver(provider), worker_id="w1")
+    with db() as session:
+        gap = session.scalar(select(CoverageInterval))
+        assert (gap.start_s, gap.end_s, gap.status) == (0, 3, CoverageStatus.MISSING)
+
+
+@pytest.mark.asyncio
+async def test_malformed_ingest_payload_is_failed_safely(db):
+    _make_request(db)
+    event_id = _add_ingest_event(db)
+    with db() as session:
+        session.get(OutboxEvent, event_id).payload = {}
+        session.commit()
+    await ingest_next(db, provider_resolver=FakeResolver(FakeProvider()), worker_id="w1")
+    with db() as session:
+        event = session.get(OutboxEvent, event_id)
+        assert event.status == OutboxStatus.FAILED
+        assert event.error_code == "invalid_ingest_payload"

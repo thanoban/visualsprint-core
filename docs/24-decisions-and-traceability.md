@@ -17,7 +17,7 @@ production deployment and paid provisioning remain separately gated.
 | Five founders / 100 hours / five concurrent | Explicit pilot selection | Test load and quota baseline |
 | Lowest practical cost | Owner requested free/open-source where suitable | Qualify self-hosted capture and inexpensive inference |
 | Architecture may change | Owner permits full redesign | Replace fragile capture ownership; retain useful tested boundaries |
-| Documentation before code | Latest owner instruction | No further implementation or publishing of code now |
+| Documentation before code | Historical planning phase, followed by explicit development instruction | Plan approved; incremental implementation resumed, deployment separately gated |
 
 Small paid pilot was selected, but a precise approved recurring spending ceiling has not been set.
 All dollar amounts in the documents are planning allowances, not purchasing authorization.

@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters.blobstore_s3 import get_blobstore
-from app.auth.dependency import require_org_member
+from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
 from app.db.models import (
     AudioTrack,
@@ -27,8 +27,10 @@ from app.db.models import (
     Org,
     Participant,
     ProposedAction,
+    User,
     Utterance,
 )
+from app.modules.projects.access import can_edit_meeting, can_read_meeting
 from app.orchestrator.audit import log_audit_event
 from app.orchestrator.erasure import erase_meeting
 
@@ -48,7 +50,9 @@ async def get_org_settings(
     org = db.get(Org, org_id)
     if org is None:
         raise HTTPException(404, "org not found")
-    return OrgSettingsOut(org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy)
+    return OrgSettingsOut(
+        org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy
+    )
 
 
 class UpdateOrgSettingsRequest(BaseModel):
@@ -72,7 +76,9 @@ async def update_org_settings(
         raise HTTPException(404, "org not found")
     if req.retention_days_set:
         if req.retention_days is not None and req.retention_days <= 0:
-            raise HTTPException(400, "retention_days must be a positive integer, or null to keep forever")
+            raise HTTPException(
+                400, "retention_days must be a positive integer, or null to keep forever"
+            )
         org.retention_days = req.retention_days
         log_audit_event(
             db,
@@ -82,7 +88,9 @@ async def update_org_settings(
             detail={"retention_days": req.retention_days},
         )
     db.commit()
-    return OrgSettingsOut(org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy)
+    return OrgSettingsOut(
+        org_id=org.id, retention_days=org.retention_days, join_policy=org.join_policy
+    )
 
 
 def _get_org_meeting(db: Session, org_id: str, meeting_id: str) -> Meeting:
@@ -99,6 +107,7 @@ async def export_meeting(
     org_id: str,
     meeting_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> dict:
     """Full data-portability dump: every row this org's data derived from
@@ -107,6 +116,8 @@ async def export_meeting(
     recipient of an export request gets pointers to the actual files via
     the blobstore, not a multi-gigabyte JSON body."""
     meeting = _get_org_meeting(db, org_id, meeting_id)
+    if not can_read_meeting(db, org_id, meeting_id, user.id):
+        raise HTTPException(404, "meeting not found")
     sessions = (
         db.execute(select(CaptureSession).where(CaptureSession.meeting_id == meeting.id))
         .scalars()
@@ -123,7 +134,12 @@ async def export_meeting(
                 "video_uri": session.video_uri,
                 "disclosure_log": session.disclosure_log,
                 "consent_records": [
-                    {"subject": c.subject, "method": c.method, "detail": c.detail, "at": c.created_at.isoformat()}
+                    {
+                        "subject": c.subject,
+                        "method": c.method,
+                        "detail": c.detail,
+                        "at": c.created_at.isoformat(),
+                    }
                     for c in db.execute(
                         select(ConsentRecord).where(ConsentRecord.capture_session_id == session.id)
                     ).scalars()
@@ -186,13 +202,17 @@ async def export_meeting(
                         "reason": ci.reason,
                     }
                     for ci in db.execute(
-                        select(CoverageInterval).where(CoverageInterval.capture_session_id == session.id)
+                        select(CoverageInterval).where(
+                            CoverageInterval.capture_session_id == session.id
+                        )
                     ).scalars()
                 ],
                 "proposed_actions": [
                     {"kind": a.kind, "status": a.status.value, "payload": a.payload}
                     for a in db.execute(
-                        select(ProposedAction).where(ProposedAction.capture_session_id == session.id)
+                        select(ProposedAction).where(
+                            ProposedAction.capture_session_id == session.id
+                        )
                     ).scalars()
                 ],
             }
@@ -219,6 +239,7 @@ async def delete_meeting(
     meeting_id: str,
     requested_by: str = "",
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> EraseMeetingResponse:
     """Irreversible. Deletes the meeting and everything derived from every
@@ -227,6 +248,10 @@ async def delete_meeting(
     no undo; a caller that wants a copy first should hit the export
     endpoint before this one."""
     meeting = _get_org_meeting(db, org_id, meeting_id)
+    if not can_read_meeting(db, org_id, meeting_id, user.id):
+        raise HTTPException(404, "meeting not found")
+    if not can_edit_meeting(db, org_id, meeting_id, user.id):
+        raise HTTPException(403, "meeting edit access required")
 
     # meeting_id only, deliberately -- erase_meeting() below deletes the
     # Meeting row (title included), and the audit trail itself has no purge

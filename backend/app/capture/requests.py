@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,8 +25,10 @@ from app.db.models import (
     OrgMember,
     OutboxEvent,
     UsageReservation,
+    UsageReservationStatus,
 )
 from app.interfaces.capture_provider import MeetingTarget
+from app.modules.projects.access import can_read_meeting
 
 
 class CaptureRequestConflict(ValueError):
@@ -111,7 +113,7 @@ def create_capture_request(
     if validated_target != target:
         raise ValueError("meeting target identity does not match its URL")
 
-    org = db.get(Org, org_id)
+    org = db.scalar(select(Org).where(Org.id == org_id).with_for_update())
     meeting_exists = db.execute(
         select(Meeting.id).where(Meeting.id == meeting_id, Meeting.org_id == org_id)
     ).scalar_one_or_none()
@@ -123,28 +125,13 @@ def create_capture_request(
     ).scalar_one_or_none()
     if meeting_exists is None or member_exists is None:
         raise CaptureRequestScopeError("capture_request_scope_mismatch")
-    if org is None or org.capture_policy == "off" or org.disclosure_ack_at is None:
-        raise CapturePolicyError("workspace_capture_not_enabled")
-
-    # Capture-minute limit: sum current-month reserved seconds.
-    # Reservations use the "bot_second" unit; limit is stored as minutes.
-    if org.capture_monthly_minutes is not None:
-        now_ts = now or datetime.now(UTC)
-        month_start = now_ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        used_seconds_raw = db.execute(
-            select(func.coalesce(func.sum(UsageReservation.estimated_quantity), 0)).where(
-                UsageReservation.org_id == org_id,
-                UsageReservation.unit == "bot_second",
-                UsageReservation.created_at >= month_start,
-            )
-        ).scalar_one()
-        used_seconds = float(used_seconds_raw or 0)
-        limit_seconds = org.capture_monthly_minutes * 60
-        if used_seconds + estimated_seconds > limit_seconds:
-            raise CaptureMinuteLimitError(
-                f"would exceed monthly limit of {org.capture_monthly_minutes} minutes"
-            )
-
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is not None and (
+        (meeting.owner_user_id is not None and meeting.owner_user_id != requested_by)
+        or (org is not None and org.pilot_features_enabled and meeting.owner_user_id is None)
+        or not can_read_meeting(db, org_id, meeting_id, requested_by)
+    ):
+        raise CaptureRequestScopeError("capture_request_scope_mismatch")
     input_hash = capture_request_input_hash(
         meeting_id=meeting_id,
         requested_by=requested_by,
@@ -157,6 +144,48 @@ def create_capture_request(
         if existing.input_hash != input_hash:
             raise CaptureRequestConflict("idempotency_key_payload_mismatch")
         return CaptureRequestResult(existing, created=False)
+    if org is None or org.capture_policy == "off" or org.disclosure_ack_at is None:
+        raise CapturePolicyError("workspace_capture_not_enabled")
+
+    # Capture-minute limit: sum current-month reserved seconds.
+    # Reservations use the "bot_second" unit; limit is stored as minutes.
+    if org.capture_monthly_minutes is not None:
+        now_ts = now or datetime.now(UTC)
+        month_start = now_ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        used_seconds_raw = db.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                UsageReservation.status == UsageReservationStatus.RECONCILED,
+                                func.coalesce(
+                                    UsageReservation.actual_quantity,
+                                    UsageReservation.estimated_quantity,
+                                ),
+                            ),
+                            else_=UsageReservation.estimated_quantity,
+                        )
+                    ),
+                    0,
+                )
+            ).where(
+                UsageReservation.org_id == org_id,
+                UsageReservation.unit == "bot_second",
+                UsageReservation.created_at >= month_start,
+                UsageReservation.created_at < month_end,
+                UsageReservation.status.in_(
+                    {UsageReservationStatus.RESERVED, UsageReservationStatus.RECONCILED}
+                ),
+            )
+        ).scalar_one()
+        used_seconds = float(used_seconds_raw or 0)
+        limit_seconds = org.capture_monthly_minutes * 60
+        if used_seconds + estimated_seconds > limit_seconds:
+            raise CaptureMinuteLimitError(
+                f"would exceed monthly limit of {org.capture_monthly_minutes} minutes"
+            )
 
     timestamp = now or datetime.now(UTC)
     request_id = str(uuid.uuid4())

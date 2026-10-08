@@ -7,6 +7,8 @@ state-machine guards (can't approve/reject twice, can't approve straight
 into EXECUTED without a connector attempt).
 """
 
+from datetime import UTC, datetime
+
 import app.auth.dependency as auth_dep
 from app.api.actions import _build_org_token_provider, _get_connector
 from app.auth.dependency import is_org_member as _real_is_org_member
@@ -20,6 +22,7 @@ from app.db.models import (
     OrgConnection,
     Person,
     ProposedAction,
+    User,
 )
 from app.interfaces.actions import ActionKind, ActionResult
 
@@ -29,8 +32,11 @@ def _seed(db, *, kind: str = "email_draft", target: dict | None = None):
     db.add(org)
     db.flush()
 
-    person = Person(org_id=org.id, display_name="Nimal Perera",
-                    user_id="test-user-0000-0000-0000-000000000000")
+    user_id = "11111111-1111-1111-1111-111111111111"
+    if db.get(User, user_id) is None:
+        db.add(User(id=user_id, email="test@example.com"))
+        db.flush()
+    person = Person(org_id=org.id, display_name="Nimal Perera", user_id=user_id)
     db.add(person)
     db.flush()
 
@@ -188,10 +194,31 @@ def test_approve_404_for_unknown_action(client):
     assert resp.status_code == 404
 
 
+def test_approval_creates_actor_link_without_guessing_same_email_identity(client, db_session):
+    _, action_id, person_id = _seed(db_session)
+    unverified = db_session.get(Person, person_id)
+    unverified.user_id = None
+    unverified.email = "test@example.com"
+    db_session.commit()
+
+    response = client.post(f"/api/v1/actions/{action_id}/approve", json={})
+    assert response.status_code == 200, response.text
+    action = db_session.get(ProposedAction, action_id)
+    assert action.approved_at is not None
+    assert action.approved_by_person_id != person_id
+    actor = db_session.get(Person, action.approved_by_person_id)
+    assert actor.user_id == "11111111-1111-1111-1111-111111111111"
+    assert actor.org_id == action.org_id
+    db_session.refresh(unverified)
+    assert unverified.user_id is None
+
+
 def test_approve_rejects_already_approved_action(client, db_session):
     org_id, action_id, _person_id = _seed(db_session)
     action = db_session.get(ProposedAction, action_id)
     action.status = ActionStatus.EXECUTED
+    action.approved_by_person_id = _person_id
+    action.approved_at = datetime.now(UTC)
     db_session.commit()
 
     resp = client.post(f"/api/v1/actions/{action_id}/approve", json={})

@@ -200,9 +200,11 @@ async def test_meet_event_uses_official_artifact_path_by_default(db):
 
 async def test_meet_event_schedules_guest_bot_after_explicit_org_opt_in(db, monkeypatch):
     monkeypatch.setattr(
-        scheduler, "get_settings", lambda: SimpleNamespace(
+        scheduler,
+        "get_settings",
+        lambda: SimpleNamespace(
             bot_google_guest_enabled=True, bot_dispatch_enabled=True, bot_teams_guest_enabled=False
-        )
+        ),
     )
     org, connection = _seed_org(db)
     adapter = FakeCalendarAdapter(
@@ -217,9 +219,13 @@ async def test_meet_event_schedules_guest_bot_after_explicit_org_opt_in(db, monk
 
 
 async def test_teams_event_also_schedules_a_bot_session_with_the_full_join_url(db, monkeypatch):
-    monkeypatch.setattr(scheduler, "get_settings", lambda: SimpleNamespace(
-        bot_google_guest_enabled=False, bot_dispatch_enabled=True, bot_teams_guest_enabled=True
-    ))
+    monkeypatch.setattr(
+        scheduler,
+        "get_settings",
+        lambda: SimpleNamespace(
+            bot_google_guest_enabled=False, bot_dispatch_enabled=True, bot_teams_guest_enabled=True
+        ),
+    )
     org, connection = _seed_org(db)
     join_url = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0"
     adapter = FakeCalendarAdapter([_event("evt-teams", conferencing_text=join_url)])
@@ -254,6 +260,7 @@ async def test_raises_clearly_when_org_not_found(db):
 
 
 # F03: CalendarOccurrence tests
+
 
 async def test_occurrence_row_is_created_on_first_sync(db):
     org, connection = _seed_org(db)
@@ -381,6 +388,28 @@ async def test_cancelled_event_without_meeting_leaves_no_meeting(db):
     db.refresh(occ)
     assert occ.status == CalendarOccurrenceStatus.CANCELLED
     assert db.query(Meeting).count() == 0
+
+
+async def test_narrow_sync_does_not_cancel_events_outside_its_window(db):
+    _, connection = _seed_org(db, capture_policy="off")
+    event = _event("future", start_offset_min=48 * 60)
+    await sync_calendar_connection(
+        db, connection, FakeCalendarAdapter([event]), within=timedelta(days=3)
+    )
+    await sync_calendar_connection(
+        db, connection, FakeCalendarAdapter([]), within=timedelta(days=1)
+    )
+    assert db.query(CalendarOccurrence).one().status == CalendarOccurrenceStatus.SCHEDULED
+
+
+async def test_reappearing_cancelled_event_becomes_scheduled(db):
+    _, connection = _seed_org(db, capture_policy="off")
+    event = _event("returns")
+    await sync_calendar_connection(db, connection, FakeCalendarAdapter([event]))
+    await sync_calendar_connection(db, connection, FakeCalendarAdapter([]))
+    assert db.query(CalendarOccurrence).one().status == CalendarOccurrenceStatus.CANCELLED
+    await sync_calendar_connection(db, connection, FakeCalendarAdapter([event]))
+    assert db.query(CalendarOccurrence).one().status == CalendarOccurrenceStatus.SCHEDULED
 
 
 async def test_dst_boundary_times_are_passed_through_from_adapter(db):

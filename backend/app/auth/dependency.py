@@ -7,11 +7,13 @@ unauthenticated -- any caller could act on any org_id.
 """
 
 from fastapi import Depends, Header, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.verify import AuthError, verify_jwt
 from app.db.base import get_db
-from app.db.models import CaptureSession, Org, OrgMember, Person, User
+from app.db.models import CaptureSession, Meeting, Org, OrgMember, Person, ProposedAction, User
+from app.modules.projects.access import can_edit_meeting, can_read_meeting, visible_meeting_ids
 
 
 def _extract_bearer_token(authorization: str) -> str:
@@ -49,7 +51,9 @@ def get_current_user(
         _meta = claims.get("user_metadata")
         _full_name = _meta.get("full_name", "") if isinstance(_meta, dict) else ""
         display_name = str(_full_name or email or user_id[:8])
-        person = Person(org_id=org.id, user_id=user.id, display_name=display_name, email=email or None)
+        person = Person(
+            org_id=org.id, user_id=user.id, display_name=display_name, email=email or None
+        )
         db.add(person)
         db.commit()
     return user
@@ -62,6 +66,33 @@ def is_org_member(db: Session, org_id: str, user: User) -> bool:
         .one_or_none()
         is not None
     )
+
+
+def resolve_actor_person(db: Session, org_id: str, user: User) -> str:
+    """Link an authenticated actor without guessing a speaker's identity.
+
+    Invited members do not necessarily have a Person in their new workspace.
+    Serialize creation on the persisted user and link by user ID only, never
+    by a transcript label or a coincidentally matching email address.
+    """
+    actor = db.execute(
+        select(User).where(User.id == user.id).with_for_update()
+    ).scalar_one_or_none()
+    if actor is None:
+        raise HTTPException(409, "authenticated actor has no persisted user record")
+    person = db.execute(
+        select(Person).where(Person.org_id == org_id, Person.user_id == actor.id)
+    ).scalar_one_or_none()
+    if person is None:
+        person = Person(
+            org_id=org_id,
+            user_id=actor.id,
+            display_name=actor.email or actor.id,
+            email=actor.email or None,
+        )
+        db.add(person)
+        db.flush()
+    return person.id
 
 
 def require_org_member(
@@ -97,6 +128,27 @@ def require_org_admin(
     return user
 
 
+def require_legacy_source_access(
+    org_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _: None = Depends(require_org_member),
+) -> None:
+    """Fail closed for old aggregates with no reader-specific source provenance.
+
+    Filtering only their citations would leave private source content in the
+    generated prose/counts/glossary. Keep these compatibility views unavailable
+    to restricted readers until their projections are source-aware.
+    """
+    hidden = db.scalar(
+        select(Meeting.id)
+        .where(Meeting.org_id == org_id, Meeting.id.not_in(visible_meeting_ids(org_id, user.id)))
+        .limit(1)
+    )
+    if hidden is not None:
+        raise HTTPException(403, "legacy workspace view unavailable with restricted sources")
+
+
 def require_session_member(
     capture_session_id: str,
     user: User = Depends(get_current_user),
@@ -115,4 +167,33 @@ def require_session_member(
         raise HTTPException(404, "capture session not found")
     if not is_org_member(db, session.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    if not can_read_meeting(db, session.org_id, session.meeting_id, user.id):
+        raise HTTPException(404, "capture session not found")
     return session
+
+
+def require_session_editor(
+    capture_session_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CaptureSession:
+    session = require_session_member(capture_session_id, user, db)
+    if not can_edit_meeting(db, session.org_id, session.meeting_id, user.id):
+        raise HTTPException(403, "meeting edit access required")
+    return session
+
+
+def require_action_access(
+    db: Session, action: ProposedAction, user: User, *, edit: bool = True
+) -> None:
+    """Shared action policy for legacy and v2 endpoints, not a router dependency."""
+    session = db.get(CaptureSession, action.capture_session_id)
+    if (
+        session is None
+        or session.org_id != action.org_id
+        or not is_org_member(db, action.org_id, user)
+        or not can_read_meeting(db, action.org_id, session.meeting_id, user.id)
+    ):
+        raise HTTPException(404, "action not found")
+    if edit and not can_edit_meeting(db, action.org_id, session.meeting_id, user.id):
+        raise HTTPException(403, "meeting edit access required")

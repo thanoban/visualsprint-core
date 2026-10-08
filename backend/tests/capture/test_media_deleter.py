@@ -18,7 +18,6 @@ from app.db.models import (
     CaptureMediaRef,
     CaptureRequest,
     CaptureRequestStatus,
-    CaptureStopState,
     MediaDeletionState,
     Meeting,
     Org,
@@ -204,7 +203,7 @@ def test_failed_after_max_attempts(db):
 def test_list_overdue_returns_pending_past_deadline(db):
     capture_started = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
     with db() as session:
-        ref = register_media_ref(
+        register_media_ref(
             session,
             org_id="org-1",
             request_id="req-1",

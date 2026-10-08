@@ -55,7 +55,11 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> float:
 def _semantic_similarity(left: KnowledgeItem, right: KnowledgeItem) -> float:
     vector_score = _cosine(left.embedding, right.embedding)
     left_tokens, right_tokens = _tokens(left.statement), _tokens(right.statement)
-    lexical = len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens | right_tokens else 0.0
+    lexical = (
+        len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+        if left_tokens | right_tokens
+        else 0.0
+    )
     return max(vector_score, lexical)
 
 
@@ -71,13 +75,17 @@ def _aware(value: datetime) -> datetime:
 def assemble_person_evidence(
     db: Session, org_id: str, person_id: str, period_start: datetime, period_end: datetime
 ) -> EvidenceCorpus:
-    rows = db.execute(
-        select(KnowledgeItem).where(
-            KnowledgeItem.org_id == org_id,
-            KnowledgeItem.owner_person_id == person_id,
-            KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+    rows = (
+        db.execute(
+            select(KnowledgeItem).where(
+                KnowledgeItem.org_id == org_id,
+                KnowledgeItem.owner_person_id == person_id,
+                KnowledgeItem.confidence.in_(COUNTED_CONFIDENCES),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     selected: list[tuple[KnowledgeItem, Meeting]] = []
     for item in rows:
         meeting = _meeting_for_item(db, item)
@@ -86,12 +94,18 @@ def assemble_person_evidence(
             selected.append((item, meeting))
 
     item_ids = [item.id for item, _meeting in selected]
-    edges = db.execute(
-        select(KnowledgeEdge).where(
-            KnowledgeEdge.org_id == org_id,
-            (KnowledgeEdge.from_item_id.in_(item_ids) | KnowledgeEdge.to_item_id.in_(item_ids)),
+    edges = (
+        db.execute(
+            select(KnowledgeEdge).where(
+                KnowledgeEdge.org_id == org_id,
+                (KnowledgeEdge.from_item_id.in_(item_ids) | KnowledgeEdge.to_item_id.in_(item_ids)),
+            )
         )
-    ).scalars().all() if item_ids else []
+        .scalars()
+        .all()
+        if item_ids
+        else []
+    )
     rationales: dict[str, list[str]] = defaultdict(list)
     blockers: dict[str, list[str]] = defaultdict(list)
     for edge in edges:
@@ -103,9 +117,11 @@ def assemble_person_evidence(
             blockers[edge.to_item_id].append(edge.from_item_id)
     statuses: dict[str, list[str]] = defaultdict(list)
     if item_ids:
-        for work in db.execute(
-            select(WorkEvidence).where(WorkEvidence.knowledge_item_id.in_(item_ids))
-        ).scalars().all():
+        for work in (
+            db.execute(select(WorkEvidence).where(WorkEvidence.knowledge_item_id.in_(item_ids)))
+            .scalars()
+            .all()
+        ):
             statuses[work.knowledge_item_id].append(work.status.value)
 
     items = [
@@ -126,15 +142,27 @@ def assemble_person_evidence(
         )
     ]
     serialized = json.dumps([item.model_dump(mode="json") for item in items], sort_keys=True)
-    utterances = db.execute(
-        select(Utterance).where(Utterance.org_id == org_id, Utterance.person_id == person_id)
-    ).scalars().all()
+    utterances = (
+        db.execute(
+            select(Utterance).where(Utterance.org_id == org_id, Utterance.person_id == person_id)
+        )
+        .scalars()
+        .all()
+    )
     session_ids = {item.capture_session_id for item, _meeting in selected}
-    gaps = db.execute(
-        select(CoverageInterval).where(CoverageInterval.capture_session_id.in_(session_ids))
-    ).scalars().all() if session_ids else []
+    gaps = (
+        db.execute(
+            select(CoverageInterval).where(CoverageInterval.capture_session_id.in_(session_ids))
+        )
+        .scalars()
+        .all()
+        if session_ids
+        else []
+    )
     low = sum(
-        utterance.attribution_confidence < 0.75 or utterance.asr_confidence < 0.60
+        utterance.attribution_confidence < 0.75
+        or utterance.asr_confidence is None
+        or utterance.asr_confidence < 0.60
         for utterance in utterances
     )
     return EvidenceCorpus(
@@ -153,15 +181,14 @@ def detect_repetition_candidates(
     db: Session, org_id: str, person_id: str, corpus: EvidenceCorpus
 ) -> list[list[LongitudinalEvidenceItem]]:
     source = [
-        item for item in corpus.items
+        item
+        for item in corpus.items
         if item.type in {KnowledgeType.COMMITMENT, KnowledgeType.BLOCKER}
         and item.lifecycle_state not in {LifecycleState.RESOLVED, LifecycleState.SUPERSEDED}
         and not item.blocker_item_ids
         and "closed" not in item.work_statuses
     ]
-    model_rows = {
-        item.id: db.get(KnowledgeItem, item.id) for item in source
-    }
+    model_rows = {item.id: db.get(KnowledgeItem, item.id) for item in source}
     parent = {item.id: item.id for item in source}
 
     def find(item_id: str) -> str:
@@ -176,7 +203,7 @@ def detect_repetition_candidates(
             parent[b] = a
 
     for index, left in enumerate(source):
-        for right in source[index + 1:]:
+        for right in source[index + 1 :]:
             left_row, right_row = model_rows[left.id], model_rows[right.id]
             if (
                 left_row
@@ -188,7 +215,11 @@ def detect_repetition_candidates(
     groups: dict[str, list[LongitudinalEvidenceItem]] = defaultdict(list)
     for item in source:
         groups[find(item.id)].append(item)
-    return [sorted(group, key=lambda item: item.meeting_at) for group in groups.values() if len(group) >= 2]
+    return [
+        sorted(group, key=lambda item: item.meeting_at)
+        for group in groups.values()
+        if len(group) >= 2
+    ]
 
 
 def build_progress_input(person_id: str, corpus: EvidenceCorpus) -> ProgressInput:
@@ -197,13 +228,18 @@ def build_progress_input(person_id: str, corpus: EvidenceCorpus) -> ProgressInpu
         return ProgressInput(person_id=person_id, periods=[])
     ordered = sorted(commitments, key=lambda item: item.meeting_at)
     midpoint = ordered[0].meeting_at + (ordered[-1].meeting_at - ordered[0].meeting_at) / 2
-    buckets = [("earlier", [item for item in ordered if item.meeting_at <= midpoint]), ("later", [item for item in ordered if item.meeting_at > midpoint])]
+    buckets = [
+        ("earlier", [item for item in ordered if item.meeting_at <= midpoint]),
+        ("later", [item for item in ordered if item.meeting_at > midpoint]),
+    ]
     periods = [
         ProgressPeriod(
             label=label,
             meeting_count=len({item.meeting_at.date() for item in items}),
             commitment_ids=[item.id for item in items],
-            delivered_ids=[item.id for item in items if item.lifecycle_state == LifecycleState.RESOLVED],
+            delivered_ids=[
+                item.id for item in items if item.lifecycle_state == LifecycleState.RESOLVED
+            ],
             blocked_ids=[item.id for item in items if item.blocker_item_ids],
             coverage_gap_count=int(corpus.coverage_disclosure.get("coverage_gap_count", 0)),
         )
@@ -215,11 +251,15 @@ def build_progress_input(person_id: str, corpus: EvidenceCorpus) -> ProgressInpu
 def validate_grounding(db: Session, org_id: str, evidence_item_ids: list[str]) -> bool:
     if not evidence_item_ids or len(set(evidence_item_ids)) != len(evidence_item_ids):
         return False
-    found = db.execute(
-        select(KnowledgeItem.id).where(
-            KnowledgeItem.org_id == org_id, KnowledgeItem.id.in_(evidence_item_ids)
+    found = (
+        db.execute(
+            select(KnowledgeItem.id).where(
+                KnowledgeItem.org_id == org_id, KnowledgeItem.id.in_(evidence_item_ids)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return set(found) == set(evidence_item_ids)
 
 

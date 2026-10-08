@@ -13,9 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-_STALE_AFTER = timedelta(seconds=180)
-_LIVE_STATES = {"joining", "waiting_for_admission", "capturing", "stopping"}
-
 from app.adapters.secretstore_gcp import get_secretstore
 from app.auth.dependency import get_current_user, require_org_member
 from app.capture.dispatcher import enqueue_reconciliation
@@ -35,10 +32,16 @@ from app.db.models import (
     CaptureStopState,
     OutboxEvent,
     OutboxStatus,
+    UsageReservation,
+    UsageReservationStatus,
     User,
 )
 from app.interfaces.capture_provider import MeetingTarget
 from app.interfaces.secretstore import SecretStore
+from app.modules.projects.access import can_read_meeting
+
+_STALE_AFTER = timedelta(seconds=180)
+_LIVE_STATES = {"joining", "waiting_for_admission", "capturing", "stopping"}
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}/capture-requests", tags=["capture-v2"])
 
@@ -195,6 +198,7 @@ def get_request(
     org_id: str,
     request_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> CaptureRequestView:
     request = db.execute(
@@ -204,6 +208,8 @@ def get_request(
         )
     ).scalar_one_or_none()
     if request is None:
+        raise HTTPException(404, "capture request not found")
+    if not can_read_meeting(db, org_id, request.meeting_id, user.id):
         raise HTTPException(404, "capture request not found")
     attempt = db.execute(
         select(CaptureAttempt)
@@ -219,6 +225,7 @@ def stop_request(
     org_id: str,
     request_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> CaptureRequestView:
     request = db.execute(
@@ -227,6 +234,10 @@ def stop_request(
         .with_for_update()
     ).scalar_one_or_none()
     if request is None:
+        raise HTTPException(404, "capture request not found")
+    if request.requested_by != user.id or not can_read_meeting(
+        db, org_id, request.meeting_id, user.id
+    ):
         raise HTTPException(404, "capture request not found")
     original_status = request.status
     original_stop_state = request.stop_state
@@ -241,6 +252,14 @@ def stop_request(
     elif attempt is None and request.status == CaptureRequestStatus.QUEUED:
         request.status = CaptureRequestStatus.CANCELLED
         request.stop_state = CaptureStopState.CONFIRMED
+        for reservation in db.scalars(
+            select(UsageReservation).where(
+                UsageReservation.org_id == org_id,
+                UsageReservation.request_id == request.id,
+                UsageReservation.status == UsageReservationStatus.RESERVED,
+            )
+        ):
+            reservation.status = UsageReservationStatus.RELEASED
         for event in db.scalars(
             select(OutboxEvent).where(
                 OutboxEvent.entity_id == request.id,

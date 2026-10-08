@@ -11,7 +11,7 @@ from app.db.models import (
     User,
 )
 
-USER_ID = "test-user-0000-0000-0000-000000000000"
+USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
 def seed(db):
@@ -19,6 +19,7 @@ def seed(db):
     db.add(org)
     db.flush()
     db.add(User(id=USER_ID, email="founder@example.com"))
+    db.flush()
     db.add(OrgMember(org_id=org.id, user_id=USER_ID, role="owner"))
     connection = CalendarConnection(
         org_id=org.id, provider="google", account_email="founder@example.com", secret_ref="ref"

@@ -28,7 +28,6 @@ from app.db.models import (
     ExportJob,
     Org,
     OrgMember,
-    Project,
     ProjectMember,
     User,
 )
@@ -117,6 +116,8 @@ def create_export(
     """
     _require_org(db, org_id)
     if body.scope_kind == "workspace":
+        if body.scope_id != org_id:
+            raise HTTPException(404, "workspace not found")
         _require_org_owner(db, org_id, user.id)
     elif body.scope_kind == "project":
         pm = db.execute(
@@ -204,6 +205,8 @@ def create_deletion(
     """
     _require_org(db, org_id)
     if body.scope_kind == "workspace":
+        if body.scope_id != org_id:
+            raise HTTPException(404, "workspace not found")
         _require_org_owner(db, org_id, user.id)
     elif body.scope_kind == "project":
         _require_project_owner(db, org_id, body.scope_id, user.id)

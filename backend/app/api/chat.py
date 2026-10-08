@@ -12,10 +12,11 @@ raw transcript text — matching docs/05-data-model.md § Retrieval.
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import Text, func, or_
+from sqlalchemy import Text, func, or_, select
 from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,7 @@ from app.auth.dependency import get_current_user
 from app.db.base import get_db
 from app.db.models import (
     CaptureSession,
+    Confidence,
     Keyframe,
     KnowledgeEdge,
     KnowledgeEvidence,
@@ -34,8 +36,10 @@ from app.db.models import (
     User,
     Utterance,
 )
+from app.interfaces.blobstore import BlobStore
 from app.interfaces.embedder import Embedder
 from app.interfaces.llm import LlmClient
+from app.modules.projects.access import can_read_meeting, visible_meeting_ids
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -45,11 +49,16 @@ MAX_EDGE_ROWS = 20
 MAX_EVIDENCE_PER_ITEM = 2
 
 
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     org_id: str
     question: str
     meeting_id: str | None = None
-    history: list[dict] | None = None  # accepted, unused today (no multi-turn context yet)
+    history: list[HistoryMessage] | None = None  # legacy path; persistent threads own v2 history
 
 
 class EvidenceChip(BaseModel):
@@ -82,10 +91,27 @@ def _session_ids_for_meeting(db: Session, meeting_id: str) -> list[str]:
 
 
 def _fts_candidates(
-    db: Session, org_id: str, question: str, meeting_id: str | None
+    db: Session,
+    org_id: str,
+    question: str,
+    meeting_id: str | None,
+    *,
+    user_id: str | None = None,
 ) -> list[KnowledgeItem]:
     """Postgres full-text search over statements — the working retrieval path today."""
-    q = db.query(KnowledgeItem).filter(KnowledgeItem.org_id == org_id)
+    q = db.query(KnowledgeItem).filter(
+        KnowledgeItem.org_id == org_id,
+        KnowledgeItem.confidence.in_({Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED}),
+    )
+    if user_id is not None:
+        q = q.filter(
+            KnowledgeItem.capture_session_id.in_(
+                select(CaptureSession.id).where(
+                    CaptureSession.org_id == org_id,
+                    CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user_id)),
+                )
+            )
+        )
     if meeting_id:
         q = q.filter(KnowledgeItem.capture_session_id.in_(_session_ids_for_meeting(db, meeting_id)))
 
@@ -115,7 +141,12 @@ def _fts_candidates(
 
 
 def _vector_candidates(
-    db: Session, org_id: str, query_embedding: list[float] | None, meeting_id: str | None
+    db: Session,
+    org_id: str,
+    query_embedding: list[float] | None,
+    meeting_id: str | None,
+    *,
+    user_id: str | None = None,
 ) -> list[KnowledgeItem]:
     """pgvector cosine-similarity search over `KnowledgeItem.embedding`.
 
@@ -131,22 +162,56 @@ def _vector_candidates(
     if db.bind is None or db.bind.dialect.name != "postgresql":
         return []
     q = db.query(KnowledgeItem).filter(
-        KnowledgeItem.org_id == org_id, KnowledgeItem.embedding.isnot(None)
+        KnowledgeItem.org_id == org_id,
+        KnowledgeItem.embedding.isnot(None),
+        KnowledgeItem.confidence.in_({Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED}),
     )
+    if user_id is not None:
+        q = q.filter(
+            KnowledgeItem.capture_session_id.in_(
+                select(CaptureSession.id).where(
+                    CaptureSession.org_id == org_id,
+                    CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user_id)),
+                )
+            )
+        )
     if meeting_id:
         q = q.filter(KnowledgeItem.capture_session_id.in_(_session_ids_for_meeting(db, meeting_id)))
     q = q.order_by(KnowledgeItem.embedding.cosine_distance(query_embedding))
     return q.limit(MAX_VECTOR_CANDIDATES).all()
 
 
-def _expand_edges(db: Session, items: list[KnowledgeItem]) -> list[KnowledgeItem]:
+def _expand_edges(
+    db: Session,
+    items: list[KnowledgeItem],
+    *,
+    org_id: str,
+    user_id: str,
+    meeting_id: str | None = None,
+) -> list[KnowledgeItem]:
     """One-hop expansion along knowledge_edge (supersedes/contradicts/continues/recurs/resolves)."""
     if not items:
         return []
     ids = {i.id for i in items}
+    sessions = select(CaptureSession.id).where(
+        CaptureSession.org_id == org_id,
+        CaptureSession.meeting_id.in_(visible_meeting_ids(org_id, user_id)),
+    )
+    if meeting_id:
+        sessions = sessions.where(CaptureSession.meeting_id == meeting_id)
+    permitted_items = select(KnowledgeItem.id).where(
+        KnowledgeItem.org_id == org_id,
+        KnowledgeItem.confidence.in_({Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED}),
+        KnowledgeItem.capture_session_id.in_(sessions),
+    )
     edges = (
         db.query(KnowledgeEdge)
-        .filter(or_(KnowledgeEdge.from_item_id.in_(ids), KnowledgeEdge.to_item_id.in_(ids)))
+        .filter(
+            KnowledgeEdge.org_id == org_id,
+            or_(KnowledgeEdge.from_item_id.in_(ids), KnowledgeEdge.to_item_id.in_(ids)),
+            KnowledgeEdge.from_item_id.in_(permitted_items),
+            KnowledgeEdge.to_item_id.in_(permitted_items),
+        )
         .limit(MAX_EDGE_ROWS)
         .all()
     )
@@ -154,7 +219,16 @@ def _expand_edges(db: Session, items: list[KnowledgeItem]) -> list[KnowledgeItem
     related_ids -= ids
     if not related_ids:
         return []
-    return db.query(KnowledgeItem).filter(KnowledgeItem.id.in_(related_ids)).all()
+    return (
+        db.query(KnowledgeItem)
+        .filter(
+            KnowledgeItem.org_id == org_id,
+            KnowledgeItem.confidence.in_({Confidence.VERIFIED, Confidence.PARTIALLY_SUPPORTED}),
+            KnowledgeItem.id.in_(related_ids),
+            KnowledgeItem.capture_session_id.in_(sessions),
+        )
+        .all()
+    )
 
 
 def _template_answer(
@@ -210,7 +284,7 @@ async def _llm_answer(
 
 
 async def _build_chip(
-    db: Session, blob, item: KnowledgeItem, row: KnowledgeEvidence
+    db: Session, blob: BlobStore, item: KnowledgeItem, row: KnowledgeEvidence
 ) -> EvidenceChip | None:
     session = db.get(CaptureSession, item.capture_session_id)
     meeting = db.get(Meeting, session.meeting_id) if session else None
@@ -219,12 +293,16 @@ async def _build_chip(
 
     if row.utterance_id:
         utt = db.get(Utterance, row.utterance_id)
-        if utt is None:
+        if (
+            utt is None
+            or utt.org_id != item.org_id
+            or utt.capture_session_id != item.capture_session_id
+        ):
             return None
         speaker = "Unknown speaker"
         if utt.person_id:
             person = db.get(Person, utt.person_id)
-            if person is not None:
+            if person is not None and person.org_id == item.org_id:
                 speaker = person.display_name
         minutes, seconds = divmod(int(utt.start_s), 60)
         return EvidenceChip(
@@ -237,7 +315,11 @@ async def _build_chip(
         )
     if row.keyframe_id:
         kf = db.get(Keyframe, row.keyframe_id)
-        if kf is None:
+        if (
+            kf is None
+            or kf.org_id != item.org_id
+            or kf.capture_session_id != item.capture_session_id
+        ):
             return None
         thumb = await blob.presigned_url(kf.image_uri) if kf.image_uri else None
         minutes, seconds = divmod(int(kf.valid_from_s), 60)
@@ -288,11 +370,15 @@ async def chat(
     # approve/reject and upload.py.
     if not auth_dep.is_org_member(db, req.org_id, user):
         raise HTTPException(403, "not a member of this org")
+    if req.meeting_id and not can_read_meeting(db, req.org_id, req.meeting_id, user.id):
+        raise HTTPException(404, "meeting not found")
 
     query_embedding = await embedder.embed(req.question) if embedder is not None else None
 
-    fts_matches = _fts_candidates(db, req.org_id, req.question, req.meeting_id)
-    vector_matches = _vector_candidates(db, req.org_id, query_embedding, req.meeting_id)
+    fts_matches = _fts_candidates(db, req.org_id, req.question, req.meeting_id, user_id=user.id)
+    vector_matches = _vector_candidates(
+        db, req.org_id, query_embedding, req.meeting_id, user_id=user.id
+    )
 
     seen: set[str] = set()
     matches: list[KnowledgeItem] = []
@@ -301,7 +387,13 @@ async def chat(
             seen.add(item.id)
             matches.append(item)
 
-    related = [item for item in _expand_edges(db, matches) if item.id not in seen]
+    related = [
+        item
+        for item in _expand_edges(
+            db, matches, org_id=req.org_id, user_id=user.id, meeting_id=req.meeting_id
+        )
+        if item.id not in seen
+    ]
 
     answer = (
         await _llm_answer(llm, req.question, matches, related)

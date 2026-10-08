@@ -1,26 +1,20 @@
 """Tests for F13 usage, export and deletion job APIs."""
 
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from app.auth import dependency as auth_dep
 from app.db.models import (
-    AsyncJobStatus,
-    DeletionJob,
-    ExportJob,
     LlmCall,
     Org,
     OrgMember,
     Project,
     ProjectMember,
-    UsageReservation,
-    UsageReservationStatus,
     User,
 )
 from app.main import app
 
-USER_OWNER = "ops2-user-0000-0000-0000-000000000001"
-USER_MEMBER = "ops2-user-0000-0000-0000-000000000002"
+USER_OWNER = "66666666-6666-6666-6666-666666666661"
+USER_MEMBER = "66666666-6666-6666-6666-666666666662"
 
 
 def _seed(db):
@@ -31,6 +25,11 @@ def _seed(db):
         [
             User(id=USER_OWNER, email="owner@example.com"),
             User(id=USER_MEMBER, email="member@example.com"),
+        ]
+    )
+    db.flush()
+    db.add_all(
+        [
             OrgMember(org_id=org.id, user_id=USER_OWNER, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_MEMBER, role="member"),
         ]
@@ -182,7 +181,9 @@ def test_create_workspace_export_member_403(client, db_session):
 def test_create_project_export_member(client, db_session):
     org = _seed(db_session)
     p = _project(db_session, org.id, USER_OWNER)
-    db_session.add(ProjectMember(org_id=org.id, project_id=p.id, user_id=USER_MEMBER, role="viewer"))
+    db_session.add(
+        ProjectMember(org_id=org.id, project_id=p.id, user_id=USER_MEMBER, role="viewer")
+    )
     db_session.commit()
     _as(USER_MEMBER)
 
@@ -300,7 +301,9 @@ def test_create_project_deletion_owner(client, db_session):
 def test_create_project_deletion_member_403(client, db_session):
     org = _seed(db_session)
     p = _project(db_session, org.id, USER_OWNER)
-    db_session.add(ProjectMember(org_id=org.id, project_id=p.id, user_id=USER_MEMBER, role="viewer"))
+    db_session.add(
+        ProjectMember(org_id=org.id, project_id=p.id, user_id=USER_MEMBER, role="viewer")
+    )
     db_session.commit()
     _as(USER_MEMBER)
 

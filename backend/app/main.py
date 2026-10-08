@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.actions import router as actions_router
+from app.api.actions_v2 import router as actions_v2_router
+from app.api.agenda import router as agenda_router
 from app.api.calendar_v2 import router as calendar_v2_router
 from app.api.capture import router as capture_router
 from app.api.capture_provider_v2 import router as capture_provider_v2_router
@@ -18,20 +20,18 @@ from app.api.data_rights import router as data_rights_router
 from app.api.leads import router as leads_router
 from app.api.me import router as me_router
 from app.api.meetings import router as meetings_router
+from app.api.memory import router as memory_router
 from app.api.oauth import router as oauth_router
 from app.api.ops import router as ops_router
+from app.api.ops_v2 import router as ops_v2_router
 from app.api.people import router as people_router
 from app.api.projects_v2 import router as projects_v2_router
 from app.api.report import router as report_router
 from app.api.rtms_webhook import router as rtms_webhook_router
 from app.api.rtms_webhook import set_websocket_connector
 from app.api.speakers import router as speakers_router
-from app.api.upload import router as upload_router
-from app.api.actions_v2 import router as actions_v2_router
-from app.api.agenda import router as agenda_router
-from app.api.memory import router as memory_router
-from app.api.ops_v2 import router as ops_v2_router
 from app.api.threads import router as threads_router
+from app.api.upload import router as upload_router
 from app.api.usage import router as usage_router
 from app.api.workspaces_v2 import router as workspaces_v2_router
 from app.config import get_settings

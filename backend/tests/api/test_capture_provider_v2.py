@@ -2,7 +2,7 @@ from app.api.capture_v2 import get_capture_secret_store
 from app.db.models import Org, OrgMember, ProviderBinding, User
 from app.main import app
 
-USER_ID = "test-user-0000-0000-0000-000000000000"
+USER_ID = "11111111-1111-1111-1111-111111111111"
 
 
 class MemorySecrets:
@@ -24,6 +24,7 @@ def seed(db, role="owner"):
     db.add(org)
     db.flush()
     db.add(User(id=USER_ID, email="test@example.com"))
+    db.flush()
     db.add(OrgMember(org_id=org.id, user_id=USER_ID, role=role))
     db.commit()
     return org
@@ -104,7 +105,8 @@ def test_remote_http_or_credentialed_endpoint_is_rejected_before_secret_write(cl
     app.dependency_overrides[get_capture_secret_store] = lambda: secrets
 
     assert configure(client, org.id, endpoint_url="http://vexa.example").status_code == 422
-    assert configure(
-        client, org.id, endpoint_url="https://user:password@vexa.example"
-    ).status_code == 422
+    assert (
+        configure(client, org.id, endpoint_url="https://user:password@vexa.example").status_code
+        == 422
+    )
     assert secrets.values == {}

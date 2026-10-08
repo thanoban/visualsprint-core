@@ -1,28 +1,36 @@
 """Tests for F14 pilot flag and capture-minute limit enforcement."""
 
-from decimal import Decimal
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
 from app.auth import dependency as auth_dep
 from app.capture.requests import CaptureMinuteLimitError, create_capture_request
 from app.db.models import (
+    CaptureRequest,
     Meeting,
     Org,
     OrgMember,
-    User,
     UsageReservation,
     UsageReservationStatus,
+    User,
 )
 from app.interfaces.capture_provider import MeetingTarget
 from app.main import app
 
-USER_OWNER = "pilot-user-0000-0000-0000-000000000001"
-USER_MEMBER = "pilot-user-0000-0000-0000-000000000002"
+USER_OWNER = "55555555-5555-5555-5555-555555555551"
+USER_MEMBER = "55555555-5555-5555-5555-555555555552"
 
 
 def _seed(db, capture_monthly_minutes: int = 6000):
+    db.add_all(
+        [
+            User(id=USER_OWNER, email="owner@example.com"),
+            User(id=USER_MEMBER, email="member@example.com"),
+        ]
+    )
+    db.flush()
     org = Org(
         name="PilotOrg",
         capture_policy="manual",
@@ -35,8 +43,6 @@ def _seed(db, capture_monthly_minutes: int = 6000):
     db.flush()
     db.add_all(
         [
-            User(id=USER_OWNER, email="owner@example.com"),
-            User(id=USER_MEMBER, email="member@example.com"),
             OrgMember(org_id=org.id, user_id=USER_OWNER, role="owner"),
             OrgMember(org_id=org.id, user_id=USER_MEMBER, role="member"),
         ]
@@ -116,6 +122,23 @@ def _make_meeting(db, org_id: str) -> Meeting:
     return m
 
 
+def _existing_request(db, org_id: str, meeting_id: str) -> CaptureRequest:
+    request = CaptureRequest(
+        org_id=org_id,
+        meeting_id=meeting_id,
+        requested_by=USER_OWNER,
+        platform="zoom",
+        native_meeting_id="123456789",
+        meeting_url_secret_ref="capture-url/fake/existing",
+        policy_snapshot={},
+        input_hash="a" * 64,
+        idempotency_key="existing-reservation",
+    )
+    db.add(request)
+    db.flush()
+    return request
+
+
 def test_capture_limit_not_exceeded(db_session):
     org = _seed(db_session, capture_monthly_minutes=60)  # 3600 seconds
     meeting = _make_meeting(db_session, org.id)
@@ -152,7 +175,7 @@ def test_capture_limit_exceeded_raises(db_session):
     db_session.add(
         UsageReservation(
             org_id=org.id,
-            request_id="fake-req-id-000000000000000000000",
+            request_id=_existing_request(db_session, org.id, meeting.id).id,
             unit="bot_second",
             estimated_quantity=Decimal("60"),
             expires_at=datetime.now(UTC) + timedelta(hours=1),
@@ -191,7 +214,7 @@ def test_capture_limit_previous_month_not_counted(db_session):
     last_month = datetime.now(UTC).replace(day=1) - timedelta(days=1)
     reservation = UsageReservation(
         org_id=org.id,
-        request_id="fake-req-id-000000000000000000001",
+        request_id=_existing_request(db_session, org.id, meeting.id).id,
         unit="bot_second",
         estimated_quantity=Decimal("3600"),
         expires_at=datetime.now(UTC) + timedelta(hours=1),

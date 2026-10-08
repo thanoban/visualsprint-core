@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from starlette.applications import Starlette
 
 import structlog
-
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -141,14 +140,10 @@ def _auto_add_person_glossary_terms(db: Session, org_id: str, resolved: list[Any
     person_ids = {r.person_id for r in resolved if r.person_id}
     if not person_ids:
         return
-    people = (
-        db.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
-    )
+    people = db.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
     existing_terms = {
         row.term
-        for row in db.execute(
-            select(GlossaryTerm.term).where(GlossaryTerm.org_id == org_id)
-        ).all()
+        for row in db.execute(select(GlossaryTerm.term).where(GlossaryTerm.org_id == org_id)).all()
     }
     for person in people:
         if person.display_name and person.display_name not in existing_terms:
@@ -574,7 +569,9 @@ async def _run_bot_dispatch_sweep(db: Session) -> None:
         )
         for bot in stale:
             bot.status = BotStatus.MISSED
-            log.info("bot_dispatch.expired", bot_session=bot.id, scheduled_start=bot.scheduled_start)
+            log.info(
+                "bot_dispatch.expired", bot_session=bot.id, scheduled_start=bot.scheduled_start
+            )
 
         due = (
             db.execute(
@@ -1421,7 +1418,9 @@ async def run_once() -> bool:
     return True
 
 
-def _sweep_registry(settings: Settings) -> list[tuple[str, float, Callable[[Session], Awaitable[None]]]]:
+def _sweep_registry(
+    settings: Settings,
+) -> list[tuple[str, float, Callable[[Session], Awaitable[None]]]]:
     """(name, interval_seconds, coroutine_fn) for every periodic sweep.
 
     Single source of truth for both the local-dev loop and the production
@@ -1439,7 +1438,11 @@ def _sweep_registry(settings: Settings) -> list[tuple[str, float, Callable[[Sess
     ]
     if settings.longitudinal_analysis_enabled:
         sweeps.append(
-            ("longitudinal_analysis", settings.longitudinal_analysis_interval_s, _run_longitudinal_sweep)
+            (
+                "longitudinal_analysis",
+                settings.longitudinal_analysis_interval_s,
+                _run_longitudinal_sweep,
+            )
         )
     return sweeps
 

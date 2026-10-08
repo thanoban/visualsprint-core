@@ -22,7 +22,7 @@ from app.db.base import Base, get_db
 from app.db.models import User
 from app.main import app
 
-FAKE_USER = User(id="test-user-0000-0000-0000-000000000000", email="test@example.com")
+FAKE_USER = User(id="11111111-1111-1111-1111-111111111111", email="test@example.com")
 
 _PG_URL = os.environ.get("VS_TEST_DATABASE_URL")
 

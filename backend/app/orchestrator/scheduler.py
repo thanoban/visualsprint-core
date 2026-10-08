@@ -139,10 +139,11 @@ async def sync_calendar_connection(
             db.add(occurrence)
             db.flush()
         else:
+            # A cancelled event can reappear in a later authoritative snapshot.
+            occurrence.status = CalendarOccurrenceStatus.SCHEDULED
             # Detect reschedule: start or end changed
             rescheduled = (
-                occurrence.start_time != event.start_at
-                or occurrence.end_time != event.end_at
+                occurrence.start_time != event.start_at or occurrence.end_time != event.end_at
             )
             if rescheduled:
                 occurrence.start_time = event.start_at
@@ -207,9 +208,13 @@ async def sync_calendar_connection(
         # creates predictable guest-access failures. Guest bots require an
         # explicit organization-level opt-in for Open-access meetings.
         settings = get_settings()
-        bot_enabled_for_platform = settings.bot_dispatch_enabled and platform in BOT_ELIGIBLE_PLATFORMS and (
-            (platform == "meet" and settings.bot_google_guest_enabled)
-            or (platform == "teams" and settings.bot_teams_guest_enabled)
+        bot_enabled_for_platform = (
+            settings.bot_dispatch_enabled
+            and platform in BOT_ELIGIBLE_PLATFORMS
+            and (
+                (platform == "meet" and settings.bot_google_guest_enabled)
+                or (platform == "teams" and settings.bot_teams_guest_enabled)
+            )
         )
         if bot_enabled_for_platform and platform_meeting_id is not None:
             join_url = bot_join_url(platform, platform_meeting_id)
@@ -237,14 +242,19 @@ async def sync_calendar_connection(
     # SCHEDULED occurrence is in our DB but not in this sync's results, the event
     # was deleted or declined — mark it CANCELLED so we don't create a Meeting for it.
     now = datetime.now(UTC)
-    stale = db.execute(
-        select(CalendarOccurrence).where(
-            CalendarOccurrence.connection_id == connection.id,
-            CalendarOccurrence.status == CalendarOccurrenceStatus.SCHEDULED,
-            CalendarOccurrence.start_time > now,
-            CalendarOccurrence.provider_event_id.not_in(seen_provider_ids),
+    stale = (
+        db.execute(
+            select(CalendarOccurrence).where(
+                CalendarOccurrence.connection_id == connection.id,
+                CalendarOccurrence.status == CalendarOccurrenceStatus.SCHEDULED,
+                CalendarOccurrence.start_time > now,
+                CalendarOccurrence.start_time <= now + within,
+                CalendarOccurrence.provider_event_id.not_in(seen_provider_ids),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for occ in stale:
         occ.status = CalendarOccurrenceStatus.CANCELLED
         log.info(
