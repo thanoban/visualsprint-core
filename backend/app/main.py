@@ -35,6 +35,7 @@ from app.api.upload import router as upload_router
 from app.api.usage import router as usage_router
 from app.api.workspaces_v2 import router as workspaces_v2_router
 from app.config import get_settings
+from app.modules.projects.api import router as meeting_history_router
 from app.observability import (
     RateLimitMiddleware,
     RequestContextMiddleware,
@@ -101,6 +102,7 @@ app.include_router(oauth_router)
 app.include_router(me_router)
 app.include_router(people_router)
 app.include_router(projects_v2_router)
+app.include_router(meeting_history_router)
 app.include_router(speakers_router)
 app.include_router(ops_router)
 app.include_router(leads_router)

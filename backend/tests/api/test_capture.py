@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 from app.api import capture
-from app.db.models import BotSession, BotStatus, Meeting, Org, OrgConnection
+from app.db.models import BotSession, BotStatus, Meeting, Org, OrgConnection, User
 
 
 def _seed_org(db) -> Org:
+    if db.get(User, "11111111-1111-1111-1111-111111111111") is None:
+        db.add(User(id="11111111-1111-1111-1111-111111111111", email="test@example.com"))
     org = Org(name="acme")
     db.add(org)
     db.flush()

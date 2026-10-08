@@ -14,6 +14,7 @@ from app.db.models import (
     Keyframe,
     Org,
     PipelineJob,
+    User,
 )
 
 
@@ -46,6 +47,8 @@ def store(monkeypatch):
 
 
 def start(client, db):
+    if db.get(User, "11111111-1111-1111-1111-111111111111") is None:
+        db.add(User(id="11111111-1111-1111-1111-111111111111", email="test@example.com"))
     org = Org(name="capture")
     db.add(org)
     db.commit()

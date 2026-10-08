@@ -610,6 +610,14 @@ and `i0c1d2e3f4a5` plus adversarial regressions. Docker-enabled local PostgreSQL
 was performed in an isolated disposable container. No production migration, deployment or paid
 provisioning was performed. Exact test evidence and remaining release gates are recorded in document 25.
 
+## Project workspace continuation — 2026-10-08
+
+Project/customer directories, private project settings, owner-private Unassigned meetings, scoped
+meeting pagination and versioned assignment UI are now implemented. Read
+[26 — Project workspace delivery](26-project-workspace-delivery.md) for the exact test evidence,
+user check and unfinished calendar/chat/export/deletion/provider gates. These screens do not turn
+previous API foundations into fully accepted F00–F14 features. No production rollout was performed.
+
 ## Historical next-capture checklist — partly implemented in later slices
 
 1. Add capture request/attempt/segment/inbox/usage reservation models with Alembic migrations.

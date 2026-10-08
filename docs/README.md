@@ -14,6 +14,7 @@
 | [23 — Testing/operations](23-testing-and-operations.md) | Real-meeting tests, deployment, recovery, costs and release gates |
 | [24 — Decisions/traceability](24-decisions-and-traceability.md) | Owner choices, rejected assumptions, risks and requirements mapping |
 | [19 — Progress ledger](19-founder-platform-progress.md) | Actual local work, pause state and next implementation step |
+| [26 — Project workspace delivery](26-project-workspace-delivery.md) | Project/customer meeting UI, verification and remaining worker gates |
 
 ## Legacy references
 

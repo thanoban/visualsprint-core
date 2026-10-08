@@ -18,6 +18,9 @@ interface NavItem {
 // equivalent but dropping it would be a real regression, so it's appended
 // to Setup with the same glyph-badge treatment.
 const NAV_WORKSPACE: NavItem[] = [
+  { key: "projects", label: "Projects", href: "/projects", glyph: "PR" },
+  { key: "customers", label: "Customers", href: "/customers", glyph: "CU" },
+  { key: "unassigned", label: "Unassigned", href: "/unassigned", glyph: "IN" },
   { key: "meetings", label: "Meetings", href: "/meetings", glyph: "M" },
   { key: "chat", label: "Org Chat", href: "/chat", glyph: "C" },
   { key: "upload", label: "Upload", href: "/upload", glyph: "U" },

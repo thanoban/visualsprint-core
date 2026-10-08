@@ -90,6 +90,7 @@ class ProjectMemberUpsert(BaseModel):
 class ProjectMemberView(BaseModel):
     user_id: str
     role: str
+    email: str | None = None
 
 
 def _customer_view(db: Session, customer: Customer, user_id: str) -> CustomerView:
@@ -305,6 +306,47 @@ def update_project(
     return _project_view(project, member)
 
 
+@router.get("/projects/{project_id}", response_model=ProjectView)
+def get_project(
+    org_id: str,
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> ProjectView:
+    member = _membership(db, org_id, project_id, user.id)
+    project = db.scalar(select(Project).where(Project.org_id == org_id, Project.id == project_id))
+    if project is None:
+        raise HTTPException(404, "project not found")
+    return _project_view(project, member)
+
+
+@router.get("/projects/{project_id}/members", response_model=list[ProjectMemberView])
+def list_project_members(
+    org_id: str,
+    project_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> list[ProjectMemberView]:
+    _membership(db, org_id, project_id, user.id)
+    rows = db.execute(
+        select(ProjectMember, User.email)
+        .join(User, User.id == ProjectMember.user_id)
+        .join(
+            OrgMember,
+            (OrgMember.user_id == ProjectMember.user_id) & (OrgMember.org_id == org_id),
+        )
+        .where(ProjectMember.org_id == org_id, ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.created_at, ProjectMember.user_id)
+        .limit(100)
+    ).all()
+    return [
+        ProjectMemberView(user_id=member.user_id, role=member.role.value, email=email)
+        for member, email in rows
+    ]
+
+
 @router.put("/projects/{project_id}/members", response_model=ProjectMemberView)
 def upsert_project_member(
     org_id: str,
@@ -408,6 +450,7 @@ def remove_project_member(
 class AssignmentIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: str = Field(min_length=1, max_length=36)
+    version: int | None = Field(default=None, ge=0)
 
 
 class AssignmentView(BaseModel):
@@ -437,18 +480,19 @@ def assign_meeting(
 ) -> AssignmentView:
     """Assign or move a meeting to a project.
 
-    The caller must be a member of the target project.  If the meeting is
-    already assigned to a different project the assignment is replaced;
-    moving is only allowed when the caller is also a member of the source
-    project (otherwise the source project's data would silently become
-    inaccessible to its members).
+    The meeting owner must have edit access to both source and target.
+    A supplied version prevents a stale screen from sharing a newer assignment.
     """
-    meeting = db.get(Meeting, meeting_id)
+    meeting = db.scalar(
+        select(Meeting)
+        .where(Meeting.id == meeting_id, Meeting.org_id == org_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if meeting is None or meeting.org_id != org_id:
         raise HTTPException(404, "meeting not found")
     if meeting.owner_user_id != user.id:
         raise HTTPException(404, "owned meeting not found")
-    db.execute(select(Meeting.id).where(Meeting.id == meeting_id).with_for_update()).scalar_one()
 
     project = db.get(Project, body.project_id)
     if project is None or project.org_id != org_id:
@@ -473,6 +517,9 @@ def assign_meeting(
         select(MeetingAssignment).where(MeetingAssignment.meeting_id == meeting_id)
     ).scalar_one_or_none()
 
+    if body.version is not None and body.version != (existing.version if existing else 0):
+        raise HTTPException(409, "assignment changed; reload before sharing this meeting")
+
     if existing is not None:
         if existing.project_id == body.project_id:
             # Already assigned to this project — idempotent.
@@ -493,6 +540,8 @@ def assign_meeting(
         ).scalar_one_or_none()
         if source_member is None:
             raise HTTPException(403, "must be a member of the source project to move a meeting")
+        if source_member.role not in {ProjectRole.OWNER, ProjectRole.EDITOR}:
+            raise HTTPException(403, "source project edit access required")
         existing.project_id = body.project_id
         existing.assigned_by = user.id
         existing.source = MeetingAssignmentSource.MANUAL
@@ -531,9 +580,15 @@ def unassign_meeting(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
+    version: int | None = None,
 ) -> Response:
-    """Remove a meeting's project assignment.  Caller must be a project member."""
-    meeting = db.get(Meeting, meeting_id)
+    """Return an owned meeting to the private inbox with source-project edit access."""
+    meeting = db.scalar(
+        select(Meeting)
+        .where(Meeting.id == meeting_id, Meeting.org_id == org_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if meeting is None or meeting.org_id != org_id:
         raise HTTPException(404, "meeting not found")
     if meeting.owner_user_id != user.id:
@@ -544,6 +599,8 @@ def unassign_meeting(
     ).scalar_one_or_none()
     if existing is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if version is not None and version != existing.version:
+        raise HTTPException(409, "assignment changed; reload before removing it")
 
     member = db.execute(
         select(ProjectMember).where(

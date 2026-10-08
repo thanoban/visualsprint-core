@@ -22,11 +22,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.dependency import (
+    get_current_user,
     require_org_member,
     require_session_member,
 )
 from app.db.base import get_db
-from app.db.models import BotSession, BotStatus, CaptureSession, CaptureState, Meeting
+from app.db.models import BotSession, BotStatus, CaptureSession, CaptureState, Meeting, User
 
 log = structlog.get_logger()
 
@@ -98,6 +99,7 @@ async def create_companion_session(
     org_id: str,
     body: CompanionSessionRequest,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> CompanionSessionResponse:
 
@@ -109,6 +111,7 @@ async def create_companion_session(
 
     meeting = Meeting(
         org_id=org_id,
+        owner_user_id=user.id,
         title=body.title or "Companion recording",
         platform=body.platform,
         platform_meeting_id=conferencing[1],

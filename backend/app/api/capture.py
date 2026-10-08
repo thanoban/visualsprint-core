@@ -21,11 +21,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.calendar_common import BOT_ELIGIBLE_PLATFORMS, bot_join_url, detect_conferencing
-from app.auth.dependency import require_org_member
+from app.auth.dependency import get_current_user, require_org_member
 from app.capture.routing import instant_route
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import BotSession, BotStatus, Meeting, OrgConnection
+from app.db.models import BotSession, BotStatus, Meeting, OrgConnection, User
 
 router = APIRouter(prefix="/api/v1/orgs/{org_id}/capture", tags=["capture"])
 
@@ -93,6 +93,7 @@ async def start_instant_capture(
     org_id: str,
     body: InstantCaptureRequest,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> InstantCaptureResponse:
     conferencing = detect_conferencing(body.url)
@@ -147,6 +148,7 @@ async def start_instant_capture(
     now = datetime.now(UTC)
     meeting = Meeting(
         org_id=org_id,
+        owner_user_id=user.id,
         title=body.title or "Instant meeting",
         platform=platform,
         platform_meeting_id=platform_meeting_id,

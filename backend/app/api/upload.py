@@ -79,7 +79,10 @@ async def upload_meeting(
         raise HTTPException(400, "empty file")
 
     meeting = Meeting(
-        org_id=org_id, title=title or (file.filename or "Uploaded meeting"), platform="upload"
+        org_id=org_id,
+        owner_user_id=user.id,
+        title=title or (file.filename or "Uploaded meeting"),
+        platform="upload",
     )
     db.add(meeting)
     db.flush()

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -133,6 +134,181 @@ def test_customer_cache_is_keyed_by_current_authorized_sources(client, db_sessio
     revoked = client.get(path).json()
     assert revoked["source_meeting_ids"] == []
     assert "secret-0" not in str(revoked)
+
+
+def test_project_meeting_browser_filters_before_pagination(client, fixture_data):
+    org, customer, projects, meetings, _, _ = fixture_data
+    base = f"/api/v2/workspaces/{org.id}"
+    assert [
+        row["id"]
+        for row in client.get(f"{base}/meetings?project_id={projects[1].id}").json()["items"]
+    ] == [meetings[1].id]
+    actor(B)
+    assert client.get(f"{base}/projects/{projects[1].id}").status_code == 404
+    assert client.get(f"{base}/projects/{projects[1].id}/members").status_code == 404
+    assert client.get(f"{base}/meetings/{meetings[1].id}").status_code == 404
+    assert client.get(f"{base}/meetings?project_id={projects[1].id}").status_code == 404
+    result = client.get(f"{base}/meetings?customer_id={customer.id}&limit=1").json()
+    assert [row["id"] for row in result["items"]] == [meetings[0].id]
+    assert result["next_cursor"] is None
+    assert result["items"][0]["can_move"] is False
+
+
+def test_unassigned_inbox_is_owned_not_legacy_workspace_shared(client, db_session, fixture_data):
+    org, _, _, _, _, _ = fixture_data
+    owned = Meeting(org_id=org.id, owner_user_id=B, title="Private inbox")
+    legacy = Meeting(org_id=org.id, title="Unknown owner")
+    db_session.add_all([owned, legacy])
+    db_session.commit()
+    path = f"/api/v2/workspaces/{org.id}/meetings?unassigned=true"
+    assert client.get(path).json()["items"] == []
+    actor(B)
+    assert [row["id"] for row in client.get(path).json()["items"]] == [owned.id]
+
+
+def test_project_roster_excludes_removed_workspace_members(client, db_session, fixture_data):
+    org, _, projects, _, _, _ = fixture_data
+    membership = db_session.scalar(
+        select(OrgMember).where(OrgMember.org_id == org.id, OrgMember.user_id == B)
+    )
+    db_session.delete(membership)
+    db_session.commit()
+    response = client.get(f"/api/v2/workspaces/{org.id}/projects/{projects[0].id}/members")
+    assert response.status_code == 200
+    assert [row["user_id"] for row in response.json()] == [A]
+
+
+@pytest.mark.parametrize("intake", ["upload", "companion", "instant"])
+def test_new_manual_meeting_is_owned_and_assignable(
+    client, db_session, fixture_data, monkeypatch, intake
+):
+    from app.api import capture, upload
+
+    org, _, projects, _, _, _ = fixture_data
+
+    class Store:
+        async def put_stream(self, key, stream, content_type=None):
+            async for _ in stream:
+                pass
+            return f"blob://{key}"
+
+    if intake == "upload":
+        monkeypatch.setattr(upload, "get_blobstore", lambda: Store())
+        response = client.post(
+            "/api/v1/meetings/upload",
+            data={"org_id": org.id, "title": "Owned upload"},
+            files={"file": ("test.wav", b"test-audio", "audio/wav")},
+        )
+        assert response.status_code == 200
+        meeting_id = response.json()["meeting_id"]
+    elif intake == "companion":
+        response = client.post(
+            f"/api/v1/orgs/{org.id}/companion/sessions",
+            json={"meeting_url": "https://meet.google.com/abc-defg-hij", "platform": "meet"},
+        )
+        assert response.status_code == 200
+        meeting_id = db_session.get(CaptureSession, response.json()["session_id"]).meeting_id
+    else:
+        monkeypatch.setattr(
+            capture,
+            "get_settings",
+            lambda: SimpleNamespace(
+                bot_google_guest_enabled=True,
+                bot_dispatch_enabled=True,
+                bot_google_join_mode="guest",
+                bot_google_account_email=None,
+            ),
+        )
+        response = client.post(
+            f"/api/v1/orgs/{org.id}/capture/instant",
+            json={"url": "https://meet.google.com/abc-defg-hij"},
+        )
+        assert response.status_code == 200
+        meeting_id = response.json()["meeting_id"]
+    assert db_session.get(Meeting, meeting_id).owner_user_id == A
+    base = f"/api/v2/workspaces/{org.id}"
+    assert meeting_id in {
+        row["id"] for row in client.get(f"{base}/meetings?unassigned=true").json()["items"]
+    }
+    actor(B)
+    assert client.get(f"{base}/meetings/{meeting_id}").status_code == 404
+    actor(A)
+    assert (
+        client.put(
+            f"{base}/meetings/{meeting_id}/assignment",
+            json={"project_id": projects[0].id, "version": 0},
+        ).status_code
+        == 200
+    )
+
+
+def test_owned_meeting_cannot_be_moved_by_source_project_viewer(client, db_session, fixture_data):
+    org, _, projects, meetings, _, _ = fixture_data
+    membership = db_session.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == projects[0].id, ProjectMember.user_id == A
+        )
+    )
+    membership.role = ProjectRole.VIEWER
+    db_session.commit()
+    base = f"/api/v2/workspaces/{org.id}"
+    assert client.get(f"{base}/meetings/{meetings[0].id}").json()["can_move"] is False
+    response = client.put(
+        f"{base}/meetings/{meetings[0].id}/assignment",
+        json={"project_id": projects[1].id, "version": 1},
+    )
+    assert response.status_code == 403
+    assert client.get(f"{base}/meetings/{meetings[0].id}").json()["project_id"] == projects[0].id
+
+
+def test_meeting_cursor_is_stable_and_malformed_cursor_rejected(client, db_session, fixture_data):
+    org, _, _, _, _, _ = fixture_data
+    db_session.add_all(
+        [
+            Meeting(
+                org_id=org.id,
+                owner_user_id=A,
+                title=f"Call {index}",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            for index in range(3)
+        ]
+    )
+    db_session.commit()
+    path = f"/api/v2/workspaces/{org.id}/meetings?limit=1"
+    ids = []
+    for _ in range(7):
+        response = client.get(path)
+        assert response.status_code == 200
+        page = response.json()
+        ids.extend(row["id"] for row in page["items"])
+        if not page["next_cursor"]:
+            break
+        path = f"/api/v2/workspaces/{org.id}/meetings?limit=1&cursor={page['next_cursor']}"
+    assert len(ids) == len(set(ids)) == 5
+    assert (
+        client.get(f"/api/v2/workspaces/{org.id}/meetings?cursor=not-a-cursor").status_code == 422
+    )
+    assert client.get(f"/api/v2/workspaces/{org.id}/meetings?limit=101").status_code == 422
+
+
+def test_assignment_conflict_does_not_move_meeting_or_restore_stale_memory(client, fixture_data):
+    org, _, projects, meetings, _, _ = fixture_data
+    base = f"/api/v2/workspaces/{org.id}"
+    before = client.get(f"{base}/projects/{projects[0].id}/memory").json()
+    path = f"{base}/meetings/{meetings[0].id}/assignment"
+    moved = client.put(path, json={"project_id": projects[1].id, "version": 1})
+    assert moved.status_code == 200
+    assert moved.json()["version"] == 2
+    stale = client.put(path, json={"project_id": projects[0].id, "version": 1})
+    assert stale.status_code == 409
+    assert client.delete(f"{path}?version=1").status_code == 409
+    current = client.get(f"{base}/meetings/{meetings[0].id}").json()
+    assert current["project_id"] == projects[1].id
+    after = client.get(f"{base}/projects/{projects[0].id}/memory").json()
+    assert after["id"] != before["id"] and after["source_meeting_ids"] == []
+    assert client.delete(f"{path}?version=2").status_code == 204
+    assert client.get(f"{base}/meetings/{meetings[0].id}").json()["project_id"] is None
 
 
 def test_memory_refreshes_when_claim_changes_without_new_meeting(client, db_session, fixture_data):

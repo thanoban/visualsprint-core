@@ -192,6 +192,10 @@ def client(monkeypatch):
     import app.auth.dependency as auth_dep
 
     fake_user = User(id="11111111-1111-1111-1111-111111111111", email="test@example.com")
+    with get_sessionmaker()() as db:
+        if db.get(User, fake_user.id) is None:
+            db.add(User(id=fake_user.id, email=fake_user.email))
+            db.commit()
     monkeypatch.setattr(auth_dep, "is_org_member", lambda db, org_id, user: True)
     fastapi_app.dependency_overrides[auth_dep.get_current_user] = lambda: fake_user
     try:
