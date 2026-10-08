@@ -7,7 +7,7 @@ so "the org" is simply the caller's personal org from app.auth.dependency's
 first-login auto-create -- see that module's docstring.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -46,8 +46,18 @@ async def get_me(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MeOut:
-    member = db.query(OrgMember).filter(OrgMember.user_id == user.id).one()
+    member = (
+        db.query(OrgMember)
+        .join(Org, Org.id == OrgMember.org_id)
+        .filter(OrgMember.user_id == user.id, Org.deleted_at.is_(None))
+        .order_by(OrgMember.created_at, OrgMember.id)
+        .first()
+    )
+    if member is None:
+        raise HTTPException(404, "no active workspace; deletion receipts remain available")
     org = db.get(Org, member.org_id)
+    if org is None:
+        raise HTTPException(404, "workspace not found")
     email_matches = (
         db.query(Person).filter(Person.org_id == org.id, Person.email == user.email).all()
     )

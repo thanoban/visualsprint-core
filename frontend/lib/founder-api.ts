@@ -16,7 +16,7 @@ export class ApiError extends Error {
   constructor(status: number, message: string) { super(message); this.name = "ApiError"; this.status = status; }
 }
 export function workspacePath(workspaceId: string, suffix: string): string {
-  if (!workspaceId || !suffix.startsWith("/") || suffix.startsWith("//")) throw new Error("Invalid workspace request");
+  if (!workspaceId || (suffix !== "" && !suffix.startsWith("/")) || suffix.startsWith("//")) throw new Error("Invalid workspace request");
   return `/api/v2/workspaces/${encodeURIComponent(workspaceId)}${suffix}`;
 }
 export async function apiJson<T>(fetcher: AuthenticatedFetch, path: string, init?: RequestInit): Promise<T> {

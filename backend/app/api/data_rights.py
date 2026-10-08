@@ -18,6 +18,7 @@ from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
 from app.db.models import (
     AudioTrack,
+    CaptureRequest,
     CaptureSession,
     ConsentRecord,
     CoverageInterval,
@@ -102,6 +103,14 @@ def _get_org_meeting(db: Session, org_id: str, meeting_id: str) -> Meeting:
     return meeting
 
 
+def _require_legacy_rights(db: Session, meeting: Meeting) -> None:
+    org = db.get(Org, meeting.org_id)
+    if (org is not None and org.pilot_features_enabled) or db.scalar(
+        select(CaptureRequest.id).where(CaptureRequest.meeting_id == meeting.id).limit(1)
+    ):
+        raise HTTPException(409, "Use durable project/workspace export and deletion in /operations")
+
+
 @router.get("/orgs/{org_id}/meetings/{meeting_id}/export")
 async def export_meeting(
     org_id: str,
@@ -118,6 +127,7 @@ async def export_meeting(
     meeting = _get_org_meeting(db, org_id, meeting_id)
     if not can_read_meeting(db, org_id, meeting_id, user.id):
         raise HTTPException(404, "meeting not found")
+    _require_legacy_rights(db, meeting)
     sessions = (
         db.execute(select(CaptureSession).where(CaptureSession.meeting_id == meeting.id))
         .scalars()
@@ -252,6 +262,7 @@ async def delete_meeting(
         raise HTTPException(404, "meeting not found")
     if not can_edit_meeting(db, org_id, meeting_id, user.id):
         raise HTTPException(403, "meeting edit access required")
+    _require_legacy_rights(db, meeting)
 
     # meeting_id only, deliberately -- erase_meeting() below deletes the
     # Meeting row (title included), and the audit trail itself has no purge

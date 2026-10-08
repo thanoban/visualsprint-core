@@ -7,7 +7,7 @@ import { apiJson, workspacePath } from "@/lib/founder-api";
 /** A scope change never renders the previous workspace's cached result. */
 export function useWorkspaceData<T>(suffix: string | null) {
   const { me, authedFetch } = useAuth();
-  const path = me && suffix ? workspacePath(me.org.id, suffix) : null;
+  const path = me && suffix !== null ? workspacePath(me.org.id, suffix) : null;
   const identity = path && me ? `${me.user.id}:${path}` : null;
   const [result, setResult] = useState<{ path: string; data?: T; error?: string } | null>(null);
   const [revision, setRevision] = useState(0);

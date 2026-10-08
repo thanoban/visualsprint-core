@@ -60,6 +60,7 @@ class Org(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     join_policy: Mapped[str] = mapped_column(
         String(32), default="all"
     )  # all | organized_only | never_private
@@ -164,6 +165,8 @@ class CalendarConnection(TimestampMixin, Base):
     org_id: Mapped[str] = mapped_column(ForeignKey("org.id"))
     provider: Mapped[str] = mapped_column(String(32))  # google | microsoft
     account_email: Mapped[str] = mapped_column(String(320))
+    owner_user_id: Mapped[str | None] = mapped_column(ForeignKey("app_user.id"), default=None)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # OAuth tokens live in a secret store, not here; this row holds the reference.
     secret_ref: Mapped[str] = mapped_column(String(255))
     watch_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -256,6 +259,7 @@ class ProjectStatus(enum.StrEnum):
 
 class Project(TimestampMixin, Base):
     __tablename__ = "project"
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     __table_args__ = (
         ForeignKeyConstraint(["org_id", "customer_id"], ["customer.org_id", "customer.id"]),
         UniqueConstraint("org_id", "id", name="uq_project_org_id"),
@@ -305,6 +309,7 @@ class ProjectMember(TimestampMixin, Base):
 
 class Meeting(TimestampMixin, Base):
     __tablename__ = "meeting"
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     __table_args__ = (
         Index("ix_meeting_org_start", "org_id", "scheduled_start"),
         Index("ix_meeting_external_calendar_event", "org_id", "external_calendar_event_id"),
@@ -371,6 +376,7 @@ class CalendarOccurrence(TimestampMixin, Base):
     # "on" | "off" | null (null means inherit the workspace capture policy)
     capture_override: Mapped[str | None] = mapped_column(String(8), default=None)
     meeting_id: Mapped[str | None] = mapped_column(ForeignKey("meeting.id"), default=None)
+    capture_error: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class MeetingAssignmentSource(enum.StrEnum):
@@ -571,6 +577,7 @@ class CaptureRequest(TimestampMixin, Base):
         UniqueConstraint("org_id", "idempotency_key", name="uq_capture_request_org_key"),
         Index("ix_capture_request_org_status", "org_id", "status"),
         Index("ix_capture_request_meeting", "meeting_id"),
+        Index("ix_capture_request_session", "capture_session_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1564,6 +1571,7 @@ class AnswerCitation(Base):
     knowledge_item_id: Mapped[str | None] = mapped_column(
         ForeignKey("knowledge_item.id"), default=None
     )
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -1636,6 +1644,8 @@ class ExportJob(TimestampMixin, Base):
         default=AsyncJobStatus.PENDING,
     )
     download_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, default=None)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
@@ -1664,4 +1674,6 @@ class DeletionJob(TimestampMixin, Base):
         default=AsyncJobStatus.PENDING,
     )
     error: Mapped[str | None] = mapped_column(Text, default=None)
+    target_meeting_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    cleanup_progress: Mapped[dict[str, list[str]]] = mapped_column(JSON, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

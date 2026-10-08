@@ -110,3 +110,17 @@ def test_remote_http_or_credentialed_endpoint_is_rejected_before_secret_write(cl
         == 422
     )
     assert secrets.values == {}
+
+
+def test_rotation_keeps_account_identity_and_removes_only_replaced_secrets(client, db_session):
+    org = seed(db_session)
+    secrets = MemorySecrets()
+    app.dependency_overrides[get_capture_secret_store] = lambda: secrets
+    assert configure(client, org.id).status_code == 200
+    original_refs = set(secrets.values)
+    assert configure(client, org.id, api_key="rotated-key").status_code == 200
+    assert len(secrets.values) == 2 and original_refs.isdisjoint(secrets.values)
+    assert "rotated-key" in secrets.values.values()
+    retained = dict(secrets.values)
+    assert configure(client, org.id, account_scope_id="another-account").status_code == 409
+    assert secrets.values == retained

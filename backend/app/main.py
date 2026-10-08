@@ -35,6 +35,7 @@ from app.api.upload import router as upload_router
 from app.api.usage import router as usage_router
 from app.api.workspaces_v2 import router as workspaces_v2_router
 from app.config import get_settings
+from app.modules.capture.api import router as founder_capture_router
 from app.modules.projects.api import router as meeting_history_router
 from app.observability import (
     RateLimitMiddleware,
@@ -92,6 +93,7 @@ app.include_router(meetings_router)
 app.include_router(capture_router)
 app.include_router(capture_provider_v2_router)
 app.include_router(capture_v2_router)
+app.include_router(founder_capture_router)
 app.include_router(report_router)
 app.include_router(chat_router)
 app.include_router(corrections_router)

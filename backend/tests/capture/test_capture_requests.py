@@ -35,11 +35,15 @@ def db():
     session.add_all(
         [
             Org(
-                id="org-1", name="One", capture_policy="manual",
+                id="org-1",
+                name="One",
+                capture_policy="manual",
                 disclosure_ack_at=datetime(2026, 10, 7, tzinfo=UTC),
             ),
             Org(
-                id="org-2", name="Two", capture_policy="manual",
+                id="org-2",
+                name="Two",
+                capture_policy="manual",
                 disclosure_ack_at=datetime(2026, 10, 7, tzinfo=UTC),
             ),
             User(id="user-1", email="one@example.com"),
@@ -64,9 +68,7 @@ def create(db, **overrides):
         "meeting_id": "meeting-1",
         "requested_by": "user-1",
         "idempotency_key": "client-request-1",
-        "target": MeetingTarget.from_url(
-            "https://meet.google.com/abc-defg-hij?authuser=1"
-        ),
+        "target": MeetingTarget.from_url("https://meet.google.com/abc-defg-hij?authuser=1"),
         "meeting_url_secret_ref": "secret://capture-url/one",
         "policy_snapshot": {"capture": True, "language": "en"},
         "estimated_seconds": 3600,
@@ -92,18 +94,26 @@ def test_create_persists_intent_reservation_and_outbox_atomically(db):
         select(UsageReservation).where(UsageReservation.request_id == request.id)
     ).scalar_one()
     assert int(reservation.estimated_quantity) == 3600
-    assert reservation.expires_at.replace(tzinfo=UTC) == datetime(
-        2026, 10, 7, 0, 15, tzinfo=UTC
-    )
+    assert reservation.expires_at.replace(tzinfo=UTC) == datetime(2026, 10, 7, 1, 15, tzinfo=UTC)
 
-    event = db.execute(
-        select(OutboxEvent).where(OutboxEvent.entity_id == request.id)
-    ).scalar_one()
+    event = db.execute(select(OutboxEvent).where(OutboxEvent.entity_id == request.id)).scalar_one()
     assert event.operation == "capture.dispatch"
     assert event.payload == {"capture_request_id": request.id}
     serialized = f"{request.__dict__!r}{event.payload!r}"
     assert "authuser=1" not in serialized
     assert "meet.google.com" not in serialized
+
+
+def test_future_dispatch_reserves_through_scheduled_duration(db):
+    scheduled = datetime(2026, 10, 8, 12, tzinfo=UTC)
+    result = create(db, run_at=scheduled)
+    db.commit()
+    event = db.scalar(select(OutboxEvent).where(OutboxEvent.entity_id == result.request.id))
+    reservation = db.scalar(
+        select(UsageReservation).where(UsageReservation.request_id == result.request.id)
+    )
+    assert event.run_at.replace(tzinfo=UTC) == scheduled
+    assert reservation.expires_at.replace(tzinfo=UTC) == datetime(2026, 10, 8, 13, 15, tzinfo=UTC)
 
 
 def test_same_idempotency_key_and_payload_returns_one_request(db):

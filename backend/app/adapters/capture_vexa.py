@@ -7,7 +7,7 @@ until the hard-deadline deletion worker has been implemented and validated.
 """
 
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 from pydantic import ValidationError
@@ -90,13 +90,23 @@ class VexaCaptureProvider:
         validated = MeetingTarget.from_url(target.meeting_url)
         if validated != target:
             raise CaptureProviderError("invalid_meeting_target")
-        body = await self._request("POST", "/bots", dispatch=True, json={
+        payload = {
+            "platform": target.platform,
+            "native_meeting_id": target.native_meeting_id,
             "meeting_url": target.meeting_url,
             "bot_name": "VisualSprint Notetaker",
             "language": "en",
             "transcribe_enabled": True,
             "recording_enabled": False,
-        })
+        }
+        # Numeric Teams invitations carry a separate p passcode. Zoom's pwd
+        # token may be encrypted: preserve its original URL, never invent a
+        # plaintext passcode from that token.
+        if target.platform == "teams":
+            passcodes = parse_qs(urlsplit(target.meeting_url).query).get("p", [])
+            if passcodes:
+                payload["passcode"] = passcodes[0]
+        body = await self._request("POST", "/bots", dispatch=True, json=payload)
         try:
             record_id = body.get("id")
             if isinstance(record_id, bool) or not isinstance(record_id, (str, int)):

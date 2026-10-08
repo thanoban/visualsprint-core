@@ -12,16 +12,24 @@ from app.db.models import Meeting, MeetingAssignment, Org, ProjectMember
 
 
 def visible_meeting_ids(org_id: str, user_id: str) -> Select[tuple[str]]:
-    assigned = exists().where(
-        MeetingAssignment.org_id == org_id,
-        MeetingAssignment.meeting_id == Meeting.id,
+    assigned = (
+        exists()
+        .where(
+            MeetingAssignment.org_id == org_id,
+            MeetingAssignment.meeting_id == Meeting.id,
+        )
+        .correlate(Meeting)
     )
-    project_access = exists().where(
-        MeetingAssignment.org_id == org_id,
-        MeetingAssignment.meeting_id == Meeting.id,
-        ProjectMember.org_id == org_id,
-        ProjectMember.project_id == MeetingAssignment.project_id,
-        ProjectMember.user_id == user_id,
+    project_access = (
+        exists()
+        .where(
+            MeetingAssignment.org_id == org_id,
+            MeetingAssignment.meeting_id == Meeting.id,
+            ProjectMember.org_id == org_id,
+            ProjectMember.project_id == MeetingAssignment.project_id,
+            ProjectMember.user_id == user_id,
+        )
+        .correlate(Meeting)
     )
     legacy_access = and_(Meeting.owner_user_id.is_(None), Org.pilot_features_enabled.is_(False))
     return (
@@ -29,6 +37,8 @@ def visible_meeting_ids(org_id: str, user_id: str) -> Select[tuple[str]]:
         .join(Org, Org.id == Meeting.org_id)
         .where(
             Meeting.org_id == org_id,
+            Meeting.deleted_at.is_(None),
+            Org.deleted_at.is_(None),
             or_(
                 project_access,
                 and_(~assigned, or_(Meeting.owner_user_id == user_id, legacy_access)),

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.secretstore_gcp import get_secretstore
 from app.auth.dependency import get_current_user, require_org_member
-from app.capture.dispatcher import enqueue_reconciliation
+from app.capture.commands import stop_capture
 from app.capture.requests import (
     CaptureMinuteLimitError,
     CapturePolicyError,
@@ -26,14 +26,10 @@ from app.capture.requests import (
 )
 from app.db.base import get_db
 from app.db.models import (
+    CalendarOccurrence,
     CaptureAttempt,
     CaptureRequest,
-    CaptureRequestStatus,
-    CaptureStopState,
-    OutboxEvent,
-    OutboxStatus,
-    UsageReservation,
-    UsageReservationStatus,
+    Org,
     User,
 )
 from app.interfaces.capture_provider import MeetingTarget
@@ -228,6 +224,7 @@ def stop_request(
     user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> CaptureRequestView:
+    db.scalar(select(Org.id).where(Org.id == org_id).with_for_update())
     request = db.execute(
         select(CaptureRequest)
         .where(CaptureRequest.id == request_id, CaptureRequest.org_id == org_id)
@@ -239,46 +236,16 @@ def stop_request(
         db, org_id, request.meeting_id, user.id
     ):
         raise HTTPException(404, "capture request not found")
-    original_status = request.status
-    original_stop_state = request.stop_state
-    attempt = db.execute(
-        select(CaptureAttempt)
-        .where(CaptureAttempt.request_id == request.id)
-        .order_by(CaptureAttempt.attempt_no.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if request.status in {CaptureRequestStatus.FINALIZED, CaptureRequestStatus.FAILED}:
-        request.stop_state = CaptureStopState.CONFIRMED
-    elif attempt is None and request.status == CaptureRequestStatus.QUEUED:
-        request.status = CaptureRequestStatus.CANCELLED
-        request.stop_state = CaptureStopState.CONFIRMED
-        for reservation in db.scalars(
-            select(UsageReservation).where(
-                UsageReservation.org_id == org_id,
-                UsageReservation.request_id == request.id,
-                UsageReservation.status == UsageReservationStatus.RESERVED,
-            )
+    occurrence_id = request.policy_snapshot.get("occurrence_id")
+    if isinstance(occurrence_id, str):
+        occurrence = db.get(CalendarOccurrence, occurrence_id)
+        if (
+            occurrence
+            and occurrence.org_id == org_id
+            and occurrence.meeting_id == request.meeting_id
         ):
-            reservation.status = UsageReservationStatus.RELEASED
-        for event in db.scalars(
-            select(OutboxEvent).where(
-                OutboxEvent.entity_id == request.id,
-                OutboxEvent.operation == "capture.dispatch",
-                OutboxEvent.status.in_({OutboxStatus.PENDING, OutboxStatus.RUNNING}),
-            )
-        ):
-            event.status = OutboxStatus.DONE
-            event.locked_by = None
-            event.locked_at = None
-    elif request.stop_state not in {
-        CaptureStopState.REQUESTED,
-        CaptureStopState.ACKNOWLEDGED,
-    }:
-        request.stop_state = CaptureStopState.REQUESTED
-        enqueue_reconciliation(db, request)
-    else:
-        enqueue_reconciliation(db, request)
-    if request.status != original_status or request.stop_state != original_stop_state:
-        request.version += 1
+            occurrence.capture_override = "off"
+            occurrence.revision += 1
+    attempt = stop_capture(db, request)
     db.commit()
     return _view(request, attempt=attempt)

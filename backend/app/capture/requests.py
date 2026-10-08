@@ -98,6 +98,7 @@ def create_capture_request(
     policy_snapshot: dict[str, Any],
     estimated_seconds: int,
     now: datetime | None = None,
+    run_at: datetime | None = None,
 ) -> CaptureRequestResult:
     """Create capture intent without committing or performing provider I/O."""
 
@@ -207,7 +208,7 @@ def create_capture_request(
         request_id=request_id,
         unit="bot_second",
         estimated_quantity=Decimal(estimated_seconds),
-        expires_at=timestamp + timedelta(minutes=15),
+        expires_at=(run_at or timestamp) + timedelta(seconds=estimated_seconds, minutes=15),
     )
     outbox = OutboxEvent(
         org_id=org_id,
@@ -215,7 +216,7 @@ def create_capture_request(
         entity_id=request_id,
         input_revision=input_hash,
         payload={"capture_request_id": request_id},
-        run_at=timestamp,
+        run_at=run_at or timestamp,
     )
     try:
         with db.begin_nested():

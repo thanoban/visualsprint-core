@@ -32,7 +32,11 @@ def get_org_connection(db: Session, org_id: str, provider: str):
     if provider in _CALENDAR_PROVIDERS:
         return (
             db.query(CalendarConnection)
-            .filter(CalendarConnection.org_id == org_id, CalendarConnection.provider == provider)
+            .filter(
+                CalendarConnection.org_id == org_id,
+                CalendarConnection.provider == provider,
+                CalendarConnection.enabled.is_(True),
+            )
             .one_or_none()
         )
     return (
@@ -57,5 +61,7 @@ def build_org_token_provider(db: Session, org_id: str, provider: str) -> OAuthTo
         return None
 
     return OAuthTokenProvider(
-        secret_ref=connection.secret_ref, provider_config=provider_config, secret_store=get_secretstore()
+        secret_ref=connection.secret_ref,
+        provider_config=provider_config,
+        secret_store=get_secretstore(),
     )

@@ -6,6 +6,7 @@ test("workspace requests encode identifiers and never accept an external origin"
   assert.equal(workspacePath("org/other", "/projects"), "/api/v2/workspaces/org%2Fother/projects");
   assert.throws(() => workspacePath("org", "https://other.example.com"));
   assert.throws(() => workspacePath("org", "//other.example.com"));
+  assert.equal(workspacePath("org", ""), "/api/v2/workspaces/org");
 });
 test("assignment sends the version the user saw and only the selected project", async () => {
   const requests = [];

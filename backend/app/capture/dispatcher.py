@@ -13,12 +13,17 @@ from typing import Protocol
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.capture.commands import stop_capture
 from app.db.models import (
+    CalendarConnection,
+    CalendarOccurrence,
+    CalendarOccurrenceStatus,
     CaptureAttempt,
     CaptureAttemptState,
     CaptureRequest,
     CaptureRequestStatus,
     Org,
+    OrgMember,
     OutboxEvent,
     OutboxStatus,
     ProviderBinding,
@@ -31,6 +36,7 @@ from app.interfaces.capture_provider import (
     MeetingTarget,
 )
 from app.interfaces.secretstore import SecretStore
+from app.modules.projects.access import can_read_meeting
 
 
 class CaptureProviderResolver(Protocol):
@@ -157,12 +163,17 @@ def _prepare(
     max_concurrent: int,
 ) -> PreparedDispatch | None:
     with session_factory() as db:
-        event = _owned_event(db, claim, worker_id)
+        scope = db.get(CaptureRequest, claim.request_id)
+        if scope is None:
+            return None
+        db.execute(select(Org.id).where(Org.id == scope.org_id).with_for_update()).scalar_one()
         request = db.execute(
             select(CaptureRequest)
             .where(CaptureRequest.id == claim.request_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         ).scalar_one_or_none()
+        event = _owned_event(db, claim, worker_id)
         if event is None or request is None:
             return None
         if request.status in {
@@ -175,7 +186,47 @@ def _prepare(
             event.locked_at = None
             db.commit()
             return None
-        db.execute(select(Org.id).where(Org.id == request.org_id).with_for_update()).scalar_one()
+        org = db.get(Org, request.org_id)
+        occurrence_id = request.policy_snapshot.get("occurrence_id")
+        occurrence = (
+            db.get(CalendarOccurrence, occurrence_id) if isinstance(occurrence_id, str) else None
+        )
+        allowed = (
+            org is not None
+            and org.capture_policy != "off"
+            and org.disclosure_ack_at is not None
+            and db.scalar(
+                select(OrgMember.id).where(
+                    OrgMember.org_id == request.org_id, OrgMember.user_id == request.requested_by
+                )
+            )
+            is not None
+            and can_read_meeting(db, request.org_id, request.meeting_id, request.requested_by)
+        )
+        if occurrence_id:
+            connection = (
+                db.get(CalendarConnection, occurrence.connection_id) if occurrence else None
+            )
+            allowed = allowed and (
+                org is not None
+                and org.pilot_features_enabled
+                and occurrence is not None
+                and occurrence.org_id == request.org_id
+                and occurrence.meeting_id == request.meeting_id
+                and occurrence.status == CalendarOccurrenceStatus.SCHEDULED
+                and occurrence.capture_override != "off"
+                and connection is not None
+                and connection.enabled
+                and connection.owner_user_id == request.requested_by
+                and (org.capture_policy == "calendar" or occurrence.capture_override == "on")
+            )
+        if not allowed:
+            stop_capture(db, request)
+            event.status = OutboxStatus.DONE
+            event.error_code = "capture_authorization_or_policy_changed"
+            event.locked_by, event.locked_at = None, None
+            db.commit()
+            return None
 
         previous = db.execute(
             select(CaptureAttempt)
@@ -202,7 +253,9 @@ def _prepare(
                 CaptureAttempt.state.in_(_ACTIVE_STATES),
             )
         )
-        if int(active or 0) >= max_concurrent:
+        if int(active or 0) >= min(
+            max_concurrent, org.capture_concurrency_limit if org else max_concurrent
+        ):
             event.status = OutboxStatus.PENDING
             event.run_at = now + timedelta(seconds=30)
             event.locked_by = None
@@ -210,13 +263,20 @@ def _prepare(
             db.commit()
             return None
 
-        bindings = db.execute(
-            select(ProviderBinding).where(
-                ProviderBinding.org_id == request.org_id,
-                ProviderBinding.provider == "vexa",
-                ProviderBinding.status == ProviderBindingStatus.ACTIVE,
-            ).order_by(ProviderBinding.created_at, ProviderBinding.id).limit(2)
-        ).scalars().all()
+        bindings = (
+            db.execute(
+                select(ProviderBinding)
+                .where(
+                    ProviderBinding.org_id == request.org_id,
+                    ProviderBinding.provider == "vexa",
+                    ProviderBinding.status == ProviderBindingStatus.ACTIVE,
+                )
+                .order_by(ProviderBinding.created_at, ProviderBinding.id)
+                .limit(2)
+            )
+            .scalars()
+            .all()
+        )
         if len(bindings) != 1:
             request.status = CaptureRequestStatus.FAILED
             event.status = OutboxStatus.FAILED
@@ -294,9 +354,7 @@ async def dispatch_next(
     """Process at most one due dispatch event; return whether one was claimed."""
 
     timestamp = now or datetime.now(UTC)
-    claim = _claim(
-        session_factory, worker_id=worker_id, now=timestamp, lease_seconds=lease_seconds
-    )
+    claim = _claim(session_factory, worker_id=worker_id, now=timestamp, lease_seconds=lease_seconds)
     if claim is None:
         return False
     prepared = _prepare(

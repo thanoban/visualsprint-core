@@ -31,6 +31,8 @@ services:
       VS_DATABASE_URL: postgresql+psycopg://visualsprint:visualsprint_dev@db:5432/visualsprint
       VS_BLOB_BACKEND: local
       VS_BLOB_LOCAL_DIR: /blobstore
+      VS_SECRETSTORE_BACKEND: local
+      VS_SECRETSTORE_LOCAL_DIR: /secretstore
       VS_CORS_ALLOWED_ORIGINS: '["http://localhost:3000"]'
     env_file:
       # Optional: most people won't have created backend/.env (it's
@@ -43,6 +45,12 @@ services:
       - "8000:8000"
     volumes:
       - blobstore:/blobstore
+      - secretstore:/secretstore
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +70,8 @@ services:
       VS_DATABASE_URL: postgresql+psycopg://visualsprint:visualsprint_dev@db:5432/visualsprint
       VS_BLOB_BACKEND: local
       VS_BLOB_LOCAL_DIR: /blobstore
+      VS_SECRETSTORE_BACKEND: local
+      VS_SECRETSTORE_LOCAL_DIR: /secretstore
     env_file:
       # Optional: most people won't have created backend/.env (it's
       # gitignored by design, see backend/.env.example) -- `required: false`
@@ -71,9 +81,63 @@ services:
         required: false
     volumes:
       - blobstore:/blobstore
+      - secretstore:/secretstore
     depends_on:
       db:
         condition: service_healthy
+
+  # Explicit opt-in: these processes consume durable founder-platform outboxes.
+  # They do not provision Vexa/STT or qualify live joining. Start only after
+  # configuring a consented workspace and its provider binding.
+  capture-worker:
+    profiles: [founder]
+    build:
+      context: ../backend
+      args:
+        INSTALL_EXTRAS: ""
+    command: ["python", "-m", "app.capture.worker", "--watch"]
+    environment: &founder_environment
+      VS_DATABASE_URL: postgresql+psycopg://visualsprint:visualsprint_dev@db:5432/visualsprint
+      VS_BLOB_BACKEND: local
+      VS_BLOB_LOCAL_DIR: /blobstore
+      VS_SECRETSTORE_BACKEND: local
+      VS_SECRETSTORE_LOCAL_DIR: /secretstore
+    env_file: &founder_env_files
+      - path: ../backend/.env
+        required: false
+    volumes: &founder_volumes
+      - blobstore:/blobstore
+      - secretstore:/secretstore
+    depends_on: &founder_dependencies
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  conversation-worker:
+    profiles: [founder]
+    build:
+      context: ../backend
+      args:
+        INSTALL_EXTRAS: agents
+    command: ["python", "-m", "app.entrypoints.conversation_worker", "--watch"]
+    environment: *founder_environment
+    env_file: *founder_env_files
+    volumes: *founder_volumes
+    depends_on: *founder_dependencies
+    restart: unless-stopped
+
+  data-rights-worker:
+    profiles: [founder]
+    build:
+      context: ../backend
+      args:
+        INSTALL_EXTRAS: ""
+    command: ["python", "-m", "app.entrypoints.data_rights_worker", "--watch"]
+    environment: *founder_environment
+    env_file: *founder_env_files
+    volumes: *founder_volumes
+    depends_on: *founder_dependencies
+    restart: unless-stopped
 
   frontend:
     build:
@@ -92,3 +156,4 @@ services:
 volumes:
   dbdata:
   blobstore:
+  secretstore:

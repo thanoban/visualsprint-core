@@ -2,20 +2,20 @@
 
 Threads are creator-private in the pilot.  Scope is "project" or "customer".
 Messages are stored and returned in chronological order.  The assistant message
-for a POST /messages is created synchronously with state=PENDING. Generation
-consumption and streaming endpoints are not yet implemented; this API alone
-does not produce a completed assistant answer.
+for a POST /messages is created atomically with a durable answer-generation
+outbox event. A separately supervised worker publishes cited evidence answers;
+clients poll persisted state. Server-sent streaming is not implemented.
 
 Architecture rules observed:
 - Agents interpret content; they never call each other or choose the next stage.
 - Raw transcript never enters the message content written here — only verified
-  KnowledgeItem statements, passed through the existing chat.py retrieval path.
-- generation_id is opaque to this module; the LLM worker (future) reads it.
+  KnowledgeItem statements with current transcript evidence and source revisions.
+- generation_id and fenced outbox claims prevent stale workers publishing answers.
 """
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
@@ -31,11 +31,14 @@ from app.db.models import (
     MessageRole,
     MessageState,
     Org,
+    OutboxEvent,
+    OutboxStatus,
     Project,
     ProjectMember,
     ThreadStatus,
     User,
 )
+from app.modules.conversations.evidence import citation_current
 from app.modules.projects.access import can_read_meeting
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["threads"])
@@ -141,6 +144,7 @@ class MessageView(BaseModel):
     state: str
     content: str
     generation_id: str | None = None
+    citations: list[dict[str, str]] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -274,6 +278,8 @@ def update_thread(
 def list_messages(
     org_id: str,
     thread_id: str,
+    before_id: str | None = Query(default=None, max_length=36),
+    limit: int = Query(default=100, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
@@ -282,12 +288,28 @@ def list_messages(
     _require_org(db, org_id)
     thread = _get_thread(db, org_id, thread_id, user.id)
 
+    query = select(ChatMessage).where(
+        ChatMessage.org_id == org_id, ChatMessage.thread_id == thread_id
+    )
+    if before_id is not None:
+        cursor = db.scalar(
+            select(ChatMessage).where(
+                ChatMessage.id == before_id,
+                ChatMessage.org_id == org_id,
+                ChatMessage.thread_id == thread_id,
+            )
+        )
+        if cursor is None:
+            raise HTTPException(404, "message cursor not found")
+        query = query.where(
+            or_(
+                ChatMessage.created_at < cursor.created_at,
+                and_(ChatMessage.created_at == cursor.created_at, ChatMessage.id < cursor.id),
+            )
+        )
     messages = (
         db.execute(
-            select(ChatMessage)
-            .where(ChatMessage.org_id == org_id, ChatMessage.thread_id == thread_id)
-            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
-            .limit(100)
+            query.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(limit)
         )
         .scalars()
         .all()
@@ -322,7 +344,11 @@ def list_messages(
                 )
                 is not None
             )
-            if not in_scope or not can_read_meeting(db, org_id, citation.meeting_id, user.id):
+            if (
+                not in_scope
+                or not can_read_meeting(db, org_id, citation.meeting_id, user.id)
+                or not citation_current(db, thread, citation)
+            ):
                 # Do not mutate the stored row while creating a read projection.
                 break
         else:
@@ -339,6 +365,16 @@ def list_messages(
             state=m.state,
             content=m.content,
             generation_id=m.generation_id,
+            citations=[
+                {"meeting_id": c.meeting_id, "knowledge_item_id": c.knowledge_item_id or ""}
+                for c in db.scalars(
+                    select(AnswerCitation).where(
+                        AnswerCitation.message_id == m.id, AnswerCitation.org_id == org_id
+                    )
+                )
+            ]
+            if m.state == MessageState.DONE and m.role == MessageRole.ASSISTANT
+            else [],
         )
         for m in reversed(messages)
     ]
@@ -407,6 +443,17 @@ def send_message(
         generation_id=generation_id,
     )
     db.add(assistant_msg)
+    db.flush()
+    db.add(
+        OutboxEvent(
+            org_id=org_id,
+            operation="conversation.answer",
+            entity_id=assistant_msg.id,
+            input_revision=generation_id,
+            payload={"question_id": user_msg.id},
+            max_attempts=3,
+        )
+    )
     db.commit()
 
     return MessageView(
@@ -416,4 +463,58 @@ def send_message(
         state=user_msg.state,
         content=user_msg.content,
         generation_id=None,
+    )
+
+
+@router.post(
+    "/threads/{thread_id}/messages/{message_id}/retry", response_model=MessageView, status_code=202
+)
+def retry_answer(
+    org_id: str,
+    thread_id: str,
+    message_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> MessageView:
+    thread = _get_thread(db, org_id, thread_id, user.id, lock=True)
+    if thread.status != ThreadStatus.ACTIVE:
+        raise HTTPException(409, "thread is archived")
+    message = db.scalar(
+        select(ChatMessage)
+        .where(
+            ChatMessage.org_id == org_id,
+            ChatMessage.thread_id == thread_id,
+            ChatMessage.id == message_id,
+            ChatMessage.role == MessageRole.ASSISTANT,
+        )
+        .with_for_update()
+    )
+    if message is None:
+        raise HTTPException(404, "answer not found")
+    if message.state == MessageState.FAILED:
+        event = db.scalar(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.entity_id == message.id, OutboxEvent.operation == "conversation.answer"
+            )
+            .with_for_update()
+        )
+        if event is None:
+            raise HTTPException(409, "legacy answer cannot be retried; ask a new question")
+        from datetime import UTC, datetime
+
+        event.status, event.attempts, event.error_code = OutboxStatus.PENDING, 0, None
+        event.run_at = datetime.now(UTC)
+        event.locked_at, event.locked_by = None, None
+        event.fencing_version += 1
+        message.state, message.content = MessageState.PENDING, ""
+        db.commit()
+    return MessageView(
+        id=message.id,
+        thread_id=thread_id,
+        role=message.role,
+        state=message.state,
+        content=message.content,
+        generation_id=message.generation_id,
     )

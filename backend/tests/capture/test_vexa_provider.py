@@ -64,6 +64,7 @@ async def test_start_uses_actual_contract_and_does_not_claim_capture():
         assert request.url.path == "/bots"
         body = json.loads(request.content)
         assert body == {
+            "platform": "google_meet", "native_meeting_id": "abc-defg-hij",
             "meeting_url": "https://meet.google.com/abc-defg-hij",
             "bot_name": "VisualSprint Notetaker", "language": "en",
             "transcribe_enabled": True, "recording_enabled": False,
@@ -210,3 +211,27 @@ async def test_credentials_are_not_forwarded_on_redirect():
 async def test_read_only_probe_rejects_non_tls_remote_and_missing_key():
     assert not (await probe("http://remote.test", "secret"))["ok"]
     assert not (await probe("https://vexa.test", ""))["ok"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    "https://us02web.zoom.us/j/12345678901?pwd=encrypted-token",
+    "https://teams.live.com/meet/1234567890123?p=team-code",
+    "https://meet.google.com/abc-defg-hij",
+])
+async def test_three_platform_spawn_keeps_invitation_and_required_identity(url):
+    target = MeetingTarget.from_url(url)
+    def respond(request):
+        payload = json.loads(request.content)
+        assert payload["platform"] == target.platform
+        assert payload["native_meeting_id"] == target.native_meeting_id
+        assert payload["meeting_url"] == url
+        assert payload["recording_enabled"] is False
+        if target.platform == "teams":
+            assert payload["passcode"] == "team-code"
+        else:
+            assert "passcode" not in payload
+        return httpx.Response(201, json={"id": 42, "platform": target.platform,
+            "native_meeting_id": target.native_meeting_id, "status": "requested"})
+    async with httpx.AsyncClient(base_url="https://vexa.test", transport=httpx.MockTransport(respond)) as client:
+        assert (await VexaCaptureProvider(client).start(target)).status == CaptureStatus.JOINING

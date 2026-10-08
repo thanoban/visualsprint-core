@@ -167,3 +167,40 @@ async def test_run_bounded_pass_returns_promptly_on_an_empty_queue(monkeypatch):
 
     assert result["jobs_processed"] == 0
     assert elapsed < 5.0
+
+
+async def test_tombstoned_meeting_does_not_regenerate_or_chain_hidden_content(monkeypatch):
+    from app.db.models import JobStatus
+
+    async def forbidden_handler(db, job):
+        raise AssertionError("A tombstoned meeting must not call the model")
+
+    monkeypatch.setitem(worker._HANDLERS, "understand", forbidden_handler)
+    sessions = get_sessionmaker()
+    with sessions() as db:
+        org = Org(name="Deletion worker fixture")
+        db.add(org)
+        db.flush()
+        meeting = Meeting(org_id=org.id, deleted_at=datetime.now(UTC))
+        db.add(meeting)
+        db.flush()
+        capture = CaptureSession(org_id=org.id, meeting_id=meeting.id, mode="B")
+        db.add(capture)
+        db.flush()
+        job = PipelineJob(org_id=org.id, capture_session_id=capture.id, stage="understand")
+        db.add(job)
+        db.commit()
+        org_id, job_id = org.id, job.id
+    try:
+        assert await worker.run_once()
+        with sessions() as db:
+            row = db.get(PipelineJob, job_id)
+            assert row.status == JobStatus.FAILED and row.error == "capture_deleted"
+            assert db.query(PipelineJob).filter_by(org_id=org_id).count() == 1
+    finally:
+        with sessions() as db:
+            db.query(PipelineJob).filter_by(org_id=org_id).delete()
+            db.query(CaptureSession).filter_by(org_id=org_id).delete()
+            db.query(Meeting).filter_by(org_id=org_id).delete()
+            db.query(Org).filter_by(id=org_id).delete()
+            db.commit()

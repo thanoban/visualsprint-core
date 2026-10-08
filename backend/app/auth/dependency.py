@@ -62,7 +62,9 @@ def get_current_user(
 def is_org_member(db: Session, org_id: str, user: User) -> bool:
     return (
         db.query(OrgMember)
+        .join(Org, Org.id == OrgMember.org_id)
         .filter(OrgMember.org_id == org_id, OrgMember.user_id == user.id)
+        .filter(Org.deleted_at.is_(None))
         .one_or_none()
         is not None
     )
@@ -119,8 +121,9 @@ def require_org_admin(
     db: Session = Depends(get_db),
 ) -> User:
     member = (
-        db.query(OrgMember)
+        db.query(OrgMember).join(Org, Org.id == OrgMember.org_id)
         .filter(OrgMember.org_id == org_id, OrgMember.user_id == user.id)
+        .filter(Org.deleted_at.is_(None))
         .one_or_none()
     )
     if member is None or member.role not in {"owner", "admin"}:

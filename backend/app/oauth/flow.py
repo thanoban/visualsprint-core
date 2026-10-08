@@ -36,7 +36,9 @@ from pydantic import BaseModel
 
 from app.oauth.providers import OAuthProviderConfig
 
-STATE_TTL_SECONDS = 600  # 10 minutes -- generous for a human to complete the vendor's consent screen
+STATE_TTL_SECONDS = (
+    600  # 10 minutes -- generous for a human to complete the vendor's consent screen
+)
 
 
 class OAuthStateError(Exception):
@@ -68,7 +70,14 @@ def build_authorize_url(config: OAuthProviderConfig, *, state: str, redirect_uri
     return f"{config.authorize_url}?{urlencode(params)}"
 
 
-def sign_state(*, org_id: str, provider: str, secret: str, now: datetime | None = None) -> str:
+def sign_state(
+    *,
+    org_id: str,
+    provider: str,
+    secret: str,
+    now: datetime | None = None,
+    user_id: str | None = None,
+) -> str:
     """Encodes org_id/provider/expiry into the state param and HMAC-signs
     it, so the callback can trust which org a grant belongs to without a
     separate server-side state table -- state is self-contained and
@@ -76,6 +85,10 @@ def sign_state(*, org_id: str, provider: str, secret: str, now: datetime | None 
     now = now or datetime.now(UTC)
     expires_at = int(now.timestamp()) + STATE_TTL_SECONDS
     nonce = secrets.token_urlsafe(8)
+    if user_id:
+        from uuid import UUID
+
+        nonce += "~" + str(UUID(user_id))
     payload = f"{org_id}:{provider}:{expires_at}:{nonce}"
     payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     signature = hmac.new(secret.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()
@@ -107,9 +120,27 @@ def verify_state(state: str, *, provider: str, secret: str) -> str:
     if state_provider != provider:
         raise OAuthStateError(f"state was issued for provider {state_provider!r}, not {provider!r}")
     if time.time() > expires_at:
-        raise OAuthStateError("state expired -- the consent flow took too long, try connecting again")
+        raise OAuthStateError(
+            "state expired -- the consent flow took too long, try connecting again"
+        )
 
     return org_id
+
+
+def verify_state_actor(state: str, *, provider: str, secret: str) -> str | None:
+    """Extract an actor only after verifying the signed state; legacy states have none."""
+    verify_state(state, provider=provider, secret=secret)
+    encoded = state.split(".", 1)[0]
+    payload = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+    nonce = payload.split(":", 3)[3]
+    if "~" not in nonce:
+        return None
+    from uuid import UUID
+
+    try:
+        return str(UUID(nonce.split("~", 1)[1]))
+    except ValueError as exc:
+        raise OAuthStateError("invalid state actor") from exc
 
 
 async def exchange_code_for_token(

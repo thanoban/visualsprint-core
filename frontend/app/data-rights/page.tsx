@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/AuthProvider";
 import type { EraseMeetingResponse, ExportedMeetingData, OrgSettingsOut } from "@/lib/types";
 
@@ -266,6 +267,7 @@ export default function DataRightsPage() {
     <div className="space-y-6 max-w-2xl">
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Data rights</h1>
+        <p>For the founder platform, use <Link href="/operations">durable export and deletion</Link>. The controls below are for legacy meetings; they cannot erase durable captures.</p>
         <p className="mt-1 text-sm text-slate-600">
           Retention policy and data-subject export/deletion requests.
         </p>

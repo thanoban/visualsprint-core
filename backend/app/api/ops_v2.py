@@ -5,17 +5,23 @@ GET /exports/{id} — poll export job status
 POST /deletions — enqueue an async deletion of a project or workspace
 GET /deletions/{id} — poll deletion job status
 
-Both jobs are PENDING on creation.  A background worker (out of scope for this
-slice) transitions them to RUNNING → DONE/FAILED.  The API surface is the
-contract; the execution stub keeps the interface testable without a worker.
+Both jobs are persisted atomically with an outbox event. Separately supervised
+workers generate authenticated text exports or verify external cleanup before
+primary-store erasure. Deletion tombstones hide content at acceptance; failures
+remain visible in creator-private, retryable receipts.
 
 Architecture rules applied:
-- No meeting content is returned by this API; IDs and status only.
+- Export downloads require current access and unchanged source revisions.
 - Workspace deletion requires org-owner role (403 for members).
 - Project deletion requires project-owner role.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+import hashlib
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,9 +34,13 @@ from app.db.models import (
     ExportJob,
     Org,
     OrgMember,
+    OutboxEvent,
+    OutboxStatus,
     ProjectMember,
     User,
 )
+from app.modules.data_rights.deletions import CleanupPending, accept_deletion
+from app.modules.data_rights.exports import ExportUnavailable, build_manifest, utc
 
 router = APIRouter(prefix="/api/v2/workspaces/{org_id}", tags=["ops-v2"])
 
@@ -109,6 +119,7 @@ def create_export(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
+    key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
 ) -> ExportJobView:
     """Enqueue an async export.  Returns 202 with a job ID to poll.
 
@@ -132,6 +143,22 @@ def create_export(
     else:
         raise HTTPException(422, "scope_kind must be 'project' or 'workspace'")
 
+    db.scalar(select(Org.id).where(Org.id == org_id).with_for_update())
+    revision = hashlib.sha256(f"{user.id}:{key or uuid.uuid4()}".encode()).hexdigest()
+    event = db.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.org_id == org_id,
+            OutboxEvent.operation == "data.export",
+            OutboxEvent.input_revision == revision,
+        )
+    )
+    if event:
+        existing = db.get(ExportJob, event.entity_id)
+        if existing is None or existing.created_by != user.id:
+            raise HTTPException(404, "export job not found")
+        if existing.scope_kind != body.scope_kind or existing.scope_id != body.scope_id:
+            raise HTTPException(409, "idempotency key was used for another export scope")
+        return _export_view(existing)
     job = ExportJob(
         org_id=org_id,
         scope_kind=body.scope_kind,
@@ -140,8 +167,53 @@ def create_export(
         status=AsyncJobStatus.PENDING,
     )
     db.add(job)
+    db.flush()
+    db.add(
+        OutboxEvent(
+            org_id=org_id,
+            operation="data.export",
+            entity_id=job.id,
+            input_revision=revision,
+            payload={},
+            max_attempts=3,
+        )
+    )
     db.commit()
     return _export_view(job)
+
+
+@router.get("/exports/{job_id}/download")
+def download_export(
+    org_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> JSONResponse:
+    job = db.scalar(
+        select(ExportJob)
+        .where(ExportJob.org_id == org_id, ExportJob.id == job_id, ExportJob.created_by == user.id)
+        .execution_options(populate_existing=True)
+    )
+    if job is None:
+        raise HTTPException(404, "export not found")
+    if job.status != AsyncJobStatus.DONE or job.manifest is None or job.completed_at is None:
+        raise HTTPException(409, "export not ready")
+    if utc(job.completed_at) < datetime.now(UTC) - timedelta(hours=24):
+        raise HTTPException(410, "export expired; request a new export")
+    try:
+        _manifest, digest = build_manifest(db, job)
+    except ExportUnavailable as exc:
+        raise HTTPException(404, "export source access changed") from exc
+    if digest != job.source_hash:
+        raise HTTPException(409, "export sources changed; request a new export")
+    return JSONResponse(
+        job.manifest,
+        headers={
+            "Content-Disposition": f'attachment; filename="visualsprint-{job.id}.json"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/exports/{job_id}", response_model=ExportJobView)
@@ -154,7 +226,9 @@ def get_export(
 ) -> ExportJobView:
     _require_org(db, org_id)
     job = db.execute(
-        select(ExportJob).where(ExportJob.id == job_id, ExportJob.org_id == org_id)
+        select(ExportJob)
+        .where(ExportJob.id == job_id, ExportJob.org_id == org_id)
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if job is None:
         raise HTTPException(404, "export job not found")
@@ -197,13 +271,32 @@ def create_deletion(
     body: DeletionIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    _: None = Depends(require_org_member),
+    key: str | None = Header(default=None, alias="Idempotency-Key", max_length=255),
 ) -> DeletionJobView:
     """Enqueue an irreversible async deletion.  Returns 202 with a job ID.
 
     workspace scope requires org owner; project scope requires project owner.
     """
-    _require_org(db, org_id)
+    db.scalar(select(Org.id).where(Org.id == org_id).with_for_update())
+    revision = hashlib.sha256(f"{user.id}:{key or uuid.uuid4()}".encode()).hexdigest()
+    event = db.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.org_id == org_id,
+            OutboxEvent.operation == "data.delete",
+            OutboxEvent.input_revision == revision,
+        )
+    )
+    if event:
+        existing = db.get(DeletionJob, event.entity_id)
+        if existing is None or existing.created_by != user.id:
+            raise HTTPException(404, "deletion job not found")
+        if existing.scope_kind != body.scope_kind or existing.scope_id != body.scope_id:
+            raise HTTPException(409, "idempotency key was used for another deletion scope")
+        return _deletion_view(existing)
+    org = _require_org(db, org_id)
+    if org.deleted_at is not None:
+        raise HTTPException(404, "workspace not found")
+    require_org_member(org_id, user, db)
     if body.scope_kind == "workspace":
         if body.scope_id != org_id:
             raise HTTPException(404, "workspace not found")
@@ -221,7 +314,59 @@ def create_deletion(
         status=AsyncJobStatus.PENDING,
     )
     db.add(job)
+    db.flush()
+    try:
+        accept_deletion(db, job)
+    except CleanupPending as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    db.add(
+        OutboxEvent(
+            org_id=org_id,
+            operation="data.delete",
+            entity_id=job.id,
+            input_revision=revision,
+            payload={},
+            max_attempts=8,
+        )
+    )
     db.commit()
+    return _deletion_view(job)
+
+
+@router.post("/deletions/{job_id}/retry", response_model=DeletionJobView, status_code=202)
+def retry_deletion(
+    org_id: str, job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> DeletionJobView:
+    job = db.scalar(
+        select(DeletionJob)
+        .where(
+            DeletionJob.org_id == org_id,
+            DeletionJob.id == job_id,
+            DeletionJob.created_by == user.id,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise HTTPException(404, "deletion not found")
+    if job.status == AsyncJobStatus.FAILED:
+        event = db.scalar(
+            select(OutboxEvent)
+            .where(
+                OutboxEvent.org_id == org_id,
+                OutboxEvent.operation == "data.delete",
+                OutboxEvent.entity_id == job.id,
+            )
+            .with_for_update()
+        )
+        if event is None:
+            raise HTTPException(409, "legacy deletion needs operator recovery")
+        event.status, event.attempts, event.error_code = OutboxStatus.PENDING, 0, None
+        event.run_at = datetime.now(UTC)
+        event.locked_at, event.locked_by = None, None
+        event.fencing_version += 1
+        job.status, job.error = AsyncJobStatus.PENDING, None
+        db.commit()
     return _deletion_view(job)
 
 
@@ -231,11 +376,11 @@ def get_deletion(
     job_id: str,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    _: None = Depends(require_org_member),
 ) -> DeletionJobView:
-    _require_org(db, org_id)
     job = db.execute(
-        select(DeletionJob).where(DeletionJob.id == job_id, DeletionJob.org_id == org_id)
+        select(DeletionJob)
+        .where(DeletionJob.id == job_id, DeletionJob.org_id == org_id)
+        .execution_options(populate_existing=True)
     ).scalar_one_or_none()
     if job is None:
         raise HTTPException(404, "deletion job not found")

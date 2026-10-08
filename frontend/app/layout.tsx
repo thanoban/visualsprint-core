@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "VisualSprint",
-  description: "Multilingual meeting intelligence — evidence-grounded organizational memory.",
+  description: "Meeting intelligence — evidence-grounded project and customer memory.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

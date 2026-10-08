@@ -1,6 +1,10 @@
 # Founder platform implementation status and runbook
 
-Updated 2026-10-07. Source of truth for the target: [full plan](18-founder-platform-architecture.md).
+Updated 2026-10-08. Source of truth for the target: [full plan](18-founder-platform-architecture.md).
+
+Latest continuation: [27 — Calendar, saved chats and data-rights delivery](27-calendar-chat-and-data-rights-delivery.md).
+The API/worker/UI paths below now extend the previous foundations. Live provider admission,
+screenshots, real model acceptance and production operational qualification remain separate gates.
 
 ## Current phase: implementation resumed
 
@@ -617,6 +621,18 @@ meeting pagination and versioned assignment UI are now implemented. Read
 [26 — Project workspace delivery](26-project-workspace-delivery.md) for the exact test evidence,
 user check and unfinished calendar/chat/export/deletion/provider gates. These screens do not turn
 previous API foundations into fully accepted F00–F14 features. No production rollout was performed.
+
+## Calendar/chat/data-rights continuation — 2026-10-08
+
+Implemented owned calendar-to-durable capture scheduling and cancellation, project-assigned instant
+capture, provider contract corrections/status UI, leased saved-answer generation with source-revision
+checks and saved-chat UI, authenticated text export, and tombstone-first durable deletion with verified
+cleanup checkpoints. Added explicit opt-in local worker composition. Migrations run through
+`n5b6c7d8e9f0`; the model's existing capture-session index now matches the migration.
+
+Read document 27 for verification evidence, exact setup and bounded behavior. These changes do not
+prove real Meet/Zoom/Teams joining, screen capture, unrestricted chat synthesis or full F00–F14
+acceptance. Historical statements above that workers/UI were deferred describe those earlier slices.
 
 ## Historical next-capture checklist — partly implemented in later slices
 

@@ -50,7 +50,7 @@ STRICT_PATHS = ["app/interfaces", "app/agents", "app/db", "app/auth"]
 # of the pipeline dispatch contract, not a drive-by fix. Raising the baseline
 # here rather than rushing that refactor in unrelated to why this file was
 # touched today.
-BASELINE_ERRORS = 216  # 2026-10-08: audited source boundaries; lock in the measured improvement
+BASELINE_ERRORS = 212  # 2026-10-08: tombstone-aware workspace reads remove four nullable-org errors
 
 _COUNT = re.compile(r"Found (\d+) error", re.MULTILINE)
 

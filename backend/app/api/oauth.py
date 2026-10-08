@@ -33,10 +33,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.secretstore_gcp import get_secretstore
-from app.auth.dependency import require_org_member
+from app.auth.dependency import get_current_user, require_org_member
 from app.config import get_settings
 from app.db.base import get_db
-from app.db.models import CalendarConnection, Org, OrgConnection
+from app.db.models import CalendarConnection, Org, OrgConnection, OrgMember, User
 from app.oauth.connection import get_org_connection
 from app.oauth.flow import (
     OAuthStateError,
@@ -46,6 +46,7 @@ from app.oauth.flow import (
     exchange_code_for_token,
     sign_state,
     verify_state,
+    verify_state_actor,
 )
 from app.oauth.providers import OAuthNotConfiguredError, get_provider_config
 
@@ -77,7 +78,9 @@ async def list_connections(
     if db.get(Org, org_id) is None:
         raise HTTPException(404, "org not found")
 
-    calendar_connections = db.query(CalendarConnection).filter(CalendarConnection.org_id == org_id).all()
+    calendar_connections = (
+        db.query(CalendarConnection).filter(CalendarConnection.org_id == org_id, CalendarConnection.enabled.is_(True)).all()
+    )
     org_connections = db.query(OrgConnection).filter(OrgConnection.org_id == org_id).all()
     return [
         ConnectionOut(
@@ -89,7 +92,9 @@ async def list_connections(
         for c in calendar_connections
     ] + [
         ConnectionOut(
-            provider=c.provider, account_label=c.account_label, connected_at=c.created_at.isoformat()
+            provider=c.provider,
+            account_label=c.account_label,
+            connected_at=c.created_at.isoformat(),
         )
         for c in org_connections
     ]
@@ -100,6 +105,7 @@ async def disconnect(
     org_id: str,
     provider: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> None:
     """Revokes an org's connection to `provider` -- deletes both the row
@@ -118,11 +124,30 @@ async def disconnect(
     connection = get_org_connection(db, org_id, provider)
     if connection is None:
         raise HTTPException(404, f"org has no connection to {provider!r}")
+    if isinstance(connection, CalendarConnection) and connection.owner_user_id not in {None, user.id}:
+        raise HTTPException(404, "calendar connection not found")
 
     # SecretStore.delete() is idempotent by contract (see its Protocol
     # docstring) -- no try/except needed for an already-missing secret.
     await get_secretstore().delete(connection.secret_ref)
-    db.delete(connection)
+    from app.db.models import CalendarOccurrence
+
+    if isinstance(connection, CalendarConnection) and (
+        connection.owner_user_id is not None
+        or db.query(CalendarOccurrence.id).filter_by(connection_id=connection.id).first() is not None
+    ):
+        from app.capture.commands import stop_capture
+        from app.db.models import CalendarOccurrence, CalendarOccurrenceStatus, CaptureRequest
+
+        connection.enabled = False
+        for occurrence in db.query(CalendarOccurrence).filter_by(connection_id=connection.id):
+            occurrence.status = CalendarOccurrenceStatus.CANCELLED
+            occurrence.revision += 1
+            if occurrence.meeting_id:
+                for request in db.query(CaptureRequest).filter_by(meeting_id=occurrence.meeting_id, org_id=org_id).with_for_update():
+                    stop_capture(db, request)
+    else:
+        db.delete(connection)
     db.commit()
 
 
@@ -156,6 +181,7 @@ async def start_oauth(
     org_id: str,
     provider: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     _: None = Depends(require_org_member),
 ) -> AuthorizeUrlOut:
     """Returns the vendor's authorize URL as JSON rather than redirecting
@@ -172,7 +198,9 @@ async def start_oauth(
     except OAuthNotConfiguredError as exc:
         raise HTTPException(503, str(exc)) from exc
 
-    state = sign_state(org_id=org_id, provider=provider, secret=_require_state_secret())
+    state = sign_state(
+        org_id=org_id, provider=provider, secret=_require_state_secret(), user_id=user.id
+    )
     url = build_authorize_url(config, state=state, redirect_uri=_callback_redirect_uri(provider))
     return AuthorizeUrlOut(authorize_url=url)
 
@@ -199,12 +227,16 @@ async def oauth_callback(
 
     try:
         org_id = verify_state(state, provider=provider, secret=_require_state_secret())
+        user_id = verify_state_actor(state, provider=provider, secret=_require_state_secret())
     except OAuthStateError as exc:
         logger.warning("oauth callback %r: state validation failed: %s", provider, exc)
         return error_redirect
 
     if db.get(Org, org_id) is None:
         logger.error("oauth callback %r: org %r not found", provider, org_id)
+        return error_redirect
+
+    if user_id and db.query(OrgMember).filter_by(org_id=org_id, user_id=user_id).first() is None:
         return error_redirect
 
     try:
@@ -215,7 +247,10 @@ async def oauth_callback(
 
     try:
         token_set = await exchange_code_for_token(
-            config, code=code, redirect_uri=_callback_redirect_uri(provider), http_client=http_client
+            config,
+            code=code,
+            redirect_uri=_callback_redirect_uri(provider),
+            http_client=http_client,
         )
     except (httpx.HTTPStatusError, OAuthTokenExchangeError) as exc:
         logger.error("oauth callback %r: token exchange failed: %s", provider, exc)
@@ -223,7 +258,7 @@ async def oauth_callback(
 
     try:
         if provider == "google":
-            await _finish_google_connection(db, org_id, token_set, http_client)
+            await _finish_google_connection(db, org_id, token_set, http_client, user_id=user_id)
         elif provider == "github":
             await _finish_github_connection(db, org_id, token_set, http_client)
         elif provider == "linear":
@@ -235,17 +270,23 @@ async def oauth_callback(
         elif provider == "zoom":
             await _finish_zoom_connection(db, org_id, token_set, http_client)
         elif provider == "microsoft":
-            await _finish_microsoft_connection(db, org_id, token_set, http_client)
+            await _finish_microsoft_connection(db, org_id, token_set, http_client, user_id=user_id)
         elif provider == "microsoft_teams":
-            await _finish_microsoft_teams_connection(db, org_id, token_set, http_client)
+            await _finish_microsoft_teams_connection(
+                db, org_id, token_set, http_client, user_id=user_id
+            )
         else:
             logger.error("oauth callback: no finish handler for %r", provider)
             return error_redirect
     except Exception as exc:
-        logger.error("oauth callback %r: failed to finalize connection: %s", provider, exc, exc_info=True)
+        logger.error(
+            "oauth callback %r: failed to finalize connection: %s", provider, exc, exc_info=True
+        )
         return error_redirect
 
-    return RedirectResponse(f"{settings.frontend_base_url}/settings/connections?connected={provider}")
+    return RedirectResponse(
+        f"{settings.frontend_base_url}/settings/connections?connected={provider}"
+    )
 
 
 async def _upsert_org_connection(
@@ -282,7 +323,13 @@ async def _upsert_org_connection(
 
 
 async def _upsert_calendar_connection(
-    db: Session, org_id: str, provider: str, account_email: str, token_set: OAuthTokenSet
+    db: Session,
+    org_id: str,
+    provider: str,
+    account_email: str,
+    token_set: OAuthTokenSet,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Shared by google and microsoft -- both are calendar connections, and
     CalendarConnection already had exactly the columns either grant needs
@@ -300,14 +347,23 @@ async def _upsert_calendar_connection(
         db.flush()
         connection.secret_ref = f"oauth/{provider}/{connection.id}"
     else:
+        if connection.owner_user_id is not None and connection.owner_user_id != user_id:
+            raise HTTPException(403, "calendar connection belongs to another member")
         connection.account_email = account_email
+    connection.owner_user_id = user_id
+    connection.enabled = True
 
     await get_secretstore().put(connection.secret_ref, token_set.model_dump_json())
     db.commit()
 
 
 async def _finish_google_connection(
-    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+    db: Session,
+    org_id: str,
+    token_set: OAuthTokenSet,
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str | None = None,
 ) -> None:
     resp = await http_client.get(
         GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {token_set.access_token}"}
@@ -316,11 +372,18 @@ async def _finish_google_connection(
     account_email = resp.json().get("email")
     if not account_email:
         raise HTTPException(502, "Google userinfo response did not include an email")
-    await _upsert_calendar_connection(db, org_id, "google", account_email, token_set)
+    await _upsert_calendar_connection(
+        db, org_id, "google", account_email, token_set, user_id=user_id
+    )
 
 
 async def _finish_microsoft_connection(
-    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+    db: Session,
+    org_id: str,
+    token_set: OAuthTokenSet,
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str | None = None,
 ) -> None:
     resp = await http_client.get(
         GRAPH_ME_URL, headers={"Authorization": f"Bearer {token_set.access_token}"}
@@ -332,12 +395,21 @@ async def _finish_microsoft_connection(
     # documented Graph fallback.
     account_email = data.get("mail") or data.get("userPrincipalName")
     if not account_email:
-        raise HTTPException(502, "Microsoft Graph /me response did not include mail/userPrincipalName")
-    await _upsert_calendar_connection(db, org_id, "microsoft", account_email, token_set)
+        raise HTTPException(
+            502, "Microsoft Graph /me response did not include mail/userPrincipalName"
+        )
+    await _upsert_calendar_connection(
+        db, org_id, "microsoft", account_email, token_set, user_id=user_id
+    )
 
 
 async def _finish_microsoft_teams_connection(
-    db: Session, org_id: str, token_set: OAuthTokenSet, http_client: httpx.AsyncClient
+    db: Session,
+    org_id: str,
+    token_set: OAuthTokenSet,
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Incremental-consent completion for Teams Mode A2 capture. Writes to
     the SAME CalendarConnection row/secret_ref as _finish_microsoft_connection
@@ -353,8 +425,12 @@ async def _finish_microsoft_teams_connection(
     data = resp.json()
     account_email = data.get("mail") or data.get("userPrincipalName")
     if not account_email:
-        raise HTTPException(502, "Microsoft Graph /me response did not include mail/userPrincipalName")
-    await _upsert_calendar_connection(db, org_id, "microsoft", account_email, token_set)
+        raise HTTPException(
+            502, "Microsoft Graph /me response did not include mail/userPrincipalName"
+        )
+    await _upsert_calendar_connection(
+        db, org_id, "microsoft", account_email, token_set, user_id=user_id
+    )
 
     connection = (
         db.query(CalendarConnection)

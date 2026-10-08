@@ -1,8 +1,11 @@
 """Bounded entrypoint for durable capture dispatch and reconciliation."""
 
+import argparse
 import asyncio
 import json
+import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -58,9 +61,29 @@ async def run_capture_pass(
     }
 
 
+async def serve(*, watch: bool, interval: float, max_events: int) -> None:
+    worker_id = f"capture-{uuid.uuid4()}"
+    while True:
+        result = await run_capture_pass(worker_id=worker_id, max_events=max_events)
+        if any(result.values()) or not watch:
+            print(json.dumps(result, sort_keys=True), flush=True)
+        if not watch:
+            return
+        await asyncio.sleep(interval)
+
+
 def main() -> None:
-    result = asyncio.run(run_capture_pass())
-    print(json.dumps(result, sort_keys=True))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--watch", action="store_true", help="Run continuously; requires meeting-lifetime hosting"
+    )
+    parser.add_argument("--interval", type=float, default=5)
+    parser.add_argument("--max-events", type=int, default=20)
+    args = parser.parse_args()
+    if not 1 <= args.interval <= 60:
+        parser.error("interval must be between 1 and 60 seconds")
+    with suppress(KeyboardInterrupt):
+        asyncio.run(serve(watch=args.watch, interval=args.interval, max_events=args.max_events))
 
 
 if __name__ == "__main__":

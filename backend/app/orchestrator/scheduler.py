@@ -13,7 +13,9 @@ tokens once a customer connects, credential-blocked (loud, specific
 failure) until they do.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import structlog
 from sqlalchemy import select
@@ -32,6 +34,7 @@ from app.db.models import (
     Org,
 )
 from app.interfaces.calendar import CalendarAdapter, CalendarEvent
+from app.interfaces.secretstore import SecretStore
 from app.orchestrator.queue import enqueue_pipeline
 
 log = structlog.get_logger()
@@ -77,6 +80,7 @@ async def sync_calendar_connection(
     *,
     within: timedelta = DEFAULT_SYNC_WINDOW,
     processing_delay: timedelta = DEFAULT_PROCESSING_DELAY,
+    secret_store: SecretStore | None = None,
 ) -> list[str]:
     """Poll one calendar connection; upsert CalendarOccurrence rows, then
     create Meeting + CaptureSession(mode=A2) + a scheduled `acquire`
@@ -93,6 +97,13 @@ async def sync_calendar_connection(
         )
 
     events = await adapter.list_upcoming_events(connection, within)
+    db.refresh(org)
+    if org.pilot_features_enabled:
+        from app.adapters.secretstore_gcp import get_secretstore
+        from app.modules.calendars.durable_capture import sync_snapshot
+
+        secrets = secret_store or cast(Callable[[], SecretStore], get_secretstore)()
+        return await sync_snapshot(db, connection, events, secrets, within=within)
     created_session_ids: list[str] = []
     seen_provider_ids: set[str] = set()
 

@@ -6,7 +6,11 @@
 for local work versus planned features. The older capture paths below
 describe the legacy product and are not evidence that the replacement is deployed.
 
-Core platform for multilingual meeting intelligence, transforming Sinhala, Tamil, and English conversations, shared screens, and meeting history into searchable knowledge, organizational memory, and actions.
+Current development targets English-first founder workspaces: customer/project meeting history,
+durable capture, cited memory, saved conversations and approved actions. The earlier multilingual
+and screen-capture implementation remains legacy reference, not current release qualification.
+See [the latest delivery record and worker startup](docs/27-calendar-chat-and-data-rights-delivery.md)
+for working local paths and the remaining live-provider gates.
 
 **Product loop:** Capture → Understand → Verify → Remember → Act
 

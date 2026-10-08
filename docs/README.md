@@ -15,6 +15,7 @@
 | [24 — Decisions/traceability](24-decisions-and-traceability.md) | Owner choices, rejected assumptions, risks and requirements mapping |
 | [19 — Progress ledger](19-founder-platform-progress.md) | Actual local work, pause state and next implementation step |
 | [26 — Project workspace delivery](26-project-workspace-delivery.md) | Project/customer meeting UI, verification and remaining worker gates |
+| [27 — Calendar/chat/data rights](27-calendar-chat-and-data-rights-delivery.md) | Durable worker/UI wiring, startup, local verification and live qualification gates |
 
 ## Legacy references
 

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db.base import get_sessionmaker
-from app.db.models import PipelineJob
+from app.db.models import CaptureSession, JobStatus, Meeting, Org, PipelineJob
 from app.orchestrator import queue as q
 
 log = structlog.get_logger()
@@ -313,7 +313,7 @@ async def _sync_all_calendars(db: Session) -> None:
     from app.db.models import CalendarConnection
     from app.orchestrator.scheduler import sync_calendar_connection
 
-    connections = db.execute(select(CalendarConnection)).scalars().all()
+    connections = db.execute(select(CalendarConnection).where(CalendarConnection.enabled.is_(True))).scalars().all()
     for connection in connections:
         try:
             adapter = _get_calendar_adapter_for_connection(db, connection)
@@ -1398,6 +1398,17 @@ async def run_once() -> bool:
     with Session() as db:
         job = db.get(PipelineJob, job_id)
         if job is None:
+            return True
+        capture = db.get(CaptureSession, session_id)
+        meeting = db.get(Meeting, capture.meeting_id) if capture is not None else None
+        org = db.get(Org, capture.org_id) if capture is not None else None
+        if (meeting is not None and meeting.deleted_at is not None) or (
+            org is not None and org.deleted_at is not None
+        ):
+            # A deletion tombstone is authoritative even while provider cleanup
+            # is waiting. Do not spend model tokens or regenerate hidden data.
+            job.status, job.error = JobStatus.FAILED, "capture_deleted"
+            db.commit()
             return True
         handler = _HANDLERS.get(stage, _noop)
         try:

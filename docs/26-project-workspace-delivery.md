@@ -72,6 +72,11 @@ and stopped after verification. The older audit container is also retained and s
 
 ## Still unfinished — next slices
 
+Historical checklist for this checkpoint: the subsequent API/worker/UI implementation is documented
+in [27 — Calendar/chat/data-rights delivery](27-calendar-chat-and-data-rights-delivery.md). Real
+provider/browser/operations qualification remains outstanding; do not read either checkpoint as
+production feature acceptance.
+
 1. Calendar → v2 capture: connection ownership, occurrence scheduling/cancellation, no duplicate
    legacy/v2 transports, durable admission/end-state reconciliation and the capture UI.
 2. Saved project/customer/meeting chats: leased answer generation, permission recheck after model
