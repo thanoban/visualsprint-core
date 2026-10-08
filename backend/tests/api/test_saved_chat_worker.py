@@ -107,13 +107,15 @@ async def run(db, model):
 
 @pytest.mark.asyncio
 async def test_http_worker_restore_citations_and_retry_identity(client, db_session, chat):
-    *_, path, text = chat
+    _, _, meeting, item, _, path, text = chat
     model = Model()
     assert await run(db_session, model)
     assert not await run(db_session, model)
     rows = client.get(path + "/messages").json()
     assert rows[-1]["state"] == "done" and "The team chose Postgres." in rows[-1]["content"]
     assert len(rows[-1]["citations"]) == 1
+    assert rows[-1]["citations"][0]["capture_session_id"] == item.capture_session_id
+    assert rows[-1]["citations"][0]["capture_session_id"] != meeting.id
     assert client.post(path + "/messages", json=text).status_code == 202
     assert db_session.scalar(select(func.count()).select_from(ChatMessage)) == 2
     assert db_session.scalar(select(func.count()).select_from(LlmCall)) == 1

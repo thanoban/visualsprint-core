@@ -24,9 +24,11 @@ from app.auth.dependency import get_current_user, require_org_member
 from app.db.base import get_db
 from app.db.models import (
     AnswerCitation,
+    CaptureSession,
     ChatMessage,
     ChatThread,
     Customer,
+    KnowledgeItem,
     MeetingAssignment,
     MessageRole,
     MessageState,
@@ -366,11 +368,29 @@ def list_messages(
             content=m.content,
             generation_id=m.generation_id,
             citations=[
-                {"meeting_id": c.meeting_id, "knowledge_item_id": c.knowledge_item_id or ""}
-                for c in db.scalars(
-                    select(AnswerCitation).where(
-                        AnswerCitation.message_id == m.id, AnswerCitation.org_id == org_id
+                {
+                    "meeting_id": c.meeting_id,
+                    "knowledge_item_id": c.knowledge_item_id or "",
+                    "capture_session_id": session_id or "",
+                }
+                for c, session_id in db.execute(
+                    select(AnswerCitation, CaptureSession.id)
+                    .outerjoin(
+                        KnowledgeItem,
+                        and_(
+                            KnowledgeItem.id == AnswerCitation.knowledge_item_id,
+                            KnowledgeItem.org_id == org_id,
+                        ),
                     )
+                    .outerjoin(
+                        CaptureSession,
+                        and_(
+                            CaptureSession.id == KnowledgeItem.capture_session_id,
+                            CaptureSession.org_id == org_id,
+                            CaptureSession.meeting_id == AnswerCitation.meeting_id,
+                        ),
+                    )
+                    .where(AnswerCitation.message_id == m.id, AnswerCitation.org_id == org_id)
                 )
             ]
             if m.state == MessageState.DONE and m.role == MessageRole.ASSISTANT

@@ -272,15 +272,25 @@ async def test_uncertain_attempt_without_record_id_requires_operator_reconciliat
 
 
 @pytest.mark.asyncio
-async def test_ended_provider_confirms_requested_stop(state):
+@pytest.mark.parametrize("stop_state", [CaptureStopState.REQUESTED, CaptureStopState.ACKNOWLEDGED])
+@pytest.mark.parametrize("provider_state", [CaptureStatus.ENDED, CaptureStatus.FAILED])
+async def test_terminal_provider_confirms_requested_or_acknowledged_stop(
+    state, stop_state, provider_state
+):
     with state() as db:
-        db.get(CaptureRequest, "request-1").stop_state = CaptureStopState.REQUESTED
+        db.get(CaptureRequest, "request-1").stop_state = stop_state
         db.commit()
-    assert await run(state, Provider(CaptureStatus.ENDED))
+    provider = Provider(provider_state)
+    assert await run(state, provider)
     with state() as db:
         request = db.get(CaptureRequest, "request-1")
         assert request.stop_state == CaptureStopState.CONFIRMED
-        assert request.status == CaptureRequestStatus.FINALIZED
+        assert request.status == (
+            CaptureRequestStatus.FINALIZED
+            if provider_state == CaptureStatus.ENDED
+            else CaptureRequestStatus.FAILED
+        )
+    assert provider.stop_calls == 0
 
 
 @pytest.mark.asyncio

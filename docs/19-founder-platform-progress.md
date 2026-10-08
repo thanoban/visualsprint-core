@@ -2,7 +2,10 @@
 
 Updated 2026-10-08. Source of truth for the target: [full plan](18-founder-platform-architecture.md).
 
-Latest continuation: [27 — Calendar, saved chats and data-rights delivery](27-calendar-chat-and-data-rights-delivery.md).
+Latest continuation: [28 — Calendar-independent capture](28-ad-hoc-capture-delivery.md).
+The Capture now hub and shared Upload/Calendar/project form use durable v2 intake without calendar OAuth;
+request recovery, project/private destination, duplicate prevention and correct processing links are implemented.
+Prior worker delivery: [27 — Calendar, saved chats and data-rights delivery](27-calendar-chat-and-data-rights-delivery.md).
 The API/worker/UI paths below now extend the previous foundations. Live provider admission,
 screenshots, real model acceptance and production operational qualification remain separate gates.
 

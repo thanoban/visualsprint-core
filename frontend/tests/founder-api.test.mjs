@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ApiError, apiJson, founderApi, workspacePath } from "../lib/founder-api.ts";
+import { ApiError, apiJson, captureFingerprint, founderApi, workspacePath } from "../lib/founder-api.ts";
 
 test("workspace requests encode identifiers and never accept an external origin", () => {
   assert.equal(workspacePath("org/other", "/projects"), "/api/v2/workspaces/org%2Fother/projects");
@@ -38,4 +38,39 @@ test("project creation is private by server default and does not grant participa
 });
 test("non-JSON permission errors preserve status", async () => {
   await assert.rejects(apiJson(async () => new Response("Forbidden", { status: 403 }), "/api/path"), (error) => error instanceof ApiError && error.status === 403);
+});
+
+test("ad-hoc capture is independent of a calendar and preserves the caller's retry key", async () => {
+  const requests = [];
+  const api = founderApi(async (path, init) => {
+    requests.push({ path, init }); return Response.json({ id: "request", meeting_id: "meeting", status: "queued" });
+  }, "workspace");
+  const input = { meeting_url: " https://meet.google.com/abc-defg-hij ", title: " Customer call ", project_id: null };
+  await api.startCapture(input, "retry-key");
+  await api.startCapture(input, "retry-key");
+  assert.equal(requests.length, 2);
+  for (const { path, init } of requests) {
+    assert.equal(path, "/api/v2/workspaces/workspace/captures");
+    assert.equal(init.headers["Idempotency-Key"], "retry-key");
+    assert.deepEqual(JSON.parse(init.body), { meeting_url: "https://meet.google.com/abc-defg-hij", title: "Customer call", project_id: null });
+  }
+});
+
+test("capture intent identity includes title and sharing destination, not just URL", () => {
+  const input = { meeting_url: "https://meet.google.com/abc-defg-hij", title: "Call", project_id: null };
+  assert.equal(captureFingerprint(input), captureFingerprint({ ...input, title: " Call " }));
+  assert.notEqual(captureFingerprint(input), captureFingerprint({ ...input, title: "Other" }));
+  assert.notEqual(captureFingerprint(input), captureFingerprint({ ...input, project_id: "shared-project" }));
+});
+
+test("capture status and stop use durable IDs and support abortable polling", async () => {
+  const calls = [];
+  const api = founderApi(async (path, init) => { calls.push({ path, init }); return Response.json({ id: "request" }); }, "workspace");
+  const controller = new AbortController();
+  await api.captureStatus("request/id", controller.signal);
+  await api.stopCapture("request/id");
+  assert.equal(calls[0].path, "/api/v2/workspaces/workspace/capture-requests/request%2Fid");
+  assert.equal(calls[0].init.signal, controller.signal);
+  assert.equal(calls[1].path, "/api/v2/workspaces/workspace/capture-requests/request%2Fid/stop");
+  assert.equal(calls[1].init.method, "POST");
 });

@@ -109,6 +109,7 @@ def readiness(
     ).all()
     return {
         "provider_configured": len(bindings) == 1,
+        "manual_capture_enabled": org.capture_policy != "off" and org.disclosure_ack_at is not None,
         "automatic_capture_enabled": org.pilot_features_enabled
         and org.capture_policy == "calendar"
         and org.disclosure_ack_at is not None,

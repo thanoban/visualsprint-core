@@ -13,11 +13,10 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE_URL } from "@/lib/config";
 import { useAuth } from "@/lib/AuthProvider";
+import { CapturePanel } from "@/features/founder/CapturePanel";
 import type {
-  BotSessionStatusResponse,
   CaptureSessionState,
   CaptureSessionStatus,
-  InstantCaptureResponse,
   OrgSettingsOut,
   UploadResponse,
 } from "@/lib/types";
@@ -54,18 +53,11 @@ export default function UploadPage() {
   const pollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [instantUrl, setInstantUrl] = useState("");
-  const [instantSubmitting, setInstantSubmitting] = useState(false);
-  const [instantError, setInstantError] = useState<string | null>(null);
-  const [instantResult, setInstantResult] = useState<InstantCaptureResponse | null>(null);
-  const [botStatus, setBotStatus] = useState<BotSessionStatusResponse | null>(null);
-  const botPollHandle = useRef<ReturnType<typeof setInterval> | null>(null);
   const [orgSettings, setOrgSettings] = useState<OrgSettingsOut | null>(null);
 
   useEffect(() => {
     return () => {
       if (pollHandle.current) clearInterval(pollHandle.current);
-      if (botPollHandle.current) clearInterval(botPollHandle.current);
     };
   }, []);
 
@@ -94,26 +86,6 @@ export default function UploadPage() {
       }
     } catch (err) {
       setPollError(err instanceof Error ? err.message : "Failed to fetch session status");
-    }
-  }
-
-  async function pollBotSession(orgId: string, botSessionId: string) {
-    try {
-      const res = await authedFetch(
-        `/api/v1/orgs/${orgId}/capture/sessions/${botSessionId}`
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as BotSessionStatusResponse;
-      setBotStatus(data);
-      const terminal = ["ended", "failed", "missed", "lobby_timeout"];
-      if (terminal.includes(data.status)) {
-        if (botPollHandle.current) {
-          clearInterval(botPollHandle.current);
-          botPollHandle.current = null;
-        }
-      }
-    } catch {
-      // transient — keep polling
     }
   }
 
@@ -172,57 +144,6 @@ export default function UploadPage() {
     }
   }
 
-  async function handleInstantCapture(e: React.FormEvent) {
-    e.preventDefault();
-    if (!instantUrl.trim()) {
-      setInstantError("Paste a Zoom, Google Meet, or Teams link first.");
-      return;
-    }
-    if (!me) {
-      setInstantError("Still loading your account — try again in a moment.");
-      return;
-    }
-    setInstantSubmitting(true);
-    setInstantError(null);
-    setInstantResult(null);
-    try {
-      const res = await authedFetch(`/api/v1/orgs/${me.org.id}/capture/instant`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: instantUrl.trim() }),
-      });
-      if (!res.ok) {
-        let detail = `${res.status} ${res.statusText}`;
-        try {
-          const body = await res.json();
-          if (body?.detail) detail = body.detail;
-        } catch {
-          // non-JSON error body
-        }
-        throw new Error(detail);
-      }
-      const data = (await res.json()) as InstantCaptureResponse;
-      setInstantResult(data);
-      setInstantUrl("");
-      setBotStatus(null);
-      if (botPollHandle.current) {
-        clearInterval(botPollHandle.current);
-        botPollHandle.current = null;
-      }
-      if (data.dispatched && data.bot_session_id && me) {
-        const orgId = me.org.id;
-        const sessionId = data.bot_session_id;
-        botPollHandle.current = setInterval(() => {
-          void pollBotSession(orgId, sessionId);
-        }, 5000);
-      }
-    } catch (err) {
-      setInstantError(err instanceof Error ? err.message : "Unknown error starting capture.");
-    } finally {
-      setInstantSubmitting(false);
-    }
-  }
-
   const currentStageIndex = stageIndexFor(status?.state);
   const failed = status?.state === "failed";
 
@@ -237,103 +158,7 @@ export default function UploadPage() {
 
       <main style={{ padding: "28px 32px 64px", maxWidth: 1080, display: "grid", gridTemplateColumns: "minmax(300px,1.25fr) minmax(240px,1fr)", gap: 22, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
-        <section style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "22px 24px" }}>
-          <p style={{ fontSize: 14.5, fontWeight: 600, color: "var(--text)", margin: 0 }}>Capture a meeting happening right now</p>
-          <p style={{ fontSize: 12.5, color: "var(--faint)", margin: "5px 0 16px" }}>
-            For meetings you attend in Chrome or Edge, use the VisualSprint Companion to capture
-            audio and screen evidence. Connected platforms can import official recordings after
-            the meeting. Zoom live capture also needs RTMS authorization and a confirmed stream.
-          </p>
-          <form onSubmit={handleInstantCapture} style={{ display: "flex", gap: 10 }}>
-            <input
-              type="url"
-              value={instantUrl}
-              onChange={(e) => setInstantUrl(e.target.value)}
-              placeholder="https://meet.google.com/xxx-xxxx-xxx or a Teams/Zoom link"
-              style={{ flex: 1, fontFamily: sans, fontSize: 14, color: "var(--text)", background: "var(--soft)", border: "1px solid var(--border-2)", borderRadius: 8, padding: "10px 13px" }}
-            />
-            <button
-              type="submit"
-              disabled={instantSubmitting}
-              style={{
-                fontFamily: sans,
-                fontSize: 13.5,
-                fontWeight: 600,
-                color: "#fff",
-                background: "var(--blue-strong)",
-                padding: "10px 20px",
-                borderRadius: 7,
-                border: "none",
-                cursor: instantSubmitting ? "default" : "pointer",
-                opacity: instantSubmitting ? 0.6 : 1,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {instantSubmitting ? "Starting…" : "Capture now"}
-            </button>
-          </form>
-
-          {instantError && (
-            <p style={{ marginTop: 12, borderRadius: 6, background: "var(--red-soft)", border: "1px solid var(--red)", padding: "8px 12px", fontSize: 13, color: "var(--red)" }}>
-              {instantError}
-            </p>
-          )}
-          {instantResult && (
-            <div style={{ marginTop: 12 }}>
-              <p
-                style={{
-                  borderRadius: 6,
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  margin: 0,
-                  background: "var(--amber-soft)",
-                  color: "var(--amber)",
-                  border: "1px solid var(--amber)",
-                }}
-              >
-                {instantResult.note}
-              </p>
-              {instantResult.admission_guidance && (
-                <p style={{ margin: "8px 0 0", borderRadius: 6, background: "var(--amber-soft)", border: "1px solid var(--amber)", padding: "8px 12px", fontSize: 12.5, color: "var(--amber)" }}>
-                  Before the bot joins: {instantResult.admission_guidance}
-                </p>
-              )}
-              {botStatus && (
-                <p
-                  style={{
-                    marginTop: 8,
-                    borderRadius: 6,
-                    padding: "8px 12px",
-                    fontSize: 13,
-                    margin: "8px 0 0",
-                    background:
-                      botStatus.status === "live" ? "var(--blue-soft)" :
-                      botStatus.status === "ended" ? "var(--bg)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--red-soft)" :
-                      "var(--bg)",
-                    color:
-                      botStatus.status === "live" ? "var(--blue-strong)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "var(--red)" :
-                      "var(--faint)",
-                    border:
-                      botStatus.status === "live" ? "1px solid var(--blue)" :
-                      ["failed", "missed", "lobby_timeout"].includes(botStatus.status) ? "1px solid var(--red)" :
-                      "1px solid var(--border)",
-                  }}
-                >
-                  {botStatus.status === "scheduled" && "⏳ Waiting for worker to dispatch…"}
-                  {botStatus.status === "joining" && "🤖 Bot is joining the meeting…"}
-                  {botStatus.status === "in_lobby" && "🚪 Bot is in the lobby — waiting to be admitted by the organizer."}
-                  {botStatus.status === "live" && "🔴 Bot is live and recording."}
-                  {botStatus.status === "ended" && "✅ Meeting ended — processing recording."}
-                  {botStatus.status === "failed" && `❌ Bot failed to join${botStatus.error ? `: ${botStatus.error}` : "."}`}
-                  {botStatus.status === "missed" && "⚠️ Session missed — the meeting may have already ended before the bot could join."}
-                  {botStatus.status === "lobby_timeout" && `⏱ Lobby timeout${botStatus.error ? `: ${botStatus.error}` : " — the organizer did not admit the bot in time."}`}
-                </p>
-              )}
-            </div>
-          )}
-        </section>
+        <CapturePanel key={`${me?.user.id}:${me?.org.id}`} />
 
         <form onSubmit={handleSubmit}>
           <div
@@ -350,7 +175,7 @@ export default function UploadPage() {
               {file ? file.name : "Drop an audio or video file, or choose one below"}
             </p>
             <p style={{ fontSize: 13, color: "var(--faint)", margin: "0 0 20px" }}>
-              MP4, MOV, WAV, MP3 · up to 4 hours · Sinhala, Tamil, English, or mixed
+              MP4, MOV, WAV, MP3 · up to 4 hours · legacy upload lane
             </p>
             <input
               ref={fileInputRef}

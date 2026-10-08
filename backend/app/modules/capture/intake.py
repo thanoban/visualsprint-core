@@ -6,7 +6,7 @@ import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.capture.requests import (
@@ -17,17 +17,19 @@ from app.capture.requests import (
 )
 from app.db.models import (
     CaptureRequest,
+    CaptureRequestStatus,
     Meeting,
     MeetingAssignment,
     Org,
     OrgMember,
+    OutboxEvent,
     Project,
     ProjectMember,
     ProjectStatus,
 )
 from app.interfaces.capture_provider import MeetingTarget
 from app.interfaces.secretstore import SecretStore
-from app.modules.projects.access import can_read_meeting
+from app.modules.projects.access import can_read_meeting, visible_meeting_ids
 
 
 async def capture_meeting(
@@ -125,6 +127,39 @@ async def _capture_meeting(
             raise CaptureRequestScopeError("meeting not found")
         db.commit()
         return CaptureRequestResult(existing, False)
+    # A new browser/tab key must not enqueue a second live capture for this
+    # actor. Future calendar occurrences sharing a recurring link are distinct.
+    due_dispatch = select(OutboxEvent.entity_id).where(
+        OutboxEvent.org_id == org_id,
+        OutboxEvent.operation == "capture.dispatch",
+        OutboxEvent.run_at <= datetime.now(UTC),
+    )
+    active = db.scalar(
+        select(CaptureRequest.id)
+        .where(
+            CaptureRequest.org_id == org_id,
+            CaptureRequest.requested_by == actor_id,
+            CaptureRequest.platform == target.platform,
+            CaptureRequest.native_meeting_id == target.native_meeting_id,
+            CaptureRequest.status.not_in(
+                [
+                    CaptureRequestStatus.FAILED,
+                    CaptureRequestStatus.CANCELLED,
+                    CaptureRequestStatus.FINALIZED,
+                ]
+            ),
+            CaptureRequest.meeting_id.in_(visible_meeting_ids(org_id, actor_id)),
+            or_(
+                CaptureRequest.status != CaptureRequestStatus.QUEUED,
+                CaptureRequest.id.in_(due_dispatch),
+            ),
+        )
+        .limit(1)
+    )
+    if active:
+        raise CaptureRequestConflict(
+            "This meeting already has an active capture. Open it from Capture now; do not queue another."
+        )
     if project_id:
         project = db.scalar(
             select(Project)

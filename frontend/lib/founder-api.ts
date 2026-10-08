@@ -10,6 +10,17 @@ export interface Meeting {
   capture_request_id: string | null; capture_status: string | null; report_ready: boolean;
 }
 export interface MeetingPage { items: Meeting[]; next_cursor: string | null }
+export interface Capture {
+  id: string; meeting_id: string; status: string; platform?: string; created_at?: string; title?: string | null;
+  provider_state?: string | null; stop_state?: string; error_code?: string | null;
+  is_stale?: boolean; last_transcript_at?: string | null;
+  capture_session_id?: string | null; processing_state?: string | null; report_ready?: boolean;
+}
+export interface CapturePage { items: Capture[]; next_cursor: string | null }
+export interface CaptureInput { meeting_url: string; title: string; project_id: string | null }
+export function captureFingerprint(input: CaptureInput): string {
+  return JSON.stringify([input.meeting_url.trim(), input.title.trim(), input.project_id]);
+}
 export interface Memory { id: string; source_meeting_ids: string[]; structured_summary: Record<string, unknown>; state: string }
 export class ApiError extends Error {
   public status: number;
@@ -36,6 +47,12 @@ export function founderApi(fetcher: AuthenticatedFetch, workspaceId: string) {
   const request = <T>(suffix: string, init?: RequestInit) => apiJson<T>(fetcher, workspacePath(workspaceId, suffix), init);
   const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return {
+    startCapture: (input: CaptureInput, key: string) => request<Capture>("/captures", {
+      ...json("POST", { ...input, meeting_url: input.meeting_url.trim(), title: input.title.trim() }),
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+    }),
+    captureStatus: (id: string, signal?: AbortSignal) => request<Capture>(`/capture-requests/${encodeURIComponent(id)}`, { signal }),
+    stopCapture: (id: string) => request<Capture>(`/capture-requests/${encodeURIComponent(id)}/stop`, { method: "POST" }),
     createCustomer: (name: string) => request<Customer>("/customers", json("POST", { name })),
     createProject: (name: string, customerId: string | null) => request<Project>("/projects", json("POST", { name, customer_id: customerId })),
     updateProject: (project: Project, changes: { name?: string; status?: "archived"; customer_id?: string | null }) => request<Project>(`/projects/${encodeURIComponent(project.id)}`, json("PATCH", { ...changes, version: project.version })),

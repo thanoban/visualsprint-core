@@ -18,6 +18,7 @@ This document is the plan index. The current specification is the following link
 8. [25 — System audit, corrective evidence and continuation](25-system-audit-and-continuation.md)
 9. [26 — Project workspace delivery and remaining implementation gates](26-project-workspace-delivery.md)
 10. [27 — Calendar, saved chats and durable data-rights delivery](27-calendar-chat-and-data-rights-delivery.md)
+11. [28 — Impromptu/calendar-independent capture plan, implementation and qualification](28-ad-hoc-capture-delivery.md)
 
 Priority: latest explicit owner instruction -> current specification above -> legacy reference below.
 Future implementation should follow F00–F14 in order and update the progress ledger after each

@@ -8,7 +8,7 @@ import { apiJson, workspacePath } from "@/lib/founder-api";
 import { useWorkspaceData } from "./useWorkspaceData";
 
 interface Thread { id: string; title: string; status: string; version: number }
-interface Message { id: string; role: string; state: string; content: string; citations: { meeting_id: string; knowledge_item_id: string }[] }
+interface Message { id: string; role: string; state: string; content: string; citations: { meeting_id: string; knowledge_item_id: string; capture_session_id?: string }[] }
 
 function Conversation({ thread }: { thread: Thread }) {
   const { me, authedFetch } = useAuth();
@@ -57,7 +57,7 @@ function Conversation({ thread }: { thread: Thread }) {
       <h4>{message.role === "user" ? "You" : "VisualSprint"} · {message.state}</h4>
       <p style={{ whiteSpace: "pre-wrap" }}>{message.content || "Waiting for the answer worker…"}</p>
       {message.role === "assistant" && message.state === "failed" && <button disabled={busy || thread.status !== "active"} onClick={() => { void retry(message.id); }}>Retry answer</button>}
-      {message.citations?.map((source, index) => <p key={`${source.knowledge_item_id}:${index}`}><Link href={`/meetings/${source.meeting_id}/report`}>Source {index + 1}: open meeting report</Link></p>)}
+      {message.citations?.map((source, index) => <p key={`${source.knowledge_item_id}:${index}`}><Link href={source.capture_session_id ? `/meetings/${encodeURIComponent(source.capture_session_id)}/report` : "/meetings"}>Source {index + 1}: {source.capture_session_id ? "open meeting report" : "find in meeting history"}</Link></p>)}
     </article>)}</div>
     {error && <p role="alert" className="founder-error">{error}</p>}
     <label htmlFor="saved-chat-question">Ask about this project or customer</label>

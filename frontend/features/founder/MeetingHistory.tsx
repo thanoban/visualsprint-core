@@ -37,6 +37,7 @@ export function MeetingHistory({ scope = "", onChanged }: { scope?: string; onCh
     {meetings.data?.items.length === 0 && <p className="founder-empty">No meetings in this scope yet. Capture a meeting or assign one from Unassigned.</p>}
     {meetings.data?.items.map((meeting) => <article className="founder-card" key={meeting.id}>
       <div className="founder-row">
+        {meeting.capture_request_id && <Link href={`/capture?request=${encodeURIComponent(meeting.capture_request_id)}`}>Capture status</Link>}
         <div><h3>{meeting.title}</h3><p className="founder-muted">{meeting.platform} · {new Date(meeting.scheduled_start ?? meeting.created_at).toLocaleString()}</p></div>
         <span>{meeting.processing_state ?? meeting.capture_status ?? "Not captured"}</span>
       </div>

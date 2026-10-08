@@ -11,6 +11,7 @@ durable capture, cited memory, saved conversations and approved actions. The ear
 and screen-capture implementation remains legacy reference, not current release qualification.
 See [the latest delivery record and worker startup](docs/27-calendar-chat-and-data-rights-delivery.md)
 for working local paths and the remaining live-provider gates.
+For calls absent from calendars, see [Capture now delivery and setup](docs/28-ad-hoc-capture-delivery.md).
 
 **Product loop:** Capture → Understand → Verify → Remember → Act
 
@@ -33,26 +34,24 @@ docs/       PROJECT_PLAN.md — the approved full plan (single source of truth)
 4. **Nothing fails silently** — capture gaps are first-class data, disclosed to the user.
 5. **Actions are always human-gated** — `proposed_action` cannot execute without an approval record (DB-enforced).
 
-## How to use (live product)
+## How to use (current feature-branch implementation)
 
-The deployed app is at **https://visualsprint-web-5ieahiycsa-uw.a.run.app**.
+The historical deployment is **https://visualsprint-web-5ieahiycsa-uw.a.run.app**.
+This branch has not been deployed; its new paths are not evidence of that deployment's current behavior.
 
 1. **Sign up / log in** — email + password via Supabase Auth. First login auto-creates
    your personal org.
-2. **Get a meeting captured**, any one of:
-   - **Upload** (`/upload`) — drag in an existing recording (`.mp3`/`.wav`/`.webm`).
-     Works fully today, no setup required.
-   - **Companion Chrome extension** (`extension/`) — load unpacked in
-     `chrome://extensions` (Developer mode → "Load unpacked"), join a Google Meet call,
-     click the extension icon to start recording your own tab; it uploads chunks live
-     and finalizes when the call ends.
-   - **Connect Zoom/Google/Microsoft calendar** (`/settings/connections`) — VisualSprint
-     auto-joins scheduled meetings as a bot, or (Zoom only) streams live via RTMS.
-3. **Wait for the pipeline** — a new meeting runs through capture → diarize → identify
-   speakers → transcribe → OCR screen content → extract knowledge → verify → remember
-   → propose actions → report. Takes a few minutes per meeting.
-4. **Open the report** (`/meetings`) — see decisions, commitments, and blockers, each
-   with the exact transcript quote and — where available — the screenshot it came from.
+2. **Capture a meeting** — after provider/STT configuration and disclosure:
+   - **Capture now** (`/capture`) — paste a supported invitation link; calendar OAuth is not required.
+     Optionally save it to a project, or keep it owner-private in Unassigned.
+   - **Calendar** (`/calendar`) — connect your calendar and enable automatic scheduling policy.
+     Both paths use durable v2 requests; admission and real capture still require live qualification.
+   - Historical recording upload remains in `/upload`; companion/RTMS/artifact integrations are
+     legacy paths, not the current pilot capture guarantee.
+3. **Follow capture status** — queued, joining/admission and capturing are separate states. Reopen a
+   recent request after refresh. Stop is confirmed only after provider departure. On provider end,
+   final transcript feeds understand → verify → memory → report. This lane collects no screenshots.
+4. **Open the report** (`/meetings`) — see decisions, commitments and blockers with transcript evidence.
    Approve or reject any proposed follow-up action before it's sent anywhere.
 5. **Browse `/people`** — per-person history across all their meetings: what they
    committed to, whether it was resolved, and patterns over time.

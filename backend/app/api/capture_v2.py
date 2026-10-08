@@ -4,13 +4,17 @@ Creating a request persists intent and an outbox event. It never calls the
 provider inside the HTTP request and never exposes the invitation URL again.
 """
 
+import base64
+import binascii
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.adapters.secretstore_gcp import get_secretstore
@@ -29,12 +33,15 @@ from app.db.models import (
     CalendarOccurrence,
     CaptureAttempt,
     CaptureRequest,
+    CaptureSession,
+    CaptureState,
+    Meeting,
     Org,
     User,
 )
 from app.interfaces.capture_provider import MeetingTarget
 from app.interfaces.secretstore import SecretStore
-from app.modules.projects.access import can_read_meeting
+from app.modules.projects.access import can_read_meeting, visible_meeting_ids
 
 _STALE_AFTER = timedelta(seconds=180)
 _LIVE_STATES = {"joining", "waiting_for_admission", "capturing", "stopping"}
@@ -71,6 +78,28 @@ class CaptureRequestView(BaseModel):
     last_transcript_at: str | None = None
     is_stale: bool = False
     error_code: str | None = None
+    created_at: str
+    title: str | None = None
+    capture_session_id: str | None = None
+    processing_state: str | None = None
+    report_ready: bool = False
+
+
+class CaptureRequestPage(BaseModel):
+    items: list[CaptureRequestView]
+    next_cursor: str | None
+
+
+def _processing_session(db: Session, request: CaptureRequest) -> CaptureSession | None:
+    if not request.capture_session_id:
+        return None
+    return db.scalar(
+        select(CaptureSession).where(
+            CaptureSession.id == request.capture_session_id,
+            CaptureSession.org_id == request.org_id,
+            CaptureSession.meeting_id == request.meeting_id,
+        )
+    )
 
 
 def _view(
@@ -78,6 +107,8 @@ def _view(
     *,
     attempt: CaptureAttempt | None = None,
     created: bool | None = None,
+    session: CaptureSession | None = None,
+    title: str | None = None,
 ) -> CaptureRequestView:
     now = datetime.now(UTC)
     is_stale = False
@@ -109,6 +140,11 @@ def _view(
         ),
         is_stale=is_stale,
         error_code=attempt.error_code if attempt else None,
+        created_at=request.created_at.isoformat(),
+        title=title,
+        capture_session_id=session.id if session else None,
+        processing_state=session.state.value if session else None,
+        report_ready=session is not None and session.state == CaptureState.DONE,
     )
 
 
@@ -189,6 +225,77 @@ async def create_request(
     return _view(result.request, created=result.created)
 
 
+@router.get("", response_model=CaptureRequestPage)
+def list_requests(
+    org_id: str,
+    cursor: str | None = Query(default=None, max_length=512),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    _: None = Depends(require_org_member),
+) -> CaptureRequestPage:
+    latest_attempt = (
+        select(CaptureAttempt.id)
+        .where(CaptureAttempt.request_id == CaptureRequest.id, CaptureAttempt.org_id == org_id)
+        .order_by(CaptureAttempt.attempt_no.desc())
+        .limit(1)
+        .correlate(CaptureRequest)
+        .scalar_subquery()
+    )
+    query = (
+        select(CaptureRequest, CaptureAttempt, CaptureSession, Meeting.title)
+        .join(Meeting, Meeting.id == CaptureRequest.meeting_id)
+        .outerjoin(CaptureAttempt, CaptureAttempt.id == latest_attempt)
+        .outerjoin(
+            CaptureSession,
+            and_(
+                CaptureSession.id == CaptureRequest.capture_session_id,
+                CaptureSession.org_id == org_id,
+                CaptureSession.meeting_id == CaptureRequest.meeting_id,
+            ),
+        )
+        .where(
+            CaptureRequest.org_id == org_id,
+            CaptureRequest.requested_by == user.id,
+            CaptureRequest.meeting_id.in_(visible_meeting_ids(org_id, user.id)),
+        )
+    )
+    if cursor:
+        try:
+            document = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+            timestamp = datetime.fromisoformat(document[0])
+            identifier = str(UUID(document[1]))
+            if timestamp.tzinfo is None:
+                raise ValueError("missing timezone")
+        except (ValueError, TypeError, KeyError, IndexError, binascii.Error) as exc:
+            raise HTTPException(422, "invalid capture cursor") from exc
+        query = query.where(
+            or_(
+                CaptureRequest.created_at < timestamp,
+                and_(CaptureRequest.created_at == timestamp, CaptureRequest.id < identifier),
+            )
+        )
+    rows = db.execute(
+        query.order_by(CaptureRequest.created_at.desc(), CaptureRequest.id.desc()).limit(limit + 1)
+    ).all()
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1][0]
+        timestamp = last.created_at
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        next_cursor = base64.urlsafe_b64encode(
+            json.dumps([timestamp.isoformat(), last.id]).encode()
+        ).decode()
+    return CaptureRequestPage(
+        items=[
+            _view(request, attempt=attempt, session=session, title=title)
+            for request, attempt, session, title in rows[:limit]
+        ],
+        next_cursor=next_cursor,
+    )
+
+
 @router.get("/{request_id}", response_model=CaptureRequestView)
 def get_request(
     org_id: str,
@@ -213,7 +320,11 @@ def get_request(
         .order_by(CaptureAttempt.attempt_no.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return _view(request, attempt=attempt)
+    session = _processing_session(db, request)
+    meeting = db.get(Meeting, request.meeting_id)
+    return _view(
+        request, attempt=attempt, session=session, title=meeting.title if meeting else None
+    )
 
 
 @router.post("/{request_id}/stop", response_model=CaptureRequestView, status_code=202)
@@ -248,4 +359,5 @@ def stop_request(
             occurrence.revision += 1
     attempt = stop_capture(db, request)
     db.commit()
-    return _view(request, attempt=attempt)
+    session = _processing_session(db, request)
+    return _view(request, attempt=attempt, session=session)

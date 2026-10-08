@@ -252,7 +252,10 @@ async def reconcile_next(
         _check_timeouts(request, attempt, timestamp, stop_requested)
 
         # Advance stop_state: confirm when terminal, acknowledge when stop was sent.
-        if stop_requested and snapshot.status in {CaptureStatus.ENDED, CaptureStatus.FAILED}:
+        if request.stop_state in {
+            CaptureStopState.REQUESTED,
+            CaptureStopState.ACKNOWLEDGED,
+        } and snapshot.status in {CaptureStatus.ENDED, CaptureStatus.FAILED}:
             request.stop_state = CaptureStopState.CONFIRMED
         elif stop_sent:
             request.stop_state = CaptureStopState.ACKNOWLEDGED
