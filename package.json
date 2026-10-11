@@ -1,0 +1,21 @@
+{
+  "name": "visualsprint-platform",
+  "version": "3.0.0-dev",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "check": "pnpm boundaries && pnpm typecheck && pnpm test",
+    "boundaries": "node scripts/check-boundaries.mjs",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "build": "turbo run build"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "tsx": "4.20.6",
+    "turbo": "2.6.0",
+    "typescript": "5.9.3"
+  }
+}

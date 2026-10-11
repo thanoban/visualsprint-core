@@ -1,0 +1,24 @@
+name: Microservices rebuild
+on:
+  pull_request:
+    paths: ["packages/**", "services/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+  push:
+    branches: [main, codex/zedex-web-rebuild]
+    paths: ["packages/**", "services/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.1.3"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build

@@ -1,0 +1,13 @@
+{
+  "name": "@visualsprint/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "build": "tsc --outDir dist"
+  },
+  "dependencies": { "zod": "4.1.12" }
+}

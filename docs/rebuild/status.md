@@ -13,10 +13,15 @@ Date: 2026-10-11. Branch: codex/zedex-web-rebuild.
   no redirect following, capacity classification and ambiguous-create handling without blind retry.
 - Service import-boundary check and separate CI workflow.
 
-Initial local verification passed: service import-boundary checks, TypeScript checks and
-15 contract/domain/transport-fixture tests. Build and final publication checks are recorded
-in the next foundation checkpoint. Dependency lifecycle scripts remain disabled for esbuild;
-the platform binary is supplied through its pinned optional dependency.
+Local verification passed: frozen-lockfile installation, service import-boundary checks,
+TypeScript checks, 15 contract/domain/transport-fixture tests and compilation of both packages.
+Rebuild document links and Git whitespace checks passed. These are local Windows results;
+the new GitHub Actions workflow independently checks Linux after publication.
+Dependency lifecycle scripts remain disabled for esbuild; the platform binary is supplied
+through its pinned optional dependency.
+
+Architecture checkpoint: `cd93c4e`, pushed to `origin/codex/zedex-web-rebuild`.
+The code foundation is published as a separate checkpoint following those checks.
 
 ## Not yet implemented / not represented as ready
 
