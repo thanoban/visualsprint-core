@@ -10,7 +10,8 @@
     "boundaries": "node scripts/check-boundaries.mjs",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "build": "turbo run build"
+    "build": "turbo run build",
+    "test:integration": "pnpm -r --if-present run test:integration"
   },
   "devDependencies": {
     "@types/node": "22.18.6",

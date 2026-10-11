@@ -1,0 +1,18 @@
+name: visualsprint-v3-local
+services:
+  workspace-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55433:5432"]
+    volumes:
+      - workspace-db:/var/lib/postgresql/data
+      - ./workspace-init.sql:/docker-entrypoint-initdb.d/001-workspace.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  workspace-db:

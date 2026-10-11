@@ -12,6 +12,7 @@ Legacy applications and existing production data are preserved.
 - [Delivery and acceptance](delivery.md): dependency order and test gates.
 - [Azure setup and costs](operations.md): environments, provider setup, CI and cutover.
 - [Actual implementation status](status.md): verified work and outstanding release gates.
+- [Local development](local-development.md): service runtime configuration and PostgreSQL tests.
 
 ## Approved scope
 

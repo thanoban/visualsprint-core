@@ -14,6 +14,7 @@ export const captureError = z.enum([
 ]);
 
 export const eventTypes = [
+  "customer.created.v1", "project.created.v1", "meeting.updated.v1",
   "calendar.occurrence.changed.v1", "meeting.created.v1", "meeting.access.changed.v1",
   "meeting.assignment.confirmed.v1", "capture.requested.v1", "capture.state.changed.v1",
   "transcript.revision.changed.v1", "transcript.finalized.v1", "summary.ready.v1",
@@ -34,7 +35,7 @@ export const eventEnvelope = z.object({
   traceId: z.string().regex(/^[a-f0-9]{32}$/),
   actorId: id.nullable(),
   references: z.array(z.object({
-    kind: z.enum(["meeting", "capture", "transcript", "occurrence", "proposal", "action", "deletion"]),
+    kind: z.enum(["customer", "project", "meeting", "capture", "transcript", "occurrence", "proposal", "action", "deletion"]),
     id,
     revision: z.number().int().nonnegative().optional(),
   }).strict()).max(20),
