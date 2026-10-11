@@ -1,5 +1,14 @@
 # VisualSprint — Agent Instructions
 
+## V3 microservices rebuild — 2026-10-11
+
+The owner approved the full rebuild in docs/rebuild/README.md. For apps/, services/, packages/
+and infra/azure/, that package supersedes the older stack/capture/migration rules below:
+TypeScript/Fastify/Zod/Drizzle, private service databases, managed Recall capture, English,
+text-only/ZDR, explicit project confirmation, separate sharing and Azure. Legacy backend/frontend
+remain preserved reference. Read docs/rebuild/status.md before extending the new implementation.
+Do not treat old tests, a provider adapter or planned service directories as live qualification.
+
 ## Current direction — 2026-10-07
 
 **Incremental implementation phase:** the owner resumed development on 2026-10-07. Implement the

@@ -1,5 +1,8 @@
 # VisualSprint
 
+**V3 rebuild (2026-10-11):** [Microservices architecture and implementation status](docs/rebuild/README.md).
+The new TypeScript platform is being built separately; the application described below is legacy.
+
 **Current direction (2026-10-07):** [Founder platform architecture and full delivery plan](docs/18-founder-platform-architecture.md).
 **Implementation resumed on 2026-10-07.** Build one reviewed feature slice at a time, starting at
 [the master plan index](docs/PROJECT_PLAN.md), then see [actual progress](docs/19-founder-platform-progress.md)
