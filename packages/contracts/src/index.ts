@@ -42,6 +42,7 @@ export const eventTypes = [
   "project.created.v1",
   "meeting.updated.v1",
   "calendar.occurrence.changed.v1",
+  "calendar.connection.changed.v1",
   "meeting.created.v1",
   "meeting.access.changed.v1",
   "meeting.assignment.confirmed.v1",

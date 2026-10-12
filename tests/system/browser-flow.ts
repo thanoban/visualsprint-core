@@ -50,6 +50,25 @@ export async function browserMeetingFlow(
     await expect(notes).toHaveValue(
       "Browser-confirmed decision: launch the customer pilot next week.",
     );
+    await page.getByRole("button", { name: "Calendar connections", exact: true }).click();
+    const calendars = page.getByRole("region", { name: "Calendar connections" });
+    await expect(
+      calendars.getByRole("heading", { name: "Team calendar", exact: true }),
+    ).toBeVisible();
+    await expect(calendars).toContainText("Automatic meeting capture is not enabled");
+    await calendars.getByRole("button", { name: "Save calendar", exact: true }).click();
+    await expect(
+      calendars.getByRole("button", { name: "Save calendar", exact: true }),
+    ).toBeEnabled();
+    await page.reload();
+    await page.getByRole("button", { name: "Calendar connections", exact: true }).click();
+    await expect(
+      calendars.getByRole("heading", { name: "Team calendar", exact: true }),
+    ).toBeVisible();
+    await calendars.getByRole("button", { name: "Disconnect calendar", exact: true }).click();
+    await expect(calendars.getByRole("status").filter({ hasText: /^google:/ })).toContainText(
+      "disconnected",
+    );
     assert.equal(await page.getByRole("alert").count(), 0);
   } finally {
     await browser.close();

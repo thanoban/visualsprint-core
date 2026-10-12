@@ -13,6 +13,7 @@ import { Api, ApiError, errorMessage } from "./api.js";
 import { useData, useCommand, Feedback, Form } from "./ui.js";
 import { OrganizationForms, MeetingForm } from "./organization-forms.js";
 import { MeetingPanel } from "./meeting-detail.js";
+import { CalendarPanel } from "./calendar-panel.js";
 
 type Context = { api: Api; email: string; signOut: () => void };
 const rootRoute = createRootRouteWithContext<Context>()({ component: Frame });
@@ -127,6 +128,7 @@ function WorkspacePage() {
   return <WorkspacePanel key={workspaceId} workspaceId={parsed.data} />;
 }
 function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
+  const [showCalendars, setShowCalendars] = useState(false);
   const { api } = rootRoute.useRouteContext();
   const { projectId, meetingId } = workspaceRoute.useSearch();
   const [refresh, setRefresh] = useState(0);
@@ -161,6 +163,12 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
       <Feedback data={data} />
       {value ? (
         <>
+          <button className="secondary" onClick={() => setShowCalendars((value) => !value)}>
+            Calendar connections
+          </button>
+          {showCalendars ? (
+            <CalendarPanel key={workspaceId} api={api} workspaceId={workspaceId} />
+          ) : null}
           <div className="workspace-grid">
             <section className="projects">
               <h2>Projects</h2>

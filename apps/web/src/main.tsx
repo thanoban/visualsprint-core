@@ -3,7 +3,22 @@ import { createRoot } from "react-dom/client";
 import { AuthKitProvider, useAuth } from "@workos-inc/authkit-react";
 import { Api } from "./api.js";
 import { Product } from "./product.js";
+import { CalendarCallback } from "./calendar-panel.js";
+import { calendarReturn } from "./calendar-oauth.js";
 import "./styles.css";
+
+// Remove the calendar provider's code before AuthKit mounts. It is not a WorkOS
+// authorization code and must never be consumed by the login SDK or retained in URLs.
+const isCalendarReturn = window.location.pathname === "/oauth/calendar";
+let calendarResult: ReturnType<typeof calendarReturn> | null = null;
+if (isCalendarReturn) {
+  try {
+    calendarResult = calendarReturn(window.location.href);
+  } catch {
+    /* consent declined/invalid return */
+  }
+  window.history.replaceState(null, "", "/oauth/calendar");
+}
 
 function Session() {
   const { isLoading, user, signIn, signOut, getAccessToken } = useAuth();
@@ -31,6 +46,7 @@ function Session() {
         <button onClick={() => void signIn()}>Sign in</button>
       </main>
     );
+  if (isCalendarReturn) return <CalendarCallback api={api} result={calendarResult} />;
   return <Product key={user.id} api={api} email={user.email} signOut={endSession} />;
 }
 const clientId = import.meta.env.VITE_WORKOS_CLIENT_ID as string | undefined;

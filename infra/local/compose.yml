@@ -1,5 +1,19 @@
 name: visualsprint-v3-local
 services:
+  integration-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55437:5432"]
+    volumes:
+      - integration-db:/var/lib/postgresql/data
+      - ./integration-init.sql:/docker-entrypoint-initdb.d/001-integration.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   ingest-db:
     image: postgres:17.6-alpine
     environment:
@@ -97,6 +111,7 @@ services:
       timeout: 3s
       retries: 30
 volumes:
+  integration-db:
   ingest-db:
   authz-db:
   account-db:

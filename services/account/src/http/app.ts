@@ -61,13 +61,20 @@ export function accountApp(
         if (
           hop.actor.operationGrantId &&
           (!["integration", "workspace", "ingest"].includes(hop.caller) ||
-            !["membership", "reserve", "reservation", "settle", "release"].includes(
-              capability ?? "",
-            ))
+            ![
+              "membership",
+              "reserve",
+              "reservation",
+              "settle",
+              "release",
+              "operation",
+              "disable-connection",
+            ].includes(capability ?? ""))
         )
           throw new AppError("FORBIDDEN", 403);
-        const allowed =
-          capability === "membership"
+        const allowed = ["operation", "disable-connection"].includes(capability ?? "")
+          ? ["integration"]
+          : capability === "membership"
             ? [
                 "gateway",
                 "workspace",
@@ -84,6 +91,10 @@ export function accountApp(
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.post("/automation/operation", (request) => service.operationContext(actor(request)));
+      routes.post("/automation/disable-connection", (request) =>
+        service.disableConnectionGrant(actor(request), request.body),
+      );
       routes.get("/automation-grants", (request) => service.automationGrants(actor(request)));
       for (const revoke of [false, true])
         routes.post(revoke ? "/automation-grants/revoke" : "/automation-grants", (request) => {

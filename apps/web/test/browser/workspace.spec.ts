@@ -186,3 +186,61 @@ test("backend outages keep the session and clear inaccessible data", async ({ pa
   await expect(page.getByText("Acme renewal")).toHaveCount(0);
   await expect(page.getByText("founder@example.test")).toBeVisible();
 });
+test("calendar selection and disconnect use versioned commands without claiming automatic capture", async ({
+  page,
+}) => {
+  await fixture(page);
+  const id = "99999999-9999-4999-8999-999999999999";
+  let record = {
+    id,
+    workspaceId,
+    provider: "google",
+    status: "connected",
+    calendarId: "primary-id",
+    calendarName: "Primary",
+    version: 1,
+    automatic: false,
+    errorCode: null,
+    cleanupPending: false,
+  };
+  await page.route("**/connections/calendar/**", async (route) => {
+    const request = route.request(),
+      path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers"))
+      return route.fulfill({ json: { providers: ["google"], automaticCaptureReady: false } });
+    if (path.endsWith("/calendars"))
+      return route.fulfill({
+        json: {
+          items: [{ id: "team-id", name: "Customer calls", primary: false }],
+          nextCursor: null,
+        },
+      });
+    if (path.endsWith(`/${id}/calendar`)) {
+      expect(request.headers()["idempotency-key"]).toBeTruthy();
+      expect(request.postDataJSON()).toEqual({ calendarId: "team-id", expectedVersion: 1 });
+      record = { ...record, calendarId: "team-id", calendarName: "Customer calls", version: 2 };
+      return route.fulfill({ json: record });
+    }
+    if (path.endsWith(`/${id}/disconnect`)) {
+      expect(request.headers()["idempotency-key"]).toBeTruthy();
+      expect(request.postDataJSON()).toEqual({ expectedVersion: 2 });
+      record = { ...record, status: "disconnected", version: 3 };
+      return route.fulfill({ json: record });
+    }
+    return route.fulfill({ json: [record] });
+  });
+  await page.goto(`/w/${workspaceId}`);
+  await page.getByRole("button", { name: "Calendar connections", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Calendar connections" });
+  await expect(panel).toContainText("Automatic meeting capture is not enabled");
+  await panel.getByRole("combobox", { name: "Calendar", exact: true }).selectOption("team-id");
+  await panel.getByRole("button", { name: "Save calendar", exact: true }).click();
+  await expect(panel.getByRole("heading", { name: "Customer calls", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Disconnect calendar", exact: true }).click();
+  await expect(panel.getByRole("status").filter({ hasText: /^google:/ })).toContainText(
+    "disconnected",
+  );
+  await expect(panel.getByRole("combobox", { name: "Calendar", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Second workspace" }).click();
+  await expect(panel).toHaveCount(0);
+});

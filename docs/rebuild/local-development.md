@@ -83,6 +83,11 @@ managed identity; local opt-in Azure execution uses Azure CLI credentials. No SA
 string or administrative provisioning is performed by application workers. Do not run these
 publishers against a paid/live namespace until the environment and roles are approved.
 
+Integration has its own loopback database on port 55437 and compiled API/worker/migration
+entrypoints. Start its API on 4105 and configure the gateway's cell Integration origin.
+See [calendar connections](calendar-connections.md) for vendor registration and encryption
+keys. A successful connection does not yet schedule or join meetings automatically.
+
 To stop these local dependencies while keeping test data:
 
 ```powershell

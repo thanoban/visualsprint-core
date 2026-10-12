@@ -25,10 +25,11 @@ The code foundation is published as a separate checkpoint following those checks
 
 ## Not yet implemented / not represented as ready
 
-Live WorkOS login/refresh qualification, Azure broker adapter/daemon,
-capture HTTP endpoints, webhook
-signature verification/consumption, provider reconciliation/stop worker, calendar sync, capture/intelligence web UI,
-AI pipeline, saved chat, approved connectors, notifications, exports/deletion and Azure Bicep.
+Current remaining work: live WorkOS login/refresh and Azure broker qualification, calendar
+occurrence sync and automatic capture orchestration, intelligence UI/pipeline, saved chat,
+approved connectors, notifications, exports/deletion and Azure Bicep. Implemented capture
+and calendar connection code is documented in the later checkpoints below; live joining
+on Meet/Zoom/Teams still requires gated provider tests.
 Live and visual Flows remain later scope.
 
 No live Recall call, meeting join, model call, Azure deployment or data migration
@@ -166,3 +167,23 @@ still not implemented end to end.
 Verification: 37 fast tests, nine builds, 28 database/runtime/composition tests and four browser
 fixture tests passed. A test assertion was corrected to respect the scheduler's bounded batch
 rather than assuming every accumulated fixture workspace appears in its first page.
+
+## Calendar OAuth and connection controls (F3 in progress)
+
+Integration now owns an independent database, forced RLS, migrations, encrypted OAuth/token
+storage, Google/Microsoft read-only adapters, connection APIs and recovery worker. Web
+controls connect, validate, select and disconnect through the gateway. PKCE state binds the
+original owner/session/workspace; only backend processes redeem or refresh credentials.
+Unknown exchange results are not blindly retried. Refresh rotation persists before provider
+reads; disconnect clears credentials and fences late results. Owner connections remain
+private from other workspace members. See [implementation/setup](calendar-connections.md).
+
+Automatic capture is deliberately reported unavailable until occurrence synchronization and
+scheduled dispatch are wired. Real vendor consent, refresh policies and Azure deployment
+remain external gates; this is not F3 completion or a final production release.
+
+Verification: 46 fast tests, ten package/service builds, 33 database/runtime/composition
+tests and five browser fixture tests passed locally. Production dependency audit found no
+known vulnerabilities. The composition browser also saved/reloaded calendar selection and
+disconnected through actual signed service APIs. Docker dependency restart was needed;
+the full suite passed after restoration without deleting test data.

@@ -44,6 +44,13 @@ export class ApiError extends Error {
 }
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    if (["CALENDAR_NOT_CONFIGURED", "CALENDAR_CONFIGURATION"].includes(error.code))
+      return "Calendar OAuth needs an administrator configuration fix. Your VisualSprint login is still valid.";
+    if (["REAUTH_REQUIRED", "OFFLINE_ACCESS_REQUIRED"].includes(error.code))
+      return "Reconnect this calendar. You do not need to sign in to VisualSprint again.";
+    if (["OAUTH_EXCHANGE_UNKNOWN", "OAUTH_RESPONSE_UNKNOWN"].includes(error.code))
+      return "The calendar exchange could not be confirmed. Check its status before starting a new connection.";
+    if (error.code === "CONNECTION_BUSY") return "This calendar is updating. Please retry shortly.";
     if (error.status === 401) return "Your session has ended. Sign in again to continue.";
     if (error.status === 403 || error.status === 404)
       return "This item is no longer available to you. Refresh your workspace.";
@@ -92,7 +99,11 @@ export class Api {
       redirect: "error",
       cache: "no-store",
     });
-    if (!response.ok) throw new ApiError("REQUEST_FAILED", response.status);
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined);
+      const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]{1,80}$/) }).safeParse(body);
+      throw new ApiError(parsed.success ? parsed.data.code : "REQUEST_FAILED", response.status);
+    }
     return schema.parse(await response.json());
   }
   scope(workspaceId: string) {

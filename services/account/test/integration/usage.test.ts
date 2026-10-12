@@ -136,6 +136,32 @@ test("explicit calendar automation survives logout but not grant or membership r
     /FORBIDDEN/,
   );
 });
+test("calendar disconnect cleanup can revoke only its bound connection grant after logout", async () => {
+  const { actor, identity } = await owner();
+  const connectionId = randomUUID();
+  const grant = await account.changeAutomationGrant(actor, randomUUID(), {
+    connectionId,
+    consent: true,
+  });
+  const operation: Actor = {
+    ...actor,
+    operationGrantId: grant.id,
+    sessionId: `operation:${grant.id}`,
+  };
+  assert.equal((await account.operationContext(operation)).connectionId, connectionId);
+  await account.logout(identity);
+  await assert.rejects(
+    account.disableConnectionGrant(operation, { connectionId: randomUUID() }),
+    /FORBIDDEN/,
+  );
+  assert.deepEqual(await account.disableConnectionGrant(operation, { connectionId }), {
+    active: false,
+  });
+  assert.deepEqual(await account.disableConnectionGrant(operation, { connectionId }), {
+    active: false,
+  });
+  await assert.rejects(account.operationContext(operation), /FORBIDDEN/);
+});
 test("concurrent reserve retries debit once and atomically cap five active meetings", async () => {
   const { actor } = await owner();
   const requestId = randomUUID();

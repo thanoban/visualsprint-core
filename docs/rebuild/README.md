@@ -16,6 +16,7 @@ Legacy applications and existing production data are preserved.
 - [Capture implementation](capture-implementation.md): durable flow, configuration and open gates.
 - [Event delivery implementation](messaging-implementation.md): owning outboxes and Azure transport.
 - [Calendar automation principals](automation-principals.md): consent and session-independent authority.
+- [Calendar connections](calendar-connections.md): encrypted OAuth, selection, disconnect and setup.
 
 ## Approved scope
 

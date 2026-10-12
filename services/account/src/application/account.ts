@@ -155,6 +155,43 @@ export class AccountService {
       return tx.grants();
     });
   }
+  operationContext(actor: Actor) {
+    if (!actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
+    return this.repository.actor(actor, async (tx) => {
+      await this.access(tx, actor);
+      const grant = await tx.grant(actor.operationGrantId!);
+      if (!grant) throw new AppError("FORBIDDEN", 403);
+      return { connectionId: grant.connectionId, version: grant.version };
+    });
+  }
+  disableConnectionGrant(actor: Actor, body: unknown) {
+    const { connectionId } = z.object({ connectionId: id }).strict().parse(body);
+    if (!actor.operationGrantId || actor.sessionId !== `operation:${actor.operationGrantId}`)
+      throw new AppError("FORBIDDEN", 403);
+    return this.repository.actor(actor, async (tx) => {
+      const grant = await tx.grant(actor.operationGrantId!);
+      if (!grant || grant.ownerId !== actor.actorId || grant.connectionId !== connectionId)
+        throw new AppError("FORBIDDEN", 403);
+      if (grant.active) {
+        const record = await tx.revokeGrant(grant.id, grant.version);
+        await tx.emit(
+          eventEnvelope.parse({
+            eventId: randomUUID(),
+            type: "automation.grant.changed.v1",
+            schemaVersion: 1,
+            workspaceId: actor.workspaceId,
+            aggregateId: record.id,
+            aggregateVersion: record.version,
+            occurredAt: new Date().toISOString(),
+            traceId: randomBytes(16).toString("hex"),
+            actorId: actor.actorId,
+            references: [{ kind: "connection", id: connectionId }],
+          }),
+        );
+      }
+      return { active: false };
+    });
+  }
   changeAutomationGrant(actor: Actor, key: string, body: unknown, revoke = false) {
     this.userOnly(actor);
     keySchema.parse(key);

@@ -23,6 +23,11 @@ import { PostgresCapture } from "../../services/ingest/src/infrastructure/store.
 import { Authorities } from "../../services/ingest/src/infrastructure/authorities.js";
 import { RecallSignatures } from "../../services/ingest/src/infrastructure/webhook-signature.js";
 import { ingestApp } from "../../services/ingest/src/http/app.js";
+import { CalendarService } from "../../services/integration/src/application/calendars.js";
+import { PostgresCalendars } from "../../services/integration/src/infrastructure/store.js";
+import { AccountCalendars } from "../../services/integration/src/infrastructure/account-client.js";
+import { AesTokenVault } from "../../services/integration/src/infrastructure/vault.js";
+import { integrationApp } from "../../services/integration/src/http/app.js";
 
 test("gateway, separate Account/Workspace databases and signed services enforce the complete private meeting flow", async () => {
   const accountMigration = databasePool(
@@ -50,6 +55,23 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     fileURLToPath(new URL("../../services/workspace/migrations", import.meta.url)),
   );
   const gatewayKey = await generateKeyPair("EdDSA");
+  const integrationMigration = databasePool(
+    "postgres://vs_integration_migration:local-migration-only@127.0.0.1:55437/integration",
+    1,
+  );
+  const integrationDb = databasePool(
+    "postgres://vs_integration_runtime:local-runtime-only@127.0.0.1:55437/integration",
+    2,
+  );
+  await migrate(
+    integrationMigration,
+    fileURLToPath(new URL("../../services/integration/migrations", import.meta.url)),
+  );
+  const integrationKey = await generateKeyPair("EdDSA");
+  const integrationPublic = {
+    ...(await exportJWK(integrationKey.publicKey)),
+    kid: "integration-test",
+  };
   const ingestMigration = databasePool(
     "postgres://vs_ingest_migration:local-migration-only@127.0.0.1:55436/ingest",
     1,
@@ -85,6 +107,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       gateway: [gatewayPublic],
       workspace: [workspacePublic],
       ingest: [ingestPublic],
+      integration: [integrationPublic],
     }),
   );
   const accountUrl = await account.listen({ host: "127.0.0.1", port: 0 });
@@ -111,6 +134,46 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       (await new ServiceIdentity("workspace", { ingest: [ingestPublic] }).verify(token)).actor,
   );
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
+  const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
+  const integration = integrationApp(
+    new CalendarService(
+      new PostgresCalendars(integrationDb),
+      new AccountCalendars(accountUrl, integrationKey.privateKey, "integration-test"),
+      {
+        google: {
+          authorizationUrl: (state, challenge) =>
+            `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&code_challenge=${challenge}`,
+          async exchange() {
+            return {
+              accessToken: "controlled-access",
+              refreshToken: "controlled-refresh",
+              expiresAt: new Date(Date.now() + 3600000),
+            };
+          },
+          async refresh() {
+            return {
+              accessToken: "controlled-access",
+              refreshToken: "controlled-refresh",
+              expiresAt: new Date(Date.now() + 3600000),
+            };
+          },
+          async calendars() {
+            return {
+              items: [{ id: "calendar-test", name: "Team calendar", primary: true }],
+              nextCursor: null,
+            };
+          },
+          async resolveCalendar() {
+            return { id: "calendar-test", name: "Team calendar", primary: true };
+          },
+        },
+      },
+      new AesTokenVault("test", { test: randomBytes(32).toString("base64") }),
+    ),
+    async (token) => (await calendarIdentity.verify(token)).actor,
+    ["google"],
+  );
+  const integrationUrl = await integration.listen({ host: "127.0.0.1", port: 0 });
   const authorities = new Authorities(
     workspaceUrl,
     accountUrl,
@@ -150,7 +213,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   const gateway = gatewayApp(
     {
       accountUrl,
-      cells: { "dev-cell": { workspace: workspaceUrl, ingest: ingestUrl } },
+      cells: {
+        "dev-cell": { workspace: workspaceUrl, ingest: ingestUrl, integration: integrationUrl },
+      },
       privateKey: gatewayKey.privateKey,
       keyId: "gateway-test",
     },
@@ -202,6 +267,39 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     assert.equal(created.status, 200);
     const workspaceId = String(created.data.id);
     const base = `/api/v3/workspaces/${workspaceId}`;
+    const calendarStart = await invoke(
+      "POST",
+      `${base}/connections/calendar/oauth/start`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { provider: "google" },
+    );
+    assert.equal(calendarStart.status, 201, JSON.stringify(calendarStart.data));
+    const calendarRecord = calendarStart.data.connection as { id: string };
+    const state = new URL(String(calendarStart.data.authorizationUrl)).searchParams.get("state")!;
+    const calendarFinish = await invoke(
+      "POST",
+      `${base}/connections/calendar/oauth/finish`,
+      ownerHeaders,
+      { connectionId: calendarRecord.id, state, code: "controlled-code" },
+    );
+    assert.equal(calendarFinish.status, 202);
+    assert.equal(
+      (
+        await invoke(
+          "POST",
+          `${base}/connections/calendar/${calendarRecord.id}/initialize`,
+          ownerHeaders,
+        )
+      ).status,
+      200,
+    );
+    const calendars = await invoke(
+      "GET",
+      `${base}/connections/calendar/${calendarRecord.id}/calendars`,
+      ownerHeaders,
+    );
+    assert.equal(calendars.status, 200);
+    assert.equal((calendars.data.items as { name: string }[])[0]?.name, "Team calendar");
     const denied = await invoke("GET", `${base}/meetings`, memberHeaders);
     assert.equal(denied.status, 403);
     const grant = await invoke(
@@ -211,6 +309,16 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       { userId: member.data.userId, active: true, expectedVersion: 0 },
     );
     assert.equal(grant.status, 200);
+    assert.equal(
+      (
+        await invoke(
+          "GET",
+          `${base}/connections/calendar/${calendarRecord.id}/calendars`,
+          memberHeaders,
+        )
+      ).status,
+      404,
+    );
     const project = await invoke(
       "POST",
       `${base}/projects`,
@@ -339,6 +447,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
   } finally {
     await gateway.close();
+    await integration.close();
+    await integrationDb.end();
+    await integrationMigration.end();
     await ingest.close();
     await ingestDb.end();
     await ingestMigration.end();

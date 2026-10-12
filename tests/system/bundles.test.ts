@@ -37,8 +37,21 @@ test("compiled Account, Workspace and gateway entry points boot as native Node s
   const workspacePort = await freePort();
   const gatewayPort = await freePort();
   const ingestPort = await freePort();
+  const integrationPort = await freePort();
   const accountUrl = `http://127.0.0.1:${accountPort}`;
   const configurations = [
+    {
+      service: "integration",
+      port: integrationPort,
+      env: {
+        INTEGRATION_DATABASE_URL:
+          "postgres://vs_integration_runtime:local-runtime-only@127.0.0.1:55437/integration",
+        ACCOUNT_INTERNAL_URL: accountUrl,
+        TOKEN_KEY_ID: "test",
+        TOKEN_KEYS: JSON.stringify({ test: randomBytes(32).toString("base64") }),
+        CALENDAR_REDIRECT_URI: "https://app.example/oauth/calendar",
+      },
+    },
     {
       service: "ingest",
       port: ingestPort,
