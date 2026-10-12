@@ -187,3 +187,14 @@ tests and five browser fixture tests passed locally. Production dependency audit
 known vulnerabilities. The composition browser also saved/reloaded calendar selection and
 disconnected through actual signed service APIs. Docker dependency restart was needed;
 the full suite passed after restoration without deleting test data.
+
+### Calendar occurrence read/normalization checkpoint
+
+Google expanded instances and Microsoft calendarView are available through owner-private,
+bounded, paginated APIs and a read-only web preview. Tests cover original recurring identity,
+rescheduling, distinct events reusing a call link, timezone normalization, cancelled/declined/
+all-day events, passcode preservation and unsafe paging links. Verification: 52 fast tests,
+ten builds, 33 database/runtime/composition tests and five browser fixtures passed locally.
+The actual service composition and browser call the new read endpoint with controlled vendor
+responses. Calendar occurrence persistence, incremental synchronization, capture policy and
+automatic dispatch are **not** complete; live vendor qualification remains outstanding.

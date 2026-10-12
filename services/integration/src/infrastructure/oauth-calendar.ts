@@ -2,6 +2,8 @@ import { z } from "zod";
 import { AppError, boundedJson } from "@visualsprint/platform";
 import type { CalendarProvider } from "../application/ports.js";
 import type { CalendarProviderName, Tokens } from "../domain/records.js";
+import type { CalendarWindow } from "../domain/occurrences.js";
+import { googleOccurrence, microsoftOccurrence } from "./occurrence-normalization.js";
 const tokenBody = z.object({
   access_token: z.string().min(1).max(16000),
   refresh_token: z.string().min(1).max(16000).optional(),
@@ -283,6 +285,86 @@ export class OAuthCalendarProvider implements CalendarProvider {
         primary: item.isDefaultCalendar ?? false,
       })),
       nextCursor: result["@odata.nextLink"] ?? null,
+    };
+  }
+  async occurrences(
+    accessToken: string,
+    calendarId: string,
+    window: CalendarWindow,
+    cursor?: string,
+  ) {
+    identifier.parse(calendarId);
+    const start = Date.parse(window.startsAt),
+      end = Date.parse(window.endsAt);
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      end <= start ||
+      end - start > 14 * 86400000
+    )
+      throw new AppError("INVALID_CALENDAR_WINDOW", 400);
+    if (this.provider === "google") {
+      const url = new URL(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      );
+      for (const [key, value] of Object.entries({
+        singleEvents: "true",
+        showDeleted: "true",
+        maxResults: "100",
+        maxAttendees: "1",
+        timeMin: window.startsAt,
+        timeMax: window.endsAt,
+        timeZone: "UTC",
+        fields:
+          "items(id,summary,status,start,end,originalStartTime,recurringEventId,hangoutLink,location,description,conferenceData,attendees),nextPageToken",
+      }))
+        url.searchParams.set(key, value);
+      if (cursor) url.searchParams.set("pageToken", z.string().max(16000).parse(cursor));
+      const page = providerPayload(
+        z.object({
+          items: z.array(z.unknown()).max(100).default([]),
+          nextPageToken: z.string().max(16000).optional(),
+        }),
+        await this.data(url, accessToken),
+      );
+      return { items: page.items.map(googleOccurrence), nextCursor: page.nextPageToken ?? null };
+    }
+    const path = `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/calendarView`;
+    let url: URL;
+    try {
+      url = cursor
+        ? new URL(z.string().max(16000).parse(cursor))
+        : new URL(`https://graph.microsoft.com${path}`);
+    } catch {
+      throw new AppError("INVALID_CALENDAR_CURSOR", 400);
+    }
+    if (
+      url.origin !== "https://graph.microsoft.com" ||
+      url.pathname !== path ||
+      url.username ||
+      url.password ||
+      url.hash
+    )
+      throw new AppError("INVALID_CALENDAR_CURSOR", 400);
+    if (!cursor) {
+      url.searchParams.set("startDateTime", window.startsAt);
+      url.searchParams.set("endDateTime", window.endsAt);
+      url.searchParams.set("$top", "100");
+      url.searchParams.set(
+        "$select",
+        "id,subject,isCancelled,isAllDay,start,end,responseStatus,onlineMeeting,location,body",
+      );
+    }
+    const page = providerPayload(
+      z.object({
+        value: z.array(z.unknown()).max(100),
+        "@odata.nextLink": z.string().max(16000).optional(),
+      }),
+      await this.data(url, accessToken),
+    );
+    return {
+      items: page.value.map(microsoftOccurrence),
+      nextCursor: page["@odata.nextLink"] ?? null,
     };
   }
 }

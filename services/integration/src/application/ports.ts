@@ -1,5 +1,6 @@
 import type { Actor } from "@visualsprint/platform";
 import type { CalendarProviderName, Connection, Tokens, Calendar } from "../domain/records.js";
+import type { CalendarWindow, OccurrencePage } from "../domain/occurrences.js";
 export interface CalendarProvider {
   authorizationUrl(state: string, challenge: string): string;
   exchange(code: string, verifier: string): Promise<Tokens>;
@@ -9,6 +10,12 @@ export interface CalendarProvider {
     cursor?: string,
   ): Promise<{ items: Calendar[]; nextCursor: string | null }>;
   resolveCalendar(accessToken: string, calendarId: string): Promise<Calendar>;
+  occurrences(
+    accessToken: string,
+    calendarId: string,
+    window: CalendarWindow,
+    cursor?: string,
+  ): Promise<OccurrencePage>;
 }
 export interface TokenVault {
   seal(value: unknown, context: string): string;

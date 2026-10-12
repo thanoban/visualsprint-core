@@ -81,3 +81,29 @@ Next: durable occurrence synchronization and reconciliation, recurrence/reschedu
 calendar notifications, explicit capture-policy activation, private meeting upserts and
 scheduled Ingest dispatch/stop. The UI reports `automaticCaptureReady: false` until those
 flows are implemented and verified. Calendar read consent is not capture permission.
+
+## Read-only occurrence preview checkpoint
+
+Owner-scoped `GET /:connectionId/occurrences` now reads a bounded 14-day window and returns
+normalized occurrence records, window and next cursor. Subsequent pages preserve the same
+window. The UI previews these events without launching capture or creating/sharing meetings.
+Current membership and credential leases protect reads; disconnect blocks subsequent reads.
+
+Google expands instances using provider recurrence/timezone rules. A recurring occurrence's
+identity uses series ID and original start, so rescheduling does not identify it by its new
+time or reused call URL. Graph requests immutable IDs and UTC timestamps. Unrecognized
+timezone-less times fail explicitly rather than being interpreted in server local time.
+All-day, cancelled and declined records remain distinct; ambiguous/unsupported call links
+return null. Link parsing never executes HTML and preserves Zoom passcodes.
+
+Graph page URLs must remain on the selected calendar's fixed origin/path. Responses and
+pages are bounded, and malformed vendor data is an upstream error. Google window requests
+do not use incompatible `syncToken` parameters. See
+[Google event list semantics](https://developers.google.com/workspace/calendar/api/v3/reference/events/list),
+[recurring instance identity](https://developers.google.com/workspace/calendar/api/guides/recurringevents)
+and [Graph calendarView](https://learn.microsoft.com/en-us/graph/api/calendar-list-calendarview?view=graph-rest-1.0).
+
+This is a provider read/normalization slice, **not persisted synchronization**. Incremental
+cursors, transactional occurrence/outbox storage, notification reconciliation and calendar
+to Workspace/Ingest orchestration remain next. Missing records in a preview are not proof
+of cancellation. No bot is automatically started, and no provider live call was performed.

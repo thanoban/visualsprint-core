@@ -54,6 +54,9 @@ export function integrationApp(
           (request.query as { cursor?: string }).cursor,
         ),
       );
+      routes.get("/:connectionId/occurrences", (request) =>
+        service.occurrences(actor(request), connectionId(request.params), request.query),
+      );
       routes.post("/:connectionId/calendar", (request) =>
         service.select(actor(request), connectionId(request.params), key(request), request.body),
       );

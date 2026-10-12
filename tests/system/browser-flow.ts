@@ -56,6 +56,8 @@ export async function browserMeetingFlow(
       calendars.getByRole("heading", { name: "Team calendar", exact: true }),
     ).toBeVisible();
     await expect(calendars).toContainText("Automatic meeting capture is not enabled");
+    await calendars.getByRole("button", { name: "Preview upcoming events", exact: true }).click();
+    await expect(calendars).toContainText("No events in this page");
     await calendars.getByRole("button", { name: "Save calendar", exact: true }).click();
     await expect(
       calendars.getByRole("button", { name: "Save calendar", exact: true }),

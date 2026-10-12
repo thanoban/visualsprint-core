@@ -166,6 +166,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
           async resolveCalendar() {
             return { id: "calendar-test", name: "Team calendar", primary: true };
           },
+          async occurrences() {
+            return { items: [], nextCursor: null };
+          },
         },
       },
       new AesTokenVault("test", { test: randomBytes(32).toString("base64") }),
@@ -300,6 +303,14 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(calendars.status, 200);
     assert.equal((calendars.data.items as { name: string }[])[0]?.name, "Team calendar");
+    const occurrences = await invoke(
+      "GET",
+      `${base}/connections/calendar/${calendarRecord.id}/occurrences`,
+      ownerHeaders,
+    );
+    assert.equal(occurrences.status, 200);
+    assert.deepEqual(occurrences.data.items, []);
+    assert.equal(occurrences.data.nextCursor, null);
     const denied = await invoke("GET", `${base}/meetings`, memberHeaders);
     assert.equal(denied.status, 403);
     const grant = await invoke(
@@ -314,6 +325,16 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
         await invoke(
           "GET",
           `${base}/connections/calendar/${calendarRecord.id}/calendars`,
+          memberHeaders,
+        )
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await invoke(
+          "GET",
+          `${base}/connections/calendar/${calendarRecord.id}/occurrences`,
           memberHeaders,
         )
       ).status,

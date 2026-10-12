@@ -215,6 +215,14 @@ test("calendar selection and disconnect use versioned commands without claiming 
           nextCursor: null,
         },
       });
+    if (path.endsWith("/occurrences"))
+      return route.fulfill({
+        json: {
+          window: { startsAt: "2026-10-12T00:00:00Z", endsAt: "2026-10-26T00:00:00Z" },
+          items: [],
+          nextCursor: null,
+        },
+      });
     if (path.endsWith(`/${id}/calendar`)) {
       expect(request.headers()["idempotency-key"]).toBeTruthy();
       expect(request.postDataJSON()).toEqual({ calendarId: "team-id", expectedVersion: 1 });
@@ -233,6 +241,8 @@ test("calendar selection and disconnect use versioned commands without claiming 
   await page.getByRole("button", { name: "Calendar connections", exact: true }).click();
   const panel = page.getByRole("region", { name: "Calendar connections" });
   await expect(panel).toContainText("Automatic meeting capture is not enabled");
+  await panel.getByRole("button", { name: "Preview upcoming events", exact: true }).click();
+  await expect(panel).toContainText("No events in this page");
   await panel.getByRole("combobox", { name: "Calendar", exact: true }).selectOption("team-id");
   await panel.getByRole("button", { name: "Save calendar", exact: true }).click();
   await expect(panel.getByRole("heading", { name: "Customer calls", exact: true })).toBeVisible();

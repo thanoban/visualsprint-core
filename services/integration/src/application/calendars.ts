@@ -305,6 +305,39 @@ export class CalendarService {
       this.provider(record.provider).calendars(token, cursor),
     );
   }
+  async occurrences(actor: Actor, connectionId: string, query: unknown) {
+    const input = z
+      .object({
+        startsAt: z.string().datetime().optional(),
+        endsAt: z.string().datetime().optional(),
+        cursor: z.string().min(1).max(16000).optional(),
+      })
+      .strict()
+      .parse(query);
+    if (Boolean(input.startsAt) !== Boolean(input.endsAt) || (input.cursor && !input.startsAt))
+      throw new AppError("INVALID_CALENDAR_WINDOW", 400);
+    const startsAt = input.startsAt ?? this.now().toISOString();
+    const endsAt = input.endsAt ?? new Date(Date.parse(startsAt) + 14 * 86400000).toISOString();
+    if (
+      Date.parse(endsAt) <= Date.parse(startsAt) ||
+      Date.parse(endsAt) - Date.parse(startsAt) > 14 * 86400000 ||
+      Math.abs(Date.parse(startsAt) - this.now().getTime()) > 30 * 86400000
+    )
+      throw new AppError("INVALID_CALENDAR_WINDOW", 400);
+    return this.withTokens(actor, connectionId, async (record, token) => {
+      if (record.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
+      const window = { startsAt, endsAt };
+      return {
+        window,
+        ...(await this.provider(record.provider).occurrences(
+          token,
+          record.calendarId,
+          window,
+          input.cursor,
+        )),
+      };
+    });
+  }
   async select(actor: Actor, connectionId: string, key: string, body: unknown) {
     keySchema.parse(key);
     const input = z

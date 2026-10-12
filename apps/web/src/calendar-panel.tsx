@@ -24,6 +24,25 @@ const calendarPage = z.object({
   items: z.array(z.object({ id: z.string(), name: z.string(), primary: z.boolean() })),
   nextCursor: z.string().nullable(),
 });
+const occurrencePage = z.object({
+  window: z.object({ startsAt: z.string(), endsAt: z.string() }),
+  items: z
+    .array(
+      z.object({
+        sourceKey: z.string(),
+        providerEventId: z.string(),
+        title: z.string(),
+        status: z.string(),
+        startsAt: z.string().nullable(),
+        endsAt: z.string().nullable(),
+        allDay: z.boolean(),
+        declined: z.boolean(),
+        joinUrl: z.string().nullable(),
+      }),
+    )
+    .max(100),
+  nextCursor: z.string().nullable(),
+});
 export function CalendarPanel({ api, workspaceId }: { api: Api; workspaceId: string }) {
   const [refresh, setRefresh] = useState(0),
     [provider, setProvider] = useState<"google" | "microsoft">("google");
@@ -137,6 +156,23 @@ function CalendarEditor({
     initialize = useCommand();
   const [calendarId, setCalendarId] = useState(item.calendarId);
   const [pageCursor, setPageCursor] = useState<string>();
+  const preview = useCommand();
+  const [occurrences, setOccurrences] = useState<z.infer<typeof occurrencePage>>();
+  const loadOccurrences = (next = false) => {
+    const parameters =
+      next && occurrences?.nextCursor
+        ? new URLSearchParams({ ...occurrences.window, cursor: occurrences.nextCursor }).toString()
+        : "";
+    void preview.run(
+      parameters,
+      () =>
+        api.request(
+          `${path}/${item.id}/occurrences${parameters ? `?${parameters}` : ""}`,
+          occurrencePage,
+        ),
+      setOccurrences,
+    );
+  };
   const data = useData(
     (signal) =>
       item.status === "connected"
@@ -208,6 +244,42 @@ function CalendarEditor({
           {data.value?.nextCursor ? (
             <button onClick={() => setPageCursor(data.value!.nextCursor!)}>More calendars</button>
           ) : null}
+          <Form
+            title="Upcoming calendar events"
+            button="Preview upcoming events"
+            command={preview}
+            submit={() => loadOccurrences()}
+          >
+            <p>
+              Read-only preview for the next 14 days. This does not schedule a bot or grant meeting
+              access.
+            </p>
+            {occurrences ? (
+              <>
+                {occurrences.items.length === 0 ? (
+                  <p>No events in this page.</p>
+                ) : (
+                  <ul>
+                    {occurrences.items.map((event) => (
+                      <li key={event.sourceKey}>
+                        {event.title} — {event.status}
+                        {event.declined ? " (declined)" : ""} —{" "}
+                        {event.allDay ? "all day" : (event.startsAt ?? "no time")}
+                        {event.joinUrl
+                          ? " — meeting link available"
+                          : " — no unambiguous supported link"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {occurrences.nextCursor ? (
+                  <button type="button" onClick={() => loadOccurrences(true)}>
+                    Next event page
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </Form>
         </>
       ) : null}
       {item.status !== "disconnected" ? (

@@ -70,6 +70,9 @@ function fixture(unknown = false) {
         primary: id === "primary",
       };
     },
+    async occurrences() {
+      return { items: [], nextCursor: null };
+    },
   };
   const service = new CalendarService(
     repository,
@@ -175,6 +178,16 @@ test("refresh rotation persists without conflicting with a user configuration ve
     expectedVersion: version,
   });
   assert.equal(changed.calendarId, "customer-calendar");
+  const events = await f.service.occurrences(f.actor, started.connection.id, {});
+  assert.deepEqual(events.items, []);
+  assert.equal(
+    Date.parse(events.window.endsAt) - Date.parse(events.window.startsAt),
+    14 * 86400000,
+  );
+  await assert.rejects(
+    f.service.occurrences(f.actor, started.connection.id, { cursor: "missing-window" }),
+    /INVALID_CALENDAR_WINDOW/,
+  );
   const disconnected = await f.service.disconnect(
     f.actor,
     started.connection.id,
@@ -189,6 +202,10 @@ test("refresh rotation persists without conflicting with a user configuration ve
   assert.equal(row.oauthCipher, null);
   await assert.rejects(
     f.service.calendars(f.actor, started.connection.id),
+    /CONNECTION_UNAVAILABLE/,
+  );
+  await assert.rejects(
+    f.service.occurrences(f.actor, started.connection.id, {}),
     /CONNECTION_UNAVAILABLE/,
   );
 });
