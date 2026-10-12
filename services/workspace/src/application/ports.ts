@@ -3,6 +3,7 @@ import type { DomainEvent, CalendarMeeting } from "@visualsprint/contracts";
 import type { MeetingAccess } from "../domain/permissions.js";
 
 export interface MembershipAuthority {
+  operationConnection?(actor: Actor): Promise<string>;
   requireActive(actor: Actor): Promise<void>;
   requireMember(workspaceId: string, userId: string, delegatedBy: Actor): Promise<void>;
 }
@@ -41,6 +42,7 @@ export type Meeting = {
   createdAt: Date;
 };
 export interface WorkspaceTransaction {
+  calendarConnection(meetingId: string): Promise<string | null>;
   upsertCalendar(input: CalendarMeeting): Promise<{ meeting: Meeting; changed: boolean }>;
   calendarCaptureAllowed(meetingId: string): Promise<boolean>;
   customer(id: string): Promise<Customer | undefined>;

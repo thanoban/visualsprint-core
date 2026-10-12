@@ -21,6 +21,7 @@ export const syncs = pgTable(
     connectionId: uuid("connection_id").notNull(),
     ownerId: uuid("owner_id").notNull(),
     sessionId: text("session_id").notNull(),
+    operationGrantId: uuid("operation_grant_id"),
     calendarId: text("calendar_id").notNull(),
     connectionVersion: integer("connection_version").notNull(),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),

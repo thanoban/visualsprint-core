@@ -208,6 +208,17 @@ test("calendar selection and disconnect use versioned commands without claiming 
       path = new URL(request.url()).pathname;
     if (path.endsWith("/providers"))
       return route.fulfill({ json: { providers: ["google"], automaticCaptureReady: false } });
+    if (path.endsWith("/automation")) {
+      const body = request.postDataJSON();
+      expect(request.headers()["idempotency-key"]).toBeTruthy();
+      expect(body.expectedVersion).toBe(record.version);
+      if (body.enabled) {
+        expect(body.consent).toBe(true);
+        expect(body.grantId).toBe(id);
+      }
+      record = { ...record, automatic: body.enabled, version: record.version + 1 };
+      return route.fulfill({ json: record });
+    }
     if (path.endsWith("/stored-occurrences"))
       return route.fulfill({
         json: {
@@ -269,7 +280,7 @@ test("calendar selection and disconnect use versioned commands without claiming 
     }
     if (path.endsWith(`/${id}/disconnect`)) {
       expect(request.headers()["idempotency-key"]).toBeTruthy();
-      expect(request.postDataJSON()).toEqual({ expectedVersion: 2 });
+      expect(request.postDataJSON()).toEqual({ expectedVersion: 4 });
       record = { ...record, status: "disconnected", version: 3 };
       return route.fulfill({ json: record });
     }
@@ -297,6 +308,17 @@ test("calendar selection and disconnect use versioned commands without claiming 
   await panel.getByRole("combobox", { name: "Calendar", exact: true }).selectOption("team-id");
   await panel.getByRole("button", { name: "Save calendar", exact: true }).click();
   await expect(panel.getByRole("heading", { name: "Customer calls", exact: true })).toBeVisible();
+  await page.route("**/automation-grants", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ connectionId: id, consent: true });
+    expect(route.request().headers()["idempotency-key"]).toBeTruthy();
+    return route.fulfill({ json: { id } });
+  });
+  await panel.getByRole("checkbox", { name: /I authorize background calendar/ }).check();
+  await panel.getByRole("button", { name: "Enable background policy", exact: true }).click();
+  await expect(panel).toContainText("Background synchronization enabled");
+  await expect(panel.getByRole("button", { name: "Save calendar", exact: true })).toBeDisabled();
+  await panel.getByRole("button", { name: "Disable background policy", exact: true }).click();
+  await expect(panel).toContainText("Background synchronization disabled");
   await panel.getByRole("button", { name: "Disconnect calendar", exact: true }).click();
   await expect(panel.getByRole("status").filter({ hasText: /^google:/ })).toContainText(
     "disconnected",

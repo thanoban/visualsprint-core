@@ -74,12 +74,14 @@ export function Form({
   children,
   command,
   submit,
+  disabled = false,
 }: {
   title: string;
   button: string;
   children: ReactNode;
   command: ReturnType<typeof useCommand>;
   submit: () => void;
+  disabled?: boolean;
 }) {
   return (
     <form
@@ -90,7 +92,7 @@ export function Form({
       }}
     >
       <h3>{title}</h3>
-      <fieldset disabled={command.busy}>
+      <fieldset disabled={command.busy || disabled}>
         {children}
         <button type="submit">{command.busy ? "Saving…" : button}</button>
       </fieldset>

@@ -50,7 +50,7 @@ export function connectionView(record: Connection) {
     version: record.version,
     automatic: record.automatic,
     errorCode: record.errorCode,
-    cleanupPending: record.status === "disconnected" && record.grantId !== null,
+    cleanupPending: !record.automatic && record.grantId !== null,
   };
 }
 export class CalendarService {
@@ -219,10 +219,18 @@ export class CalendarService {
     connectionId: string,
     work: (record: Connection, accessToken: string) => Promise<T>,
   ): Promise<T> {
-    await this.authorize(actor);
+    if (actor.operationGrantId) {
+      const grant = await this.authority.operation(actor);
+      if (grant.connectionId !== connectionId) throw new AppError("FORBIDDEN", 403);
+    } else await this.authorize(actor);
     const leaseToken = randomUUID();
     const record = await this.repository.scoped(actor.workspaceId, async (tx) => {
       const current = await this.owned(tx, actor, connectionId);
+      if (
+        actor.operationGrantId &&
+        (!current.automatic || current.grantId !== actor.operationGrantId)
+      )
+        throw new AppError("FORBIDDEN", 403);
       if (!["initializing", "connected"].includes(current.status))
         throw new AppError("CONNECTION_UNAVAILABLE", 409);
       if (current.leaseUntil && current.leaseUntil > this.now())
@@ -349,6 +357,63 @@ export class CalendarService {
       return this.syncView(await tx.queueSync(actor, key, record, this.now()));
     });
   }
+  async automation(actor: Actor, connectionId: string, key: string, body: unknown) {
+    await this.authorize(actor);
+    keySchema.parse(key);
+    const input = z
+      .discriminatedUnion("enabled", [
+        z
+          .object({
+            enabled: z.literal(true),
+            grantId: id,
+            consent: z.literal(true),
+            expectedVersion: z.number().int().positive(),
+          })
+          .strict(),
+        z
+          .object({ enabled: z.literal(false), expectedVersion: z.number().int().positive() })
+          .strict(),
+      ])
+      .parse(body);
+    if (input.enabled) {
+      const principal = {
+        ...actor,
+        sessionId: `operation:${input.grantId}`,
+        operationGrantId: input.grantId,
+      };
+      const grant = await this.authority.operation(principal);
+      if (grant.connectionId !== connectionId) throw new AppError("FORBIDDEN", 403);
+    }
+    const result = await this.repository.scoped(actor.workspaceId, (tx) =>
+      tx.command(
+        actor,
+        key,
+        hash(JSON.stringify(["calendar.automation", connectionId, input])),
+        async () => {
+          const record = await this.owned(tx, actor, connectionId);
+          if (record.version !== input.expectedVersion) throw new AppError("VERSION_CONFLICT", 409);
+          if (input.enabled && record.status !== "connected")
+            throw new AppError("CONNECTION_UNAVAILABLE", 409);
+          if (
+            input.enabled &&
+            record.grantId &&
+            (record.grantId !== input.grantId || !record.automatic)
+          )
+            throw new AppError("DISABLE_AUTOMATION_FIRST", 409);
+          const updated = await tx.update(record.id, {
+            automatic: input.enabled,
+            ...(input.enabled ? { grantId: input.grantId } : {}),
+            errorCode: null,
+          });
+          const pending = await tx.latestSync(record.id, true);
+          if (pending) await tx.endSync(pending, "superseded", "POLICY_CHANGED");
+          await tx.emit(updated);
+          return updated;
+        },
+      ),
+    );
+    return connectionView(result);
+  }
   private syncView(job: import("../domain/sync.js").CalendarSync) {
     return {
       id: job.id,
@@ -457,6 +522,7 @@ export class CalendarService {
       actorId: job.ownerId,
       workspaceId: record.workspaceId,
       sessionId: job.sessionId,
+      ...(job.operationGrantId ? { operationGrantId: job.operationGrantId } : {}),
     };
     try {
       await this.withTokens(actor, record.id, async (leased, token) => {
@@ -513,7 +579,8 @@ export class CalendarService {
       .strict()
       .parse(body);
     return this.withTokens(actor, connectionId, async (record, token) => {
-      if (record.automatic || record.grantId) throw new AppError("DISABLE_AUTOMATION_FIRST", 409);
+      if (record.automatic) throw new AppError("DISABLE_AUTOMATION_FIRST", 409);
+      if (record.grantId) throw new AppError("CONNECTION_BUSY", 503);
       const selected = await this.provider(record.provider).resolveCalendar(
         token,
         input.calendarId,
@@ -578,6 +645,52 @@ export class CalendarService {
   async work(workspaceId: string, connectionId: string) {
     const record = await this.repository.scoped(workspaceId, (tx) => tx.get(connectionId));
     if (!record) return;
+    if (record.automatic && record.grantId && record.status === "connected") {
+      const principal: Actor = {
+        actorId: record.ownerId,
+        workspaceId,
+        sessionId: `operation:${record.grantId}`,
+        operationGrantId: record.grantId,
+      };
+      try {
+        const grant = await this.authority.operation(principal);
+        if (grant.connectionId !== record.id) throw new AppError("FORBIDDEN", 403);
+        await this.repository.scoped(workspaceId, async (tx) => {
+          const current = await tx.get(record.id);
+          if (
+            !current?.automatic ||
+            current.grantId !== record.grantId ||
+            current.version !== record.version
+          )
+            return;
+          const latest = await tx.latestSync(record.id);
+          if (
+            latest &&
+            (["queued", "running"].includes(latest.state) ||
+              this.now().getTime() - latest.createdAt.getTime() < 300000)
+          )
+            return;
+          await tx.queueSync(
+            principal,
+            `background:${record.grantId}:${Math.floor(this.now().getTime() / 300000)}`,
+            current,
+            this.now(),
+          );
+        });
+      } catch (error) {
+        if (!(error instanceof AppError) || ![401, 403, 404].includes(error.status)) throw error;
+        await this.repository.scoped(workspaceId, async (tx) => {
+          const current = await tx.get(record.id);
+          if (current?.automatic && current.grantId === record.grantId) {
+            const updated = await tx.update(current.id, {
+              automatic: false,
+              errorCode: "AUTOMATION_REVOKED",
+            });
+            await tx.emit(updated);
+          }
+        });
+      }
+    }
     await this.syncWork(record);
     if (
       record.status === "exchanging" &&
@@ -605,7 +718,7 @@ export class CalendarService {
         { actorId: record.ownerId, workspaceId, sessionId: record.sessionId },
         record.id,
       );
-    if (record.status === "disconnected" && record.grantId) {
+    if (!record.automatic && record.grantId) {
       const actor: Actor = {
         actorId: record.ownerId,
         workspaceId,
@@ -615,7 +728,7 @@ export class CalendarService {
       await this.authority.disableGrant(actor, record.id);
       await this.repository.scoped(workspaceId, async (tx) => {
         const current = await tx.get(record.id);
-        if (current?.status === "disconnected" && current.grantId === record.grantId)
+        if (current && !current.automatic && current.grantId === record.grantId)
           await tx.update(current.id, { grantId: null });
       });
     }

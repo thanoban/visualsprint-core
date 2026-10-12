@@ -236,3 +236,19 @@ and ten builds passed locally; production dependency audit found no known vulner
 The composition verifies imported-meeting Ingest quota admission and browser import through
 real signed services/databases. Providers remain controlled; no paid cloud resource or live
 meeting was used. Prior checkpoint `94c334a` also passed GitHub Actions independently.
+
+### Background calendar synchronization and scoped operation authority
+
+Owner consent now activates a connection-bound background policy. Integration periodically
+creates durable snapshot jobs carrying the operation grant; normal logout does not break
+approved work. Revocation/member loss disables policy and queues grant cleanup. Workspace
+verifies current Account grant context before calendar projections/capture access, preventing
+an operation grant from reading unrelated meetings. Public user APIs still reject these
+principals. Browser controls distinguish policy permission from unimplemented bot dispatch.
+See [authority and limits](background-calendar.md).
+
+Verification: 53 fast tests, 39 database/runtime/composition tests, five browser fixtures
+and ten builds. The composition uses genuine signed Account grant validation after logout
+and real PostgreSQL/OpenFGA; provider responses remain controlled. A browser lease race
+was fixed by disabling read/edit controls until calendar loading finishes. Scheduled bot
+dispatch and the remaining F3–F6 deliverables are still unfinished.

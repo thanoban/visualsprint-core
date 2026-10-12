@@ -47,6 +47,7 @@ class CalendarTx implements ConnectionTx {
       connectionId: connection.id,
       ownerId: actor.actorId,
       sessionId: actor.sessionId,
+      operationGrantId: actor.operationGrantId ?? null,
       calendarId: connection.calendarId,
       connectionVersion: connection.version,
       startsAt: now,

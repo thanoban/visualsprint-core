@@ -221,6 +221,7 @@ function CalendarEditor({
           <Feedback data={data} />
           <Form
             title="Choose calendar"
+            disabled={data.loading || item.automatic || item.cleanupPending}
             button="Save calendar"
             command={select}
             submit={() =>
@@ -255,6 +256,7 @@ function CalendarEditor({
           ) : null}
           <Form
             title="Upcoming calendar events"
+            disabled={data.loading}
             button="Preview upcoming events"
             command={preview}
             submit={() => loadOccurrences()}
@@ -330,6 +332,12 @@ function CalendarEditor({
             path={`${path}/${item.id}`}
             workspaceId={item.workspaceId}
           />
+          <BackgroundCalendarPolicy
+            api={api}
+            path={`${path}/${item.id}`}
+            item={item}
+            reload={reload}
+          />
         </>
       ) : null}
       {item.status !== "disconnected" ? (
@@ -354,6 +362,78 @@ function CalendarEditor({
         </Form>
       ) : null}
     </article>
+  );
+}
+function BackgroundCalendarPolicy({
+  api,
+  path,
+  item,
+  reload,
+}: {
+  api: Api;
+  path: string;
+  item: z.infer<typeof connection>;
+  reload: () => void;
+}) {
+  const command = useCommand();
+  const [consent, setConsent] = useState(false);
+  return (
+    <Form
+      title="Background calendar policy"
+      button={item.automatic ? "Disable background policy" : "Enable background policy"}
+      command={command}
+      submit={() =>
+        void command.run(
+          { enabled: !item.automatic, version: item.version, consent },
+          async (key) => {
+            if (item.automatic)
+              return api.request(`${path}/automation`, connection, {
+                method: "POST",
+                key,
+                body: { enabled: false, expectedVersion: item.version },
+              });
+            if (!consent) throw new Error("CONSENT_REQUIRED");
+            const grant = await api.request(
+              `${api.scope(item.workspaceId)}/automation-grants`,
+              z.object({ id: z.string().uuid() }),
+              {
+                method: "POST",
+                key: `${key}.grant`,
+                body: { connectionId: item.id, consent: true },
+              },
+            );
+            return api.request(`${path}/automation`, connection, {
+              method: "POST",
+              key,
+              body: {
+                enabled: true,
+                grantId: grant.id,
+                consent: true,
+                expectedVersion: item.version,
+              },
+            });
+          },
+          reload,
+        )
+      }
+    >
+      <p>
+        Background synchronization {item.automatic ? "enabled" : "disabled"}. The owner grant
+        survives logout but can be revoked. Scheduled bot dispatch is not active in this build yet.
+      </p>
+      {!item.automatic ? (
+        <label>
+          <input
+            type="checkbox"
+            required
+            checked={consent}
+            onChange={(event) => setConsent(event.target.checked)}
+          />
+          I authorize background calendar synchronization and capture of eligible meetings under
+          this policy.
+        </label>
+      ) : null}
+    </Form>
   );
 }
 function SavedCalendarMeetings({

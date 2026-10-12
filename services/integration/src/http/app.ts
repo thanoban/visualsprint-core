@@ -72,6 +72,14 @@ export function integrationApp(
           request.body,
         ),
       );
+      routes.post("/:connectionId/automation", (request) =>
+        service.automation(
+          actor(request),
+          connectionId(request.params),
+          key(request),
+          request.body,
+        ),
+      );
       routes.get("/:connectionId/sync", (request) =>
         service.syncStatus(actor(request), connectionId(request.params)),
       );

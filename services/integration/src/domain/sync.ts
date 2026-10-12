@@ -5,6 +5,7 @@ export type CalendarSync = {
   connectionId: string;
   ownerId: string;
   sessionId: string;
+  operationGrantId: string | null;
   calendarId: string;
   connectionVersion: number;
   startsAt: Date;

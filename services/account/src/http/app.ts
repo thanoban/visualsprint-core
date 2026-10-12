@@ -72,22 +72,25 @@ export function accountApp(
             ].includes(capability ?? ""))
         )
           throw new AppError("FORBIDDEN", 403);
-        const allowed = ["operation", "disable-connection"].includes(capability ?? "")
-          ? ["integration"]
-          : capability === "membership"
-            ? [
-                "gateway",
-                "workspace",
-                "ingest",
-                "intelligence",
-                "integration",
-                "workflow",
-                "reporting",
-                "notification",
-              ]
-            : ["reserve", "settle", "release", "reservation"].includes(capability ?? "")
-              ? ["ingest"]
-              : ["gateway"];
+        const allowed =
+          capability === "operation"
+            ? ["integration", "workspace"]
+            : capability === "disable-connection"
+              ? ["integration"]
+              : capability === "membership"
+                ? [
+                    "gateway",
+                    "workspace",
+                    "ingest",
+                    "intelligence",
+                    "integration",
+                    "workflow",
+                    "reporting",
+                    "notification",
+                  ]
+                : ["reserve", "settle", "release", "reservation"].includes(capability ?? "")
+                  ? ["ingest"]
+                  : ["gateway"];
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;

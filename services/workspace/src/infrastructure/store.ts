@@ -129,6 +129,16 @@ class TransactionRepository implements WorkspaceTransaction {
     )[0];
     return !row || (row.status !== "cancelled" && !row.allDay && !row.declined);
   }
+  async calendarConnection(meetingId: string) {
+    const row = (
+      await this.db
+        .select({ connectionId: schema.calendarMeetings.connectionId })
+        .from(schema.calendarMeetings)
+        .where(eq(schema.calendarMeetings.meetingId, meetingId))
+        .limit(1)
+    )[0];
+    return row?.connectionId ?? null;
+  }
   async customer(customerId: string) {
     return (
       await this.db

@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { randomUUID, randomBytes, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
-import { databasePool, migrate, ServiceIdentity, WorkOSVerifier } from "@visualsprint/platform";
+import {
+  AppError,
+  databasePool,
+  migrate,
+  ServiceIdentity,
+  WorkOSVerifier,
+} from "@visualsprint/platform";
 // Only composition tests import several service entry points. Runtime services never do.
 import { AccountService } from "../../services/account/src/application/account.js";
 import { PostgresAccount } from "../../services/account/src/infrastructure/store.js";
@@ -556,7 +562,101 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       String(meeting.data.id),
       String(project.data.id),
     );
+    const autoStart = await invoke(
+      "POST",
+      `${base}/connections/calendar/oauth/start`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { provider: "google" },
+    );
+    const autoConnection = (autoStart.data.connection as { id: string }).id;
+    const autoState = new URL(String(autoStart.data.authorizationUrl)).searchParams.get("state")!;
+    await invoke("POST", `${base}/connections/calendar/oauth/finish`, ownerHeaders, {
+      connectionId: autoConnection,
+      state: autoState,
+      code: "auto-code",
+    });
+    const initialized = await invoke(
+      "POST",
+      `${base}/connections/calendar/${autoConnection}/initialize`,
+      ownerHeaders,
+    );
+    const autoGrant = await invoke(
+      "POST",
+      `${base}/automation-grants`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { connectionId: autoConnection, consent: true },
+    );
+    const activated = await invoke(
+      "POST",
+      `${base}/connections/calendar/${autoConnection}/automation`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      {
+        enabled: true,
+        grantId: autoGrant.data.id,
+        consent: true,
+        expectedVersion: initialized.data.version,
+      },
+    );
+    assert.equal(activated.status, 200, JSON.stringify(activated.data));
+    assert.equal(activated.data.automatic, true);
+    const ownerContext = await invoke("GET", "/api/v3/me", ownerHeaders);
+    const principal = {
+      actorId: String(member.data.userId),
+      workspaceId,
+      sessionId: `operation:${autoGrant.data.id}`,
+      operationGrantId: String(autoGrant.data.id),
+    };
+    // Delegating a different owner cannot turn an active grant into authority.
+    await assert.rejects(
+      new WorkspaceCalendars(workspaceUrl, integrationKey.privateKey, "integration-test").upsert(
+        principal,
+        {
+          connectionId: autoConnection,
+          occurrenceId: randomUUID(),
+          sourceVersion: 1,
+          title: "Wrong actor",
+          joinUrl: null,
+          status: "confirmed",
+          allDay: false,
+          declined: false,
+          startsAt: new Date().toISOString(),
+          endsAt: new Date(Date.now() + 60000).toISOString(),
+        },
+      ),
+      /FORBIDDEN/,
+    );
     assert.equal((await invoke("POST", "/api/v3/logout", ownerHeaders)).status, 200);
+    const approved = { ...principal, actorId: String(ownerContext.data.userId) };
+    const backgroundMeeting = await new WorkspaceCalendars(
+      workspaceUrl,
+      integrationKey.privateKey,
+      "integration-test",
+    ).upsert(approved, {
+      connectionId: autoConnection,
+      occurrenceId: randomUUID(),
+      sourceVersion: 1,
+      title: "Approved background meeting",
+      joinUrl: "https://meet.google.com/abc-defg-hij",
+      status: "confirmed",
+      allDay: false,
+      declined: false,
+      startsAt: new Date().toISOString(),
+      endsAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    assert.equal(
+      (await authorities.capture(approved, backgroundMeeting.id)).meetingId,
+      backgroundMeeting.id,
+    );
+    await assert.rejects(
+      authorities.capture(approved, String(meeting.data.id)),
+      (error) => error instanceof AppError && error.status === 403,
+    );
+    await integrationService.work(workspaceId, autoConnection);
+    const persisted = await new PostgresCalendars(integrationDb).scoped(workspaceId, (tx) =>
+      tx.latestSync(autoConnection),
+    );
+    assert.equal(persisted?.state, "complete");
+    assert.equal(persisted?.operationGrantId, autoGrant.data.id);
     assert.equal((await invoke("GET", meetingUrl, ownerHeaders)).status, 401);
     assert.equal(
       (

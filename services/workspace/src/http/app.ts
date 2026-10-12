@@ -19,10 +19,7 @@ export function workspaceApp(
   app.post("/internal/workspaces/:workspaceId/calendar-meetings", async (request) => {
     if (!authenticateCalendar) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
     const actor = await authenticateCalendar(bearer(request.headers.authorization));
-    if (
-      actor.operationGrantId ||
-      id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId
-    )
+    if (id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId)
       throw new AppError("FORBIDDEN", 403);
     return service.calendarMeeting(actor, request.body);
   });

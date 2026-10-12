@@ -52,6 +52,15 @@ export class WorkspaceService {
   private async authorize(actor: Actor) {
     await this.memberships.requireActive(actor);
   }
+  private async boundConnection(actor: Actor, connectionId: string | null) {
+    if (!actor.operationGrantId) return;
+    if (
+      !connectionId ||
+      !this.memberships.operationConnection ||
+      (await this.memberships.operationConnection(actor)) !== connectionId
+    )
+      throw new AppError("FORBIDDEN", 403);
+  }
   private command<T>(
     actor: Actor,
     key: string,
@@ -66,6 +75,8 @@ export class WorkspaceService {
     return this.repository.command(actor, idempotencyKey.parse(key), fingerprint, work, guard);
   }
   private async owner(tx: WorkspaceTransaction, actor: Actor, meetingId: string) {
+    if (actor.operationGrantId)
+      await this.boundConnection(actor, await tx.calendarConnection(meetingId));
     const access = await tx.meetingAccess(id.parse(meetingId));
     if (!access || !canManageMeeting(actor.actorId, access)) throw new AppError("NOT_FOUND", 404);
     if (!(await this.policy.check(actor, meetingId, access, "can_manage")))
@@ -126,6 +137,8 @@ export class WorkspaceService {
   async meeting(actor: Actor, meetingId: string) {
     await this.authorize(actor);
     return this.repository.read(actor, async (tx) => {
+      if (actor.operationGrantId)
+        await this.boundConnection(actor, await tx.calendarConnection(meetingId));
       const access = await tx.meetingAccess(id.parse(meetingId));
       if (!access || !canReadMeeting(actor.actorId, access)) throw new AppError("NOT_FOUND", 404);
       if (!(await this.policy.check(actor, meetingId, access, "can_view")))
@@ -171,9 +184,9 @@ export class WorkspaceService {
     });
   }
   async calendarMeeting(actor: Actor, body: unknown) {
-    if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
     await this.authorize(actor);
     const input = calendarMeeting.parse(body);
+    await this.boundConnection(actor, input.connectionId);
     if (input.joinUrl) {
       const url = new URL(input.joinUrl);
       if (url.protocol !== "https:" || url.username || url.password || url.hash)

@@ -19,6 +19,7 @@ Legacy applications and existing production data are preserved.
 - [Calendar connections](calendar-connections.md): encrypted OAuth, selection, disconnect and setup.
 - [Durable calendar snapshots](calendar-sync.md): resumable pages, complete publication and remaining orchestration.
 - [Calendar meeting bridge](calendar-meetings.md): private imports, preserved corrections and shared capture path.
+- [Background calendar authority](background-calendar.md): owner grants, logout continuity and scoped synchronization.
 
 ## Approved scope
 

@@ -37,6 +37,9 @@ function fixture(unknown = false) {
     refreshes = 0,
     active = true,
     clock = new Date("2026-10-12T10:00:00Z");
+  let sessionActive = true,
+    grantConnection: string | null = null,
+    grantActive = true;
   let pages: CalendarProvider["occurrences"] = async () => ({ items: [], nextCursor: null });
   const provider: CalendarProvider = {
     authorizationUrl: (state, challenge) =>
@@ -76,13 +79,21 @@ function fixture(unknown = false) {
   const service = new CalendarService(
     repository,
     {
-      async requireActive() {
-        if (!active) throw new AppError("FORBIDDEN", 403);
+      async requireActive(principal) {
+        if (
+          !active ||
+          (!principal.operationGrantId && !sessionActive) ||
+          (principal.operationGrantId && !grantActive)
+        )
+          throw new AppError("FORBIDDEN", 403);
       },
       async operation() {
-        return { connectionId: randomUUID() };
+        if (!active || !grantActive || !grantConnection) throw new AppError("FORBIDDEN", 403);
+        return { connectionId: grantConnection };
       },
-      async disableGrant() {},
+      async disableGrant() {
+        grantActive = false;
+      },
     },
     { google: provider },
     vault,
@@ -93,6 +104,15 @@ function fixture(unknown = false) {
     actor,
     service,
     start,
+    grant: (connectionId: string) => {
+      grantConnection = connectionId;
+    },
+    logout: () => {
+      sessionActive = false;
+    },
+    revokeGrant: () => {
+      grantActive = false;
+    },
     counters: () => ({ calls, refreshes }),
     pages: (value: CalendarProvider["occurrences"]) => {
       pages = value;
@@ -177,6 +197,84 @@ const event = {
   declined: false,
   joinUrl: "https://meet.google.com/abc-defg-hij",
 };
+test("background grant survives logout, periodically resumes sync, and revocation disables future work", async () => {
+  const f = await connected(),
+    grantId = randomUUID();
+  f.grant(f.connectionId);
+  const version = (await f.service.list(f.actor))[0]!.version;
+  await f.service.automation(f.actor, f.connectionId, "enable-background-key", {
+    enabled: true,
+    grantId,
+    consent: true,
+    expectedVersion: version,
+  });
+  f.pages(async () => ({ items: [event], nextCursor: null }));
+  f.logout();
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  const first = await repository.scoped(f.actor.workspaceId, (tx) => tx.latestSync(f.connectionId));
+  assert.equal(first!.operationGrantId, grantId);
+  assert.equal(first!.state, "complete");
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal(
+    (await repository.scoped(f.actor.workspaceId, (tx) => tx.latestSync(f.connectionId)))!.id,
+    first!.id,
+  );
+  f.advance(300001);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.notEqual(
+    (await repository.scoped(f.actor.workspaceId, (tx) => tx.latestSync(f.connectionId)))!.id,
+    first!.id,
+  );
+  f.revokeGrant();
+  f.advance(300001);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal(
+    (await repository.scoped(f.actor.workspaceId, (tx) => tx.get(f.connectionId)))!.automatic,
+    false,
+  );
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal(
+    (await repository.scoped(f.actor.workspaceId, (tx) => tx.get(f.connectionId)))!.grantId,
+    null,
+  );
+});
+test("automation requires owner consent and a grant bound to this connection", async () => {
+  const f = await connected(),
+    grantId = randomUUID(),
+    version = (await f.service.list(f.actor))[0]!.version;
+  f.grant(randomUUID());
+  await assert.rejects(
+    f.service.automation(f.actor, f.connectionId, "wrong-grant-key", {
+      enabled: true,
+      grantId,
+      consent: true,
+      expectedVersion: version,
+    }),
+    /FORBIDDEN/,
+  );
+  await assert.rejects(
+    f.service.automation(f.actor, f.connectionId, "no-consent-key", {
+      enabled: true,
+      grantId,
+      consent: false,
+      expectedVersion: version,
+    }),
+  );
+  f.grant(f.connectionId);
+  const enabled = await f.service.automation(f.actor, f.connectionId, "valid-grant-key", {
+    enabled: true,
+    grantId,
+    consent: true,
+    expectedVersion: version,
+  });
+  const disabled = await f.service.automation(f.actor, f.connectionId, "disable-grant-key", {
+    enabled: false,
+    expectedVersion: enabled.version,
+  });
+  assert.equal(disabled.automatic, false);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal((await f.service.list(f.actor))[0]!.automatic, false);
+});
 test("durable sync resumes committed pages, publishes once and preserves the prior complete snapshot", async () => {
   const f = await connected();
   f.pages(async () => ({ items: [event], nextCursor: null }));
