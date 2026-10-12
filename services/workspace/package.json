@@ -9,9 +9,13 @@
     "test:integration": "tsx --test test/integration/*.test.ts",
     "build": "tsc --outDir dist && node ../../scripts/build-service.mjs",
     "start": "node dist/main.mjs",
+    "events": "node dist/events.mjs",
     "migrate": "node dist/migrate.mjs"
   },
   "dependencies": {
+    "@visualsprint/messaging": "workspace:*",
+    "@azure/service-bus": "7.10.0",
+    "@azure/identity": "4.13.3",
     "@visualsprint/contracts": "workspace:*",
     "@visualsprint/platform": "workspace:*",
     "drizzle-orm": "0.45.4",

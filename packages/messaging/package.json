@@ -1,0 +1,21 @@
+{
+  "name": "@visualsprint/messaging",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "build": "tsc --outDir dist"
+  },
+  "dependencies": {
+    "@visualsprint/contracts": "workspace:*",
+    "@azure/service-bus": "7.10.0",
+    "@azure/identity": "4.13.3",
+    "zod": "4.1.12"
+  }
+}

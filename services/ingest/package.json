@@ -10,9 +10,13 @@
     "test:integration": "tsx --test test/integration/*.test.ts",
     "start": "node dist/main.mjs",
     "worker": "node dist/worker.mjs",
+    "events": "node dist/events.mjs",
     "migrate": "node dist/migrate.mjs"
   },
   "dependencies": {
+    "@visualsprint/messaging": "workspace:*",
+    "@azure/service-bus": "7.10.0",
+    "@azure/identity": "4.13.3",
     "@visualsprint/contracts": "workspace:*",
     "zod": "4.1.12",
     "@visualsprint/platform": "workspace:*",

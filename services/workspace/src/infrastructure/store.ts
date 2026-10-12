@@ -227,15 +227,13 @@ export class PostgresWorkspace implements WorkspaceRepository {
         return old.response as T;
       }
       const result = await work(repository);
-      await tx
-        .insert(schema.commands)
-        .values({
-          workspaceId: actor.workspaceId,
-          actorId: actor.actorId,
-          key,
-          fingerprint,
-          response: result,
-        });
+      await tx.insert(schema.commands).values({
+        workspaceId: actor.workspaceId,
+        actorId: actor.actorId,
+        key,
+        fingerprint,
+        response: result,
+      });
       return result;
     });
   }
@@ -271,6 +269,18 @@ export class PostgresWorkspace implements WorkspaceRepository {
       published += updated.length;
     }
     return published;
+  }
+  async eventWorkspaces() {
+    const result = await this.db.execute(
+      sql`SELECT workspace_id AS id FROM event_work_index WHERE next_at<=now() ORDER BY next_at,workspace_id LIMIT 20`,
+    );
+    return result.rows.map((row) => id.parse(row.id));
+  }
+  async deferEvents(workspaceId: string, seconds: number) {
+    id.parse(workspaceId);
+    await this.db.execute(
+      sql`UPDATE event_work_index SET next_at=now()+${seconds}*interval '1 second' WHERE workspace_id=${workspaceId}`,
+    );
   }
   consume<T>(
     event: DomainEvent,

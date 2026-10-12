@@ -72,9 +72,16 @@ an audience-specific signed actor/workspace/session assertion.
 HTTP listeners. Only composition tests import several service entry points. The Account and
 Workspace databases are separate; runtime source never reads another service's tables.
 
-The outbox publisher is a port with PostgreSQL claims/fencing; the Azure broker adapter and
-daemon arrive in a subsequent slice. OpenFGA and web UI wiring have their
-own acceptance gates. Passing the Workspace suite does not qualify a live meeting bot.
+The outbox publisher uses PostgreSQL claims/fencing and the Azure adapter described below.
+OpenFGA, web UI and live provider wiring have separate acceptance gates.
+Passing the Workspace suite does not qualify a live meeting bot.
+
+The Azure adapter is now available in `@visualsprint/messaging`; Workspace and Ingest have
+separate compiled `events.mjs` publisher processes. Configure `SERVICE_BUS_NAMESPACE` and
+optional `AZURE_CLIENT_ID`, then run the owning service's `events` script. Production uses
+managed identity; local opt-in Azure execution uses Azure CLI credentials. No SAS connection
+string or administrative provisioning is performed by application workers. Do not run these
+publishers against a paid/live namespace until the environment and roles are approved.
 
 To stop these local dependencies while keeping test data:
 

@@ -55,6 +55,52 @@ test("worker index contains only routing IDs and completed cleanup removes work"
     0,
   );
 });
+test("owning outbox retries a lost broker acknowledgement with the same event identity", async () => {
+  const f = fixture();
+  await f.request();
+  const deliveries: string[] = [];
+  await assert.rejects(
+    repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        deliveries.push(event.eventId);
+        assert.equal(JSON.stringify(event).includes("meet.google.com"), false);
+        throw new Error("BROKER_ACK_UNKNOWN");
+      },
+    }),
+    /BROKER_ACK_UNKNOWN/,
+  );
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish() {
+        throw new Error("LEASE_BROKEN");
+      },
+    }),
+    0,
+  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.workspace_id',$1,true)", [f.actor.workspaceId]);
+    await client.query("UPDATE outbox SET lease_until=now()-interval '1 second'");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        deliveries.push(event.eventId);
+      },
+    }),
+    1,
+  );
+  assert.equal(deliveries.length, 2);
+  assert.equal(deliveries[0], deliveries[1]);
+  assert.ok((await repository.eventWorkspaces()).includes(f.actor.workspaceId));
+});
 test("transcript paging is complete and a provider replay cannot replace a human revision", async () => {
   const f = fixture();
   const requested = await f.request();

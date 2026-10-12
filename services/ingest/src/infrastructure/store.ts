@@ -242,6 +242,48 @@ export class PostgresCapture implements CaptureRepository {
       workspaceId: id.parse(row.workspaceId),
     }));
   }
+  async eventWorkspaces() {
+    const result = await this.db.execute(
+      sql`SELECT workspace_id AS id FROM event_work_index WHERE next_at<=now() ORDER BY next_at,workspace_id LIMIT 20`,
+    );
+    return result.rows.map((row) => id.parse(row.id));
+  }
+  async deferEvents(workspaceId: string, seconds: number) {
+    id.parse(workspaceId);
+    await this.db.execute(
+      sql`UPDATE event_work_index SET next_at=now()+${seconds}*interval '1 second' WHERE workspace_id=${workspaceId}`,
+    );
+  }
+  async publish(workspaceId: string, publisher: { publish(event: DomainEvent): Promise<void> }) {
+    const token = randomUUID();
+    const rows = await this.db.transaction(async (db) => {
+      await db.execute(sql`SELECT set_config('app.workspace_id',${id.parse(workspaceId)},true)`);
+      return (
+        await db.execute(sql`WITH candidates AS (SELECT id FROM outbox WHERE published_at IS NULL AND (lease_until IS NULL OR lease_until<now()) ORDER BY created_at,id LIMIT 20 FOR UPDATE SKIP LOCKED)
+        UPDATE outbox SET lease_token=${token}::uuid,lease_until=now()+interval '30 seconds',attempts=attempts+1 FROM candidates WHERE outbox.id=candidates.id RETURNING outbox.id,outbox.event`)
+      ).rows;
+    });
+    let count = 0;
+    for (const row of rows) {
+      await publisher.publish(eventEnvelope.parse(row.event));
+      await this.db.transaction(async (db) => {
+        await db.execute(sql`SELECT set_config('app.workspace_id',${workspaceId},true)`);
+        const changed = await db
+          .update(schema.outbox)
+          .set({ publishedAt: new Date(), leaseUntil: null, leaseToken: null })
+          .where(
+            and(
+              eq(schema.outbox.id, id.parse(row.id)),
+              eq(schema.outbox.leaseToken, token),
+              sql`${schema.outbox.publishedAt} IS NULL`,
+            ),
+          )
+          .returning({ id: schema.outbox.id });
+        count += changed.length;
+      });
+    }
+    return count;
+  }
   async reschedule(workspaceId: string, requestId: string, seconds = 5) {
     const record = await this.scoped(workspaceId, (tx) => tx.load(requestId));
     if (

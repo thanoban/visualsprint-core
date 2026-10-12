@@ -16,7 +16,7 @@ const externalPackages = {
   },
 };
 const entryPoints = Object.fromEntries(
-  ["main", "migrate", "worker"]
+  ["main", "migrate", "worker", "events"]
     .filter((name) => existsSync(`src/${name}.ts`))
     .map((name) => [name, path.resolve(`src/${name}.ts`)]),
 );

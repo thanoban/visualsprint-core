@@ -141,3 +141,15 @@ including lost responses and cancellation races. Lookup exposes only owned reser
 maximum seconds, not meeting content. Late acknowledgements re-enqueue cleanup; logout cannot strand
 usage. Lease bookkeeping no longer advances user-facing aggregate versions.
 Verification: 33 fast tests, eight builds and 26 database/runtime/composition tests passed.
+
+## Event delivery implementation (F1 wiring in progress)
+
+Shared technical Azure SDK encoding/settlement, independent Workspace/Ingest outbox publishers,
+owning routing indexes and compiled event-worker entrypoints are implemented. Managed identity
+is the only production credential path. Unknown broker sends retry the same immutable event ID;
+consumer acknowledgement follows the owning inbox/effect commit. No content enters bus envelopes.
+
+Verification: 36 fast tests, nine package/service builds, 27 database/runtime/composition tests,
+four browser fixture tests and a clean production dependency audit. Azure transport is controlled
+in local tests; no live namespace has been contacted. See [event delivery record](messaging-implementation.md).
+F3–F6 and live provider/deployment qualification remain unfinished; this is not the final product.

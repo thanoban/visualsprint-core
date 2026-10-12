@@ -14,6 +14,7 @@ Legacy applications and existing production data are preserved.
 - [Actual implementation status](status.md): verified work and outstanding release gates.
 - [Local development](local-development.md): service runtime configuration and PostgreSQL tests.
 - [Capture implementation](capture-implementation.md): durable flow, configuration and open gates.
+- [Event delivery implementation](messaging-implementation.md): owning outboxes and Azure transport.
 
 ## Approved scope
 

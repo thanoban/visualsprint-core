@@ -18,14 +18,66 @@ const meeting = {
   blocked: false,
   createdAt: "2026-10-12T00:00:00Z",
 };
-async function fixture(page: Page) {
+async function fixture(page: Page, captureEnabled = false) {
   let version = 1;
+  const displayed = {
+    ...meeting,
+    joinUrl: captureEnabled ? "https://meet.google.com/abc-defg-hij" : null,
+  };
+  const captureId = "88888888-8888-4888-8888-888888888888";
+  let currentCapture:
+    | {
+        id: string;
+        state: string;
+        ready: boolean;
+        coverage: string;
+        transcriptHealth: string;
+        errorCode: string | null;
+        version: number;
+        stopRequested: boolean;
+      }
+    | undefined;
   const writes: { path: string; body: Record<string, unknown>; key: string | undefined }[] = [];
   await page.route("**/api/v3/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     expect(request.headers().authorization).toBe("Bearer controlled-browser-fixture");
     const path = url.pathname;
+    if (path.endsWith(`/meetings/${meetingId}/captures`) && request.method() === "GET")
+      return route.fulfill({ json: currentCapture ? [currentCapture] : [] });
+    if (path.endsWith(`/captures/${captureId}/transcript`))
+      return route.fulfill({
+        json: {
+          totalSegments: 1,
+          segments: [
+            {
+              id: "segment-1",
+              text: "<script>window.captureLeak = true</script>",
+              speakerLabel: "Founder",
+              startMs: 0,
+            },
+          ],
+        },
+      });
+    if (path.endsWith("/captures") && request.method() === "POST") {
+      expect(request.headers()["idempotency-key"]).toBeTruthy();
+      expect(request.postDataJSON()).toEqual({ meetingId, expectedMeetingVersion: version });
+      currentCapture = {
+        id: captureId,
+        state: "waiting_for_admission",
+        ready: true,
+        coverage: "unknown",
+        transcriptHealth: "unknown",
+        errorCode: null,
+        version: 1,
+        stopRequested: false,
+      };
+      return route.fulfill({ status: 202, json: currentCapture });
+    }
+    if (path.endsWith(`/captures/${captureId}/stop`)) {
+      currentCapture = { ...currentCapture!, state: "stopping", stopRequested: true, version: 2 };
+      return route.fulfill({ json: currentCapture });
+    }
     if (path === "/api/v3/me")
       return route.fulfill({
         json: {
@@ -43,7 +95,7 @@ async function fixture(page: Page) {
         key: request.headers()["idempotency-key"],
       });
       if (path.endsWith("/shares") || path.endsWith("/assignments") || path.endsWith(meetingId))
-        return route.fulfill({ json: { ...meeting, version: ++version } });
+        return route.fulfill({ json: { ...displayed, version: ++version } });
     }
     if (path.endsWith("/customers"))
       return route.fulfill({
@@ -58,8 +110,8 @@ async function fixture(page: Page) {
           : [{ id: projectId, workspaceId, ownerId, name: "Renewals", customerId, version: 1 }],
       });
     if (path.endsWith("/meetings"))
-      return route.fulfill({ json: path.includes(otherId) ? [] : [{ ...meeting, version }] });
-    if (path.endsWith(meetingId)) return route.fulfill({ json: { ...meeting, version } });
+      return route.fulfill({ json: path.includes(otherId) ? [] : [{ ...displayed, version }] });
+    if (path.endsWith(meetingId)) return route.fulfill({ json: { ...displayed, version } });
     if (path.endsWith("/members"))
       return route.fulfill({
         json: [{ userId: memberId, role: "member", active: true, version: 1 }],
@@ -88,11 +140,30 @@ test("project context, notes, assignment and explicit sharing are separate brows
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]?.body).toEqual({ projectId, confirmed: true, expectedVersion: 1 });
   await expect(page.getByRole("combobox", { name: "Workspace member", exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "Workspace member", exact: true }).selectOption(memberId);
+  await page
+    .getByRole("combobox", { name: "Workspace member", exact: true })
+    .selectOption(memberId);
   await page.getByRole("button", { name: "Grant access" }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]?.body).toEqual({ userId: memberId, expectedVersion: 2 });
   expect(writes.every((write) => Boolean(write.key))).toBe(true);
+});
+test("capture UI distinguishes admission, transcript coverage and unconfirmed stop", async ({
+  page,
+}) => {
+  await fixture(page, true);
+  await page.goto(`/w/${workspaceId}?meetingId=${meetingId}`);
+  await page.getByRole("button", { name: "Start capture", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Meeting capture" });
+  await expect(panel.getByRole("status")).toContainText("waiting for admission");
+  await expect(panel.getByRole("status")).toContainText("coverage: unknown");
+  await expect(panel).toContainText("<script>window.captureLeak = true</script>");
+  expect(
+    await page.evaluate(() => (window as unknown as Record<string, unknown>).captureLeak),
+  ).toBeUndefined();
+  await page.getByRole("button", { name: "Stop capture", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("stopping");
+  await expect(panel.getByRole("status")).not.toContainText("complete");
 });
 test("switching workspaces clears previous project and meeting context", async ({ page }) => {
   await fixture(page);
