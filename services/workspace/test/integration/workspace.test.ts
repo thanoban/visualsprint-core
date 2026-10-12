@@ -56,6 +56,56 @@ const service = new WorkspaceService(repository, memberships, {
     return checks.map(() => true);
   },
 });
+test("calendar projection keeps stable private meetings, user notes and title corrections across source revisions", async () => {
+  const input = {
+    connectionId: randomUUID(),
+    occurrenceId: randomUUID(),
+    sourceVersion: 1,
+    title: "Calendar title",
+    joinUrl: "https://meet.google.com/abc-defg-hij",
+    status: "confirmed",
+    allDay: false,
+    declined: false,
+    startsAt: "2026-10-12T10:00:00Z",
+    endsAt: "2026-10-12T11:00:00Z",
+  };
+  const first = await service.calendarMeeting(owner, input);
+  assert.equal((await service.calendarMeeting(owner, input)).id, first.id);
+  await assert.rejects(service.meeting(reader, first.id), /NOT_FOUND/);
+  const edited = await service.edit(owner, first.id, randomUUID(), {
+    expectedVersion: first.version,
+    title: "Owner correction",
+    notes: "Human evidence",
+  });
+  const changed = await service.calendarMeeting(owner, {
+    ...input,
+    sourceVersion: 2,
+    title: "Vendor rename",
+  });
+  assert.equal(changed.id, first.id);
+  assert.equal(changed.notes, edited.notes);
+  assert.equal(changed.title, "Owner correction");
+  assert.equal((await service.calendarMeeting(owner, input)).version, changed.version);
+  await assert.rejects(
+    service.calendarMeeting(owner, {
+      ...input,
+      sourceVersion: 2,
+      title: "Conflicting vendor revision",
+    }),
+    /IDEMPOTENCY_CONFLICT|SOURCE_REVISION_CONFLICT/,
+  );
+  await service.calendarMeeting(owner, { ...input, sourceVersion: 3, status: "cancelled" });
+  await assert.rejects(service.captureContext(owner, first.id), /OCCURRENCE_NOT_ELIGIBLE/);
+  assert.equal((await service.meeting(owner, first.id)).notes, "Human evidence");
+  const grant = randomUUID();
+  await assert.rejects(
+    service.calendarMeeting(
+      { ...owner, operationGrantId: grant, sessionId: `operation:${grant}` },
+      input,
+    ),
+    /FORBIDDEN/,
+  );
+});
 before(async () => {
   await migrate(migrationPool, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(runtimePool);

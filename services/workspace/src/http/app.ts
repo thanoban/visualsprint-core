@@ -7,6 +7,7 @@ export function workspaceApp(
   service: WorkspaceService,
   authenticate: (token: string) => Promise<Actor>,
   authenticateInternal?: (token: string) => Promise<Actor>,
+  authenticateCalendar?: (token: string) => Promise<Actor>,
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
@@ -15,6 +16,16 @@ export function workspaceApp(
   installErrorHandler(app);
   const actors = new WeakMap<object, Actor>();
   app.get("/health", async () => ({ status: "ok", service: "workspace" }));
+  app.post("/internal/workspaces/:workspaceId/calendar-meetings", async (request) => {
+    if (!authenticateCalendar) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+    const actor = await authenticateCalendar(bearer(request.headers.authorization));
+    if (
+      actor.operationGrantId ||
+      id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId
+    )
+      throw new AppError("FORBIDDEN", 403);
+    return service.calendarMeeting(actor, request.body);
+  });
   app.register(
     async (routes) => {
       const actorFor = async (request: {

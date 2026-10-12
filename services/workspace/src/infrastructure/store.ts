@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { and, asc, eq, exists, isNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type pg from "pg";
-import { eventEnvelope, id, type DomainEvent } from "@visualsprint/contracts";
+import { eventEnvelope, id, type DomainEvent, type CalendarMeeting } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import type {
   Customer,
@@ -23,6 +23,112 @@ class TransactionRepository implements WorkspaceTransaction {
     private readonly db: Transaction,
     private readonly actor: Actor,
   ) {}
+  async upsertCalendar(input: CalendarMeeting) {
+    await this.db.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.actor.workspaceId + ":calendar:" + input.connectionId + ":" + input.occurrenceId},0))`,
+    );
+    const condition = and(
+      eq(schema.calendarMeetings.workspaceId, this.actor.workspaceId),
+      eq(schema.calendarMeetings.connectionId, input.connectionId),
+      eq(schema.calendarMeetings.occurrenceId, input.occurrenceId),
+    );
+    const old = (
+      await this.db.select().from(schema.calendarMeetings).where(condition).for("update")
+    )[0];
+    const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    if (old && old.ownerId !== this.actor.actorId) throw new AppError("NOT_FOUND", 404);
+    let meeting = old
+      ? (
+          await this.db
+            .select()
+            .from(schema.meetings)
+            .where(
+              and(
+                eq(schema.meetings.id, old.meetingId),
+                eq(schema.meetings.ownerId, this.actor.actorId),
+                eq(schema.meetings.blocked, false),
+              ),
+            )
+            .for("update")
+        )[0]
+      : undefined;
+    if (old && (!meeting || meeting.ownerId !== this.actor.actorId))
+      throw new AppError("NOT_FOUND", 404);
+    if (old && input.sourceVersion <= old.sourceVersion) {
+      if (input.sourceVersion === old.sourceVersion && fingerprint !== old.fingerprint)
+        throw new AppError("SOURCE_REVISION_CONFLICT", 409);
+      return { meeting: meeting!, changed: false };
+    }
+    if (!old && (input.status === "cancelled" || input.allDay || input.declined))
+      throw new AppError("OCCURRENCE_NOT_ELIGIBLE", 409);
+    const title = input.title.slice(0, 200);
+    if (!meeting)
+      meeting = await this.createMeeting({
+        id: randomUUID(),
+        workspaceId: this.actor.workspaceId,
+        ownerId: this.actor.actorId,
+        title,
+        notes: "",
+        joinUrl: input.joinUrl,
+        version: 1,
+        blocked: false,
+      });
+    else
+      meeting = (
+        await this.db
+          .update(schema.meetings)
+          .set({
+            title: meeting.title === old!.lastTitle ? title : meeting.title,
+            joinUrl: input.joinUrl,
+            version: sql`${schema.meetings.version}+1`,
+          })
+          .where(
+            and(
+              eq(schema.meetings.id, meeting.id),
+              eq(schema.meetings.ownerId, this.actor.actorId),
+              eq(schema.meetings.blocked, false),
+            ),
+          )
+          .returning()
+      )[0]!;
+    const projection = {
+      workspaceId: this.actor.workspaceId,
+      connectionId: input.connectionId,
+      occurrenceId: input.occurrenceId,
+      meetingId: meeting.id,
+      ownerId: this.actor.actorId,
+      sourceVersion: input.sourceVersion,
+      fingerprint,
+      lastTitle: title,
+      status: input.status,
+      allDay: input.allDay,
+      declined: input.declined,
+      startsAt: input.startsAt ? new Date(input.startsAt) : null,
+      endsAt: input.endsAt ? new Date(input.endsAt) : null,
+    };
+    await this.db
+      .insert(schema.calendarMeetings)
+      .values(projection)
+      .onConflictDoUpdate({
+        target: [
+          schema.calendarMeetings.workspaceId,
+          schema.calendarMeetings.connectionId,
+          schema.calendarMeetings.occurrenceId,
+        ],
+        set: projection,
+      });
+    return { meeting, changed: true };
+  }
+  async calendarCaptureAllowed(meetingId: string) {
+    const row = (
+      await this.db
+        .select()
+        .from(schema.calendarMeetings)
+        .where(eq(schema.calendarMeetings.meetingId, meetingId))
+        .limit(1)
+    )[0];
+    return !row || (row.status !== "cancelled" && !row.allDay && !row.declined);
+  }
   async customer(customerId: string) {
     return (
       await this.db

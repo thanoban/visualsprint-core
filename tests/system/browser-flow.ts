@@ -57,7 +57,14 @@ export async function browserMeetingFlow(
     ).toBeVisible();
     await expect(calendars).toContainText("Automatic meeting capture is not enabled");
     await calendars.getByRole("button", { name: "Preview upcoming events", exact: true }).click();
-    await expect(calendars).toContainText("No events in this page");
+    await expect(calendars).toContainText("Calendar customer review");
+    await calendars
+      .getByRole("button", { name: "Load saved calendar events", exact: true })
+      .click();
+    await calendars.getByRole("button", { name: "Import private meeting", exact: true }).click();
+    await expect(
+      calendars.getByRole("link", { name: "Open imported meeting", exact: true }),
+    ).toBeVisible();
     await calendars.getByRole("button", { name: "Save calendar", exact: true }).click();
     await expect(
       calendars.getByRole("button", { name: "Save calendar", exact: true }),

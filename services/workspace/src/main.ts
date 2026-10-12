@@ -16,6 +16,7 @@ const config = z
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
     INGEST_PUBLIC_JWKS: z.string().optional(),
+    INTEGRATION_PUBLIC_JWKS: z.string().optional(),
     PORT: z.coerce.number().int().min(1).max(65535).default(4102),
   })
   .parse(process.env);
@@ -46,6 +47,12 @@ const internalIdentity = new ServiceIdentity(
     : {},
 );
 const pool = databasePool(config.WORKSPACE_DATABASE_URL);
+const calendarIdentity = new ServiceIdentity(
+  "workspace",
+  config.INTEGRATION_PUBLIC_JWKS
+    ? { integration: JSON.parse(config.INTEGRATION_PUBLIC_JWKS).keys }
+    : {},
+);
 await assertRuntimeRole(pool);
 const app = workspaceApp(
   new WorkspaceService(
@@ -59,6 +66,7 @@ const app = workspaceApp(
     if (hop.caller !== "ingest") throw new AppError("FORBIDDEN", 403);
     return hop.actor;
   },
+  async (token) => (await calendarIdentity.verify(token)).actor,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

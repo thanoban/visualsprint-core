@@ -1,6 +1,28 @@
 import { z } from "zod";
 
 export const id = z.string().uuid();
+export const calendarMeeting = z
+  .object({
+    connectionId: id,
+    occurrenceId: id,
+    sourceVersion: z.number().int().positive(),
+    title: z.string().trim().min(1).max(1000),
+    joinUrl: z.string().url().max(4096).nullable(),
+    status: z.enum(["confirmed", "tentative", "cancelled"]),
+    allDay: z.boolean(),
+    declined: z.boolean(),
+    startsAt: z.string().datetime().nullable(),
+    endsAt: z.string().datetime().nullable(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.status === "cancelled" ||
+      value.allDay ||
+      (value.startsAt !== null && value.endsAt !== null && value.endsAt > value.startsAt),
+    "Invalid occurrence interval",
+  );
+export type CalendarMeeting = z.infer<typeof calendarMeeting>;
 export const captureState = z.enum([
   "scheduled",
   "dispatching",

@@ -9,6 +9,25 @@ import {
   primaryKey,
 } from "drizzle-orm/pg-core";
 import type { DomainEvent } from "@visualsprint/contracts";
+export const calendarMeetings = pgTable(
+  "calendar_meetings",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    occurrenceId: uuid("occurrence_id").notNull(),
+    meetingId: uuid("meeting_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    sourceVersion: integer("source_version").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    lastTitle: text("last_title").notNull(),
+    status: text("status").notNull(),
+    allDay: boolean("all_day").notNull(),
+    declined: boolean("declined").notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }),
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.connectionId, t.occurrenceId] })],
+);
 
 const scoped = () => ({
   workspaceId: uuid("workspace_id").notNull(),

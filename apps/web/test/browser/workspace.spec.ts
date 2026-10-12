@@ -208,6 +208,31 @@ test("calendar selection and disconnect use versioned commands without claiming 
       path = new URL(request.url()).pathname;
     if (path.endsWith("/providers"))
       return route.fulfill({ json: { providers: ["google"], automaticCaptureReady: false } });
+    if (path.endsWith("/stored-occurrences"))
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id,
+              version: 1,
+              sourceKey: "source",
+              providerEventId: "provider",
+              title: "Saved customer review",
+              status: "confirmed",
+              startsAt: "2026-10-12T00:00:00Z",
+              endsAt: "2026-10-12T01:00:00Z",
+              allDay: false,
+              declined: false,
+              joinUrl: "https://meet.google.com/abc-defg-hij",
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+    if (path.endsWith(`/${id}/meetings`)) {
+      expect(request.postDataJSON()).toEqual({ occurrenceId: id, expectedVersion: 1 });
+      return route.fulfill({ json: { id: meetingId, version: 1 } });
+    }
     if (path.endsWith("/sync")) {
       if (request.method() === "POST") expect(request.headers()["idempotency-key"]).toBeTruthy();
       return route.fulfill({
@@ -256,6 +281,11 @@ test("calendar selection and disconnect use versioned commands without claiming 
   await expect(panel).toContainText("Automatic meeting capture is not enabled");
   await panel.getByRole("button", { name: "Preview upcoming events", exact: true }).click();
   await expect(panel).toContainText("No events in this page");
+  await panel.getByRole("button", { name: "Load saved calendar events", exact: true }).click();
+  await panel.getByRole("button", { name: "Import private meeting", exact: true }).click();
+  await expect(
+    panel.getByRole("link", { name: "Open imported meeting", exact: true }),
+  ).toHaveAttribute("href", `/w/${workspaceId}?meetingId=${meetingId}`);
   await panel.getByRole("button", { name: "Synchronize calendar", exact: true }).click();
   await expect(panel.getByRole("status").filter({ hasText: /Calendar sync:/ })).toContainText(
     "queued",

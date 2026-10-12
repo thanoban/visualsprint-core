@@ -325,6 +325,11 @@ function CalendarEditor({
               Refresh sync status
             </button>
           </Form>
+          <SavedCalendarMeetings
+            api={api}
+            path={`${path}/${item.id}`}
+            workspaceId={item.workspaceId}
+          />
         </>
       ) : null}
       {item.status !== "disconnected" ? (
@@ -347,6 +352,127 @@ function CalendarEditor({
         >
           <p>Remove stored credentials and prevent further calendar access.</p>
         </Form>
+      ) : null}
+    </article>
+  );
+}
+function SavedCalendarMeetings({
+  api,
+  path,
+  workspaceId,
+}: {
+  api: Api;
+  path: string;
+  workspaceId: string;
+}) {
+  const load = useCommand();
+  const schema = z.object({
+    items: occurrencePage.shape.items.element
+      .extend({ id: z.string().uuid(), version: z.number().int().positive() })
+      .array()
+      .max(100),
+    nextCursor: z.string().nullable(),
+  });
+  const [page, setPage] = useState<z.infer<typeof schema>>();
+  const fetchPage = (cursor?: string) =>
+    void load.run(
+      cursor ?? "first",
+      () =>
+        api.request(
+          `${path}/stored-occurrences${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`,
+          schema,
+        ),
+      setPage,
+    );
+  return (
+    <section aria-label="Saved calendar events">
+      <Form
+        title="Saved calendar events"
+        button="Load saved calendar events"
+        command={load}
+        submit={() => fetchPage()}
+      >
+        <p>
+          Import a synchronized event as a private, unassigned meeting. Capture requires a separate
+          command.
+        </p>
+      </Form>
+      {page?.items.map((event) => (
+        <CalendarMeetingImport
+          key={`${event.id}/${event.version}`}
+          api={api}
+          path={path}
+          workspaceId={workspaceId}
+          event={event}
+        />
+      ))}
+      {page && page.items.length === 0 ? (
+        <p>No synchronized events. Complete synchronization first.</p>
+      ) : null}
+      {page?.nextCursor ? (
+        <button onClick={() => fetchPage(page.nextCursor!)}>Next saved event page</button>
+      ) : null}
+    </section>
+  );
+}
+function CalendarMeetingImport({
+  api,
+  path,
+  workspaceId,
+  event,
+}: {
+  api: Api;
+  path: string;
+  workspaceId: string;
+  event: {
+    id: string;
+    version: number;
+    title: string;
+    status: string;
+    allDay: boolean;
+    declined: boolean;
+  };
+}) {
+  const command = useCommand();
+  const [meetingId, setMeetingId] = useState<string>();
+  const eligible = event.status !== "cancelled" && !event.allDay && !event.declined;
+  return (
+    <article>
+      <h4>{event.title}</h4>
+      {eligible ? (
+        <Form
+          title="Private meeting"
+          button="Import private meeting"
+          command={command}
+          submit={() =>
+            void command.run(
+              event,
+              (key) =>
+                api.request(
+                  `${path}/meetings`,
+                  z.object({ id: z.string().uuid(), version: z.number().int() }),
+                  {
+                    method: "POST",
+                    key,
+                    body: { occurrenceId: event.id, expectedVersion: event.version },
+                  },
+                ),
+              (result) => setMeetingId(result.id),
+            )
+          }
+        >
+          <p>
+            Existing imports keep the same meeting ID. This does not share access or start a bot.
+          </p>
+        </Form>
+      ) : (
+        <p>
+          {event.status}; {event.allDay ? "all day" : ""}
+          {event.declined ? "declined" : ""} — not eligible for a new meeting.
+        </p>
+      )}
+      {meetingId ? (
+        <a href={`/w/${workspaceId}?meetingId=${meetingId}`}>Open imported meeting</a>
       ) : null}
     </article>
   );

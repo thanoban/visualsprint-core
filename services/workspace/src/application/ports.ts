@@ -1,5 +1,5 @@
 import type { Actor } from "@visualsprint/platform";
-import type { DomainEvent } from "@visualsprint/contracts";
+import type { DomainEvent, CalendarMeeting } from "@visualsprint/contracts";
 import type { MeetingAccess } from "../domain/permissions.js";
 
 export interface MembershipAuthority {
@@ -41,6 +41,8 @@ export type Meeting = {
   createdAt: Date;
 };
 export interface WorkspaceTransaction {
+  upsertCalendar(input: CalendarMeeting): Promise<{ meeting: Meeting; changed: boolean }>;
+  calendarCaptureAllowed(meetingId: string): Promise<boolean>;
   customer(id: string): Promise<Customer | undefined>;
   project(id: string): Promise<Project | undefined>;
   meeting(id: string): Promise<Meeting | undefined>;

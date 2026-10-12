@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { id, eventEnvelope, type DomainEvent } from "@visualsprint/contracts";
+import { id, eventEnvelope, calendarMeeting, type DomainEvent } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import { canManageMeeting, canReadMeeting } from "../domain/permissions.js";
 import type {
@@ -158,6 +158,8 @@ export class WorkspaceService {
     await this.authorize(actor);
     return this.repository.read(actor, async (tx) => {
       await this.owner(tx, actor, id.parse(meetingId));
+      if (!(await tx.calendarCaptureAllowed(meetingId)))
+        throw new AppError("OCCURRENCE_NOT_ELIGIBLE", 409);
       const meeting = await tx.meeting(meetingId);
       if (!meeting?.joinUrl) throw new AppError("INVALID_LINK", 400);
       return {
@@ -167,6 +169,41 @@ export class WorkspaceService {
         version: meeting.version,
       };
     });
+  }
+  async calendarMeeting(actor: Actor, body: unknown) {
+    if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
+    await this.authorize(actor);
+    const input = calendarMeeting.parse(body);
+    if (input.joinUrl) {
+      const url = new URL(input.joinUrl);
+      if (url.protocol !== "https:" || url.username || url.password || url.hash)
+        throw new AppError("INVALID_LINK", 400);
+    }
+    const record = await this.command(
+      actor,
+      `calendar:${input.connectionId}:${input.occurrenceId}:${input.sourceVersion}`,
+      "calendar.meeting",
+      input,
+      async (tx) => {
+        const result = await tx.upsertCalendar(input);
+        if (result.changed)
+          await tx.emit(
+            this.event(
+              actor,
+              result.meeting.version === 1 ? "meeting.created.v1" : "meeting.updated.v1",
+              result.meeting.id,
+              result.meeting.version,
+              [
+                { kind: "meeting", id: result.meeting.id, revision: result.meeting.version },
+                { kind: "connection", id: input.connectionId },
+                { kind: "occurrence", id: input.occurrenceId, revision: input.sourceVersion },
+              ],
+            ),
+          );
+        return result.meeting;
+      },
+    );
+    return this.meeting(actor, record.id);
   }
   async evidenceContext(actor: Actor, meetingId: string) {
     const meeting = await this.meeting(actor, meetingId);

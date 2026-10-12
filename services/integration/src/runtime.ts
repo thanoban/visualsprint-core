@@ -7,11 +7,13 @@ import { AccountCalendars } from "./infrastructure/account-client.js";
 import { OAuthCalendarProvider } from "./infrastructure/oauth-calendar.js";
 import { AesTokenVault } from "./infrastructure/vault.js";
 import type { CalendarProviders } from "./application/ports.js";
+import { WorkspaceCalendars } from "./infrastructure/workspace-client.js";
 export async function runtime() {
   const config = z
     .object({
       INTEGRATION_DATABASE_URL: z.string().min(1),
       ACCOUNT_INTERNAL_URL: z.string().url(),
+      WORKSPACE_INTERNAL_URL: z.string().url().optional(),
       SERVICE_PRIVATE_JWK: z.string().min(1),
       SERVICE_KEY_ID: z.string().min(1),
       TOKEN_KEY_ID: z.string().min(1),
@@ -51,7 +53,16 @@ export async function runtime() {
   return {
     pool,
     repository,
-    service: new CalendarService(repository, authority, providers, vault),
+    service: new CalendarService(
+      repository,
+      authority,
+      providers,
+      vault,
+      () => new Date(),
+      config.WORKSPACE_INTERNAL_URL
+        ? new WorkspaceCalendars(config.WORKSPACE_INTERNAL_URL, key, config.SERVICE_KEY_ID)
+        : undefined,
+    ),
     providers,
   };
 }

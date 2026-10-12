@@ -218,3 +218,21 @@ fixtures and ten builds passed. Production dependency audit found no known vulne
 Tests verify exactly-once occurrence effects through the outbox, metadata-only events and
 complete-snapshot visibility across provider outages. These are controlled-provider local
 results, not live calendar or automatic meeting-join qualification.
+
+### Calendar → private meeting → capture bridge (F3 in progress)
+
+Saved occurrences can now be explicitly imported through Integration's signed Workspace
+adapter and dedicated internal endpoint. Workspace owns stable private source mappings;
+retries preserve IDs, human notes/title corrections and separate assignment/sharing. Source
+revision conflicts and cancelled capture requests are rejected. Browser controls open the
+imported meeting's existing capture panel. The real service composition also verifies quota
+admission for an imported meeting with a controlled provider.
+
+See [flow and setup](calendar-meetings.md). This is explicit import, not automatic scheduled
+capture. The unattended orchestration and remaining F4–F6 features are not completed.
+
+Verification: 53 fast tests, 37 database/runtime/composition tests, five browser fixtures
+and ten builds passed locally; production dependency audit found no known vulnerabilities.
+The composition verifies imported-meeting Ingest quota admission and browser import through
+real signed services/databases. Providers remain controlled; no paid cloud resource or live
+meeting was used. Prior checkpoint `94c334a` also passed GitHub Actions independently.

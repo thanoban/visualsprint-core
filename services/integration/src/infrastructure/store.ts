@@ -194,6 +194,13 @@ class CalendarTx implements ConnectionTx {
       nextCursor: result.rows.length > 100 ? String(result.rows[99]!.id) : null,
     };
   }
+  async storedOccurrence(connectionId: string, calendarId: string, occurrenceId: string) {
+    const result = await this.db
+      .execute(sql`SELECT o.id,o.version,o.body FROM calendar_occurrences o WHERE o.workspace_id=${this.workspaceId} AND o.connection_id=${connectionId} AND o.calendar_id=${calendarId} AND o.id=${id.parse(occurrenceId)}
+      AND o.generation=(SELECT id FROM calendar_syncs WHERE workspace_id=${this.workspaceId} AND connection_id=${connectionId} AND calendar_id=${calendarId} AND state='complete' ORDER BY sequence DESC LIMIT 1)`);
+    const row = result.rows[0];
+    return row ? { id: row.id, version: row.version, ...(row.body as object) } : undefined;
+  }
   async get(connectionId: string) {
     return (
       await this.db

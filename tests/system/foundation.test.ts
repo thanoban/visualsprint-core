@@ -28,6 +28,7 @@ import { PostgresCalendars } from "../../services/integration/src/infrastructure
 import { AccountCalendars } from "../../services/integration/src/infrastructure/account-client.js";
 import { AesTokenVault } from "../../services/integration/src/infrastructure/vault.js";
 import { integrationApp } from "../../services/integration/src/http/app.js";
+import { WorkspaceCalendars } from "../../services/integration/src/infrastructure/workspace-client.js";
 
 test("gateway, separate Account/Workspace databases and signed services enforce the complete private meeting flow", async () => {
   const accountMigration = databasePool(
@@ -132,6 +133,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     async (token) => (await identity.verify(token)).actor,
     async (token) =>
       (await new ServiceIdentity("workspace", { ingest: [ingestPublic] }).verify(token)).actor,
+    async (token) =>
+      (await new ServiceIdentity("workspace", { integration: [integrationPublic] }).verify(token))
+        .actor,
   );
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
   const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
@@ -166,11 +170,28 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
           return { id: "calendar-test", name: "Team calendar", primary: true };
         },
         async occurrences() {
-          return { items: [], nextCursor: null };
+          return {
+            items: [
+              {
+                sourceKey: "founder-calendar-call",
+                providerEventId: "event-1",
+                title: "Calendar customer review",
+                status: "confirmed" as const,
+                startsAt: new Date().toISOString(),
+                endsAt: new Date(Date.now() + 3600000).toISOString(),
+                allDay: false,
+                declined: false,
+                joinUrl: "https://meet.google.com/abc-defg-hij",
+              },
+            ],
+            nextCursor: null,
+          };
         },
       },
     },
     new AesTokenVault("test", { test: randomBytes(32).toString("base64") }),
+    () => new Date(),
+    new WorkspaceCalendars(workspaceUrl, integrationKey.privateKey, "integration-test"),
   );
   const integration = integrationApp(
     integrationService,
@@ -310,7 +331,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       ownerHeaders,
     );
     assert.equal(occurrences.status, 200);
-    assert.deepEqual(occurrences.data.items, []);
+    assert.equal((occurrences.data.items as unknown[]).length, 1);
     assert.equal(occurrences.data.nextCursor, null);
     const sync = await invoke("POST", `${base}/connections/calendar/${calendarRecord.id}/sync`, {
       ...ownerHeaders,
@@ -326,6 +347,57 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       ownerHeaders,
     );
     assert.equal(syncStatus.data.state, "complete");
+    const saved = await invoke(
+      "GET",
+      `${base}/connections/calendar/${calendarRecord.id}/stored-occurrences`,
+      ownerHeaders,
+    );
+    const savedEvent = (saved.data.items as { id: string; version: number }[])[0]!;
+    const imported = await invoke(
+      "POST",
+      `${base}/connections/calendar/${calendarRecord.id}/meetings`,
+      ownerHeaders,
+      { occurrenceId: savedEvent.id, expectedVersion: savedEvent.version },
+    );
+    assert.equal(imported.status, 200, JSON.stringify(imported.data));
+    const importedCapture = await invoke(
+      "POST",
+      `${base}/captures`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      {
+        meetingId: imported.data.id,
+        expectedMeetingVersion: imported.data.version,
+        maxDurationSeconds: 120,
+      },
+    );
+    assert.equal(importedCapture.status, 202, JSON.stringify(importedCapture.data));
+    assert.equal(importedCapture.data.ready, true);
+    assert.equal(
+      (
+        await invoke(
+          "POST",
+          `${base}/connections/calendar/${calendarRecord.id}/meetings`,
+          { ...ownerHeaders, "idempotency-key": randomUUID() },
+          {
+            occurrenceId: savedEvent.id,
+            expectedVersion: savedEvent.version,
+            title: "Injected title",
+          },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await invoke(
+          "POST",
+          `${base}/connections/calendar/${calendarRecord.id}/meetings`,
+          ownerHeaders,
+          { occurrenceId: savedEvent.id, expectedVersion: savedEvent.version },
+        )
+      ).data.id,
+      imported.data.id,
+    );
     assert.equal(
       (
         await invoke(
@@ -345,6 +417,10 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       { userId: member.data.userId, active: true, expectedVersion: 0 },
     );
     assert.equal(grant.status, 200);
+    assert.equal(
+      (await invoke("GET", `${base}/meetings/${imported.data.id}`, memberHeaders)).status,
+      404,
+    );
     assert.equal(
       (
         await invoke(

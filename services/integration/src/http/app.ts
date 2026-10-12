@@ -64,6 +64,14 @@ export function integrationApp(
             await service.synchronize(actor(request), connectionId(request.params), key(request)),
           ),
       );
+      routes.post("/:connectionId/meetings", (request) =>
+        service.importMeeting(
+          actor(request),
+          connectionId(request.params),
+          key(request),
+          request.body,
+        ),
+      );
       routes.get("/:connectionId/sync", (request) =>
         service.syncStatus(actor(request), connectionId(request.params)),
       );

@@ -1,6 +1,6 @@
 import { createHash, randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { id } from "@visualsprint/contracts";
+import { id, calendarMeeting } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import type { Connection, Tokens } from "../domain/records.js";
 import type {
@@ -9,6 +9,7 @@ import type {
   CalendarProviders,
   TokenVault,
   ConnectionTx,
+  CalendarMeetings,
 } from "./ports.js";
 const keySchema = z
   .string()
@@ -59,6 +60,7 @@ export class CalendarService {
     private readonly providers: CalendarProviders,
     private readonly vault: TokenVault,
     private readonly now: () => Date = () => new Date(),
+    private readonly meetings?: CalendarMeetings,
   ) {}
   private provider(name: Connection["provider"]) {
     const provider = this.providers[name];
@@ -371,6 +373,70 @@ export class CalendarService {
       if (record.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
       return tx.storedOccurrences(connectionId, record.calendarId, after);
     });
+  }
+  async importMeeting(actor: Actor, connectionId: string, key: string, body: unknown) {
+    await this.authorize(actor);
+    keySchema.parse(key);
+    if (!this.meetings) throw new AppError("CALENDAR_MEETINGS_NOT_CONFIGURED", 503);
+    const input = z
+      .object({ occurrenceId: id, expectedVersion: z.number().int().positive() })
+      .strict()
+      .parse(body);
+    const record = await this.repository.scoped(actor.workspaceId, async (tx) => {
+      const connection = await this.owned(tx, actor, connectionId);
+      if (connection.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
+      const stored = await tx.storedOccurrence(
+        connectionId,
+        connection.calendarId,
+        input.occurrenceId,
+      );
+      if (!stored) throw new AppError("NOT_FOUND", 404);
+      const value = z
+        .object({
+          id,
+          version: z.number().int().positive(),
+          title: z.string(),
+          joinUrl: z.string().nullable(),
+          status: z.enum(["confirmed", "tentative", "cancelled"]),
+          allDay: z.boolean(),
+          declined: z.boolean(),
+          startsAt: z.string().nullable(),
+          endsAt: z.string().nullable(),
+        })
+        .parse(stored);
+      if (value.version !== input.expectedVersion) throw new AppError("VERSION_CONFLICT", 409);
+      await tx.command(
+        actor,
+        key,
+        hash(JSON.stringify(["calendar.import", connectionId, input])),
+        async () => connection,
+      );
+      return calendarMeeting.parse({
+        connectionId,
+        occurrenceId: value.id,
+        sourceVersion: value.version,
+        title: value.title,
+        joinUrl: value.joinUrl,
+        status: value.status,
+        allDay: value.allDay,
+        declined: value.declined,
+        startsAt: value.startsAt,
+        endsAt: value.endsAt,
+      });
+    });
+    await this.authority.requireActive(actor);
+    const result = await this.meetings.upsert(actor, record);
+    await this.authorize(actor);
+    await this.repository.scoped(actor.workspaceId, async (tx) => {
+      const current = await this.owned(tx, actor, connectionId);
+      if (current.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
+      const source = z
+        .object({ version: z.number() })
+        .safeParse(await tx.storedOccurrence(connectionId, current.calendarId, input.occurrenceId));
+      if (!source.success || source.data.version !== input.expectedVersion)
+        throw new AppError("VERSION_CONFLICT", 409);
+    });
+    return result;
   }
   private async syncWork(record: Connection) {
     const job = await this.repository.scoped(record.workspaceId, (tx) =>
