@@ -6,6 +6,7 @@ import type { WorkspaceService } from "../application/workspace.js";
 export function workspaceApp(
   service: WorkspaceService,
   authenticate: (token: string) => Promise<Actor>,
+  authenticateInternal?: (token: string) => Promise<Actor>,
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
@@ -14,6 +15,34 @@ export function workspaceApp(
   installErrorHandler(app);
   const actors = new WeakMap<object, Actor>();
   app.get("/health", async () => ({ status: "ok", service: "workspace" }));
+  app.register(
+    async (routes) => {
+      const actorFor = async (request: {
+        headers: { authorization?: string | undefined };
+        params: unknown;
+      }) => {
+        if (!authenticateInternal) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+        const actor = await authenticateInternal(bearer(request.headers.authorization));
+        const params = request.params as { workspaceId: string; meetingId: string };
+        if (id.parse(params.workspaceId) !== actor.workspaceId)
+          throw new AppError("FORBIDDEN", 403);
+        return { actor, meetingId: id.parse(params.meetingId) };
+      };
+      routes.get("/meetings/:meetingId/capture-context", async (request) => {
+        const { actor, meetingId } = await actorFor(request);
+        return service.captureContext(actor, meetingId);
+      });
+      routes.get("/meetings/:meetingId/evidence-context", async (request) => {
+        const { actor, meetingId } = await actorFor(request);
+        return service.evidenceContext(actor, meetingId);
+      });
+      routes.get("/meetings/:meetingId/manage-context", async (request) => {
+        const { actor, meetingId } = await actorFor(request);
+        return service.manageContext(actor, meetingId);
+      });
+    },
+    { prefix: "/internal/workspaces/:workspaceId" },
+  );
   app.register(
     async (routes) => {
       routes.addHook("preHandler", async (request) => {

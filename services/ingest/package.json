@@ -6,9 +6,22 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "build": "tsc --outDir dist"
+    "build": "tsc --outDir dist && node ../../scripts/build-service.mjs",
+    "test:integration": "tsx --test test/integration/*.test.ts",
+    "start": "node dist/main.mjs",
+    "worker": "node dist/worker.mjs",
+    "migrate": "node dist/migrate.mjs"
   },
   "dependencies": {
-    "@visualsprint/contracts": "workspace:*"
+    "@visualsprint/contracts": "workspace:*",
+    "zod": "4.1.12",
+    "@visualsprint/platform": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "pg": "8.23.1",
+    "fastify": "5.12.5",
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
   }
 }

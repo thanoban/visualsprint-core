@@ -115,3 +115,21 @@ Next: complete durable capture endpoints/worker/webhooks, then calendar and inte
 Verification: 25 fast tests and 16 integration/runtime/composition tests. Capture dispatch is not
 yet wired to this ledger; no paid capture call has been made. Reservation maximum is four hours;
 the provider/worker must enforce that duration before this slice can qualify F2.
+
+## Durable capture implementation (F2 in progress)
+
+Ingest now owns PostgreSQL migrations/RLS, durable capture intents, per-attempt routing,
+signed raw-body ingress, revision-aware transcript storage, usage admission/cleanup and a
+separate compiled reconciliation worker. Gateway forwards provider callback bytes unchanged.
+The web meeting panel starts capture, displays state/health/coverage and requests a durable stop.
+Unknown provider creation never causes a blind second bot; stop acceptance is not departure.
+Late transcript drain and explicit partial coverage prevent false complete reports.
+
+Implementation and open gates: [capture record](capture-implementation.md). Local verification
+includes real multi-service authorized capture and signed transcript persistence with a controlled
+provider. No paid/live Recall call has been made. Calendar automation, intelligence, follow-through,
+Azure messaging/deployment and live Meet/Zoom/Teams qualification remain incomplete.
+
+Verified locally: 33 fast tests, eight package/service builds, 23 database/runtime/composition
+tests and three browser fixture tests passed. Dependency audit reports no known production
+vulnerabilities. These results do not establish live provider admission or production capacity.

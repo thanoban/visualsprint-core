@@ -1,6 +1,6 @@
 import { importJWK } from "jose";
 import { z } from "zod";
-import { assertRuntimeRole, databasePool, ServiceIdentity } from "@visualsprint/platform";
+import { AppError, assertRuntimeRole, databasePool, ServiceIdentity } from "@visualsprint/platform";
 import { WorkspaceService } from "./application/workspace.js";
 import { PostgresWorkspace } from "./infrastructure/store.js";
 import { AccountMemberships } from "./infrastructure/account-client.js";
@@ -15,6 +15,7 @@ const config = z
     SERVICE_PRIVATE_JWK: z.string().min(1),
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
+    INGEST_PUBLIC_JWKS: z.string().optional(),
     PORT: z.coerce.number().int().min(1).max(65535).default(4102),
   })
   .parse(process.env);
@@ -36,6 +37,14 @@ if (privateKey instanceof Uint8Array) throw new Error("INVALID_SERVICE_SIGNING_K
 const identity = new ServiceIdentity("workspace", {
   gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
 });
+const internalIdentity = new ServiceIdentity(
+  "workspace",
+  config.INGEST_PUBLIC_JWKS
+    ? {
+        ingest: JSON.parse(config.INGEST_PUBLIC_JWKS).keys,
+      }
+    : {},
+);
 const pool = databasePool(config.WORKSPACE_DATABASE_URL);
 await assertRuntimeRole(pool);
 const app = workspaceApp(
@@ -45,6 +54,11 @@ const app = workspaceApp(
     new AuthzPolicy(config.AUTHZ_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
   ),
   async (token) => (await identity.verify(token)).actor,
+  async (token) => {
+    const hop = await internalIdentity.verify(token);
+    if (hop.caller !== "ingest") throw new AppError("FORBIDDEN", 403);
+    return hop.actor;
+  },
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

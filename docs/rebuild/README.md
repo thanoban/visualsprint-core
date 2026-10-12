@@ -13,6 +13,7 @@ Legacy applications and existing production data are preserved.
 - [Azure setup and costs](operations.md): environments, provider setup, CI and cutover.
 - [Actual implementation status](status.md): verified work and outstanding release gates.
 - [Local development](local-development.md): service runtime configuration and PostgreSQL tests.
+- [Capture implementation](capture-implementation.md): durable flow, configuration and open gates.
 
 ## Approved scope
 

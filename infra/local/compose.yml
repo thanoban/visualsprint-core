@@ -1,5 +1,19 @@
 name: visualsprint-v3-local
 services:
+  ingest-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55436:5432"]
+    volumes:
+      - ingest-db:/var/lib/postgresql/data
+      - ./ingest-init.sql:/docker-entrypoint-initdb.d/001-ingest.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   authz-db:
     image: postgres:17.6-alpine
     environment:
@@ -30,7 +44,14 @@ services:
         condition: service_completed_successfully
     environment:
       PGPASSWORD: local-migration-only
-    command: ["psql", "--host=authz-db", "--username=vs_authz_migration", "--dbname=authz", "--file=/runtime-grants.sql"]
+    command:
+      [
+        "psql",
+        "--host=authz-db",
+        "--username=vs_authz_migration",
+        "--dbname=authz",
+        "--file=/runtime-grants.sql",
+      ]
     volumes:
       - ./authz-grants.sql:/runtime-grants.sql:ro
   openfga:
@@ -76,6 +97,7 @@ services:
       timeout: 3s
       retries: 30
 volumes:
+  ingest-db:
   authz-db:
   account-db:
   workspace-db:

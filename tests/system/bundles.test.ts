@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import { setTimeout as pause } from "node:timers/promises";
@@ -35,8 +36,23 @@ test("compiled Account, Workspace and gateway entry points boot as native Node s
   const accountPort = await freePort();
   const workspacePort = await freePort();
   const gatewayPort = await freePort();
+  const ingestPort = await freePort();
   const accountUrl = `http://127.0.0.1:${accountPort}`;
   const configurations = [
+    {
+      service: "ingest",
+      port: ingestPort,
+      env: {
+        INGEST_DATABASE_URL:
+          "postgres://vs_ingest_runtime:local-runtime-only@127.0.0.1:55436/ingest",
+        WORKSPACE_INTERNAL_URL: `http://127.0.0.1:${workspacePort}`,
+        ACCOUNT_INTERNAL_URL: accountUrl,
+        RECALL_API_KEY: "local-unused-provider-fixture",
+        RECALL_REGION: "us-west-2",
+        RECALL_WEBHOOK_URL: "https://capture.example/webhooks/v3/cells/dev-cell/recall",
+        RECALL_WEBHOOK_SECRETS: JSON.stringify([`whsec_${randomBytes(32).toString("base64")}`]),
+      },
+    },
     {
       service: "account",
       port: accountPort,

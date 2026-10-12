@@ -154,6 +154,31 @@ export class WorkspaceService {
       return record;
     });
   }
+  async captureContext(actor: Actor, meetingId: string) {
+    await this.authorize(actor);
+    return this.repository.read(actor, async (tx) => {
+      await this.owner(tx, actor, id.parse(meetingId));
+      const meeting = await tx.meeting(meetingId);
+      if (!meeting?.joinUrl) throw new AppError("INVALID_LINK", 400);
+      return {
+        meetingId: meeting.id,
+        ownerId: meeting.ownerId,
+        joinUrl: meeting.joinUrl,
+        version: meeting.version,
+      };
+    });
+  }
+  async evidenceContext(actor: Actor, meetingId: string) {
+    const meeting = await this.meeting(actor, meetingId);
+    return { meetingId: meeting.id, ownerId: meeting.ownerId, version: meeting.version };
+  }
+  async manageContext(actor: Actor, meetingId: string) {
+    await this.authorize(actor);
+    return this.repository.read(actor, async (tx) => {
+      await this.owner(tx, actor, id.parse(meetingId));
+      return { meetingId, ownerId: actor.actorId };
+    });
+  }
   async addProject(actor: Actor, key: string, body: unknown) {
     await this.authorize(actor);
     const input = createProject.parse(body);

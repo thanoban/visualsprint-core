@@ -8,6 +8,7 @@ import {
   type Project,
 } from "./api.js";
 import { Form, Feedback, useData, useCommand } from "./ui.js";
+import { CapturePanel } from "./capture-panel.js";
 
 export function MeetingPanel({
   api,
@@ -86,6 +87,13 @@ function MeetingEditor({
         <h2>{meeting.title}</h2>
         <span className="badge">{owner ? "You own this meeting" : "Shared with you"}</span>
       </div>
+      <CapturePanel
+        key={`${workspaceId}/${meeting.id}`}
+        api={api}
+        workspaceId={workspaceId}
+        meeting={meeting}
+        owner={owner}
+      />
       {!owner ? (
         <>
           <h3>Notes</h3>

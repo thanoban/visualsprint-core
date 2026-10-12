@@ -30,6 +30,52 @@ export function gatewayApp(
   installErrorHandler(app);
   const identities = new WeakMap<object, Identity>();
   app.get("/health", async () => ({ status: "ok", service: "gateway" }));
+  // Provider callbacks are authenticated by Ingest against the original bytes,
+  // not by a user's login. Routes resolve only operator-configured cell origins.
+  app.register(
+    async (routes) => {
+      routes.removeContentTypeParser("application/json");
+      routes.addContentTypeParser(
+        "application/json",
+        { parseAs: "buffer", bodyLimit: 1_000_000 },
+        (_request, body, done) => done(null, body),
+      );
+      routes.post("/cells/:cellId/recall", { bodyLimit: 1_000_000 }, async (request, reply) => {
+        const cellId = z
+          .string()
+          .regex(/^[a-z0-9-]{1,100}$/)
+          .parse((request.params as { cellId: string }).cellId);
+        const origin = config.cells[cellId]?.ingest;
+        if (!origin) throw new AppError("NOT_FOUND", 404);
+        const headers: Record<string, string> = { "content-type": "application/json" };
+        for (const name of ["webhook-id", "webhook-timestamp", "webhook-signature"]) {
+          const value = request.headers[name];
+          if (typeof value !== "string" || value.length > 2048)
+            throw new AppError("INVALID_WEBHOOK_SIGNATURE", 401);
+          headers[name] = value;
+        }
+        let response: Response;
+        try {
+          response = await transport(new URL("/webhooks/v3/recall", origin), {
+            method: "POST",
+            headers,
+            body: new Uint8Array(request.body as Buffer),
+            redirect: "error",
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {
+          throw new AppError("UPSTREAM_UNAVAILABLE", 503);
+        }
+        await response.body?.cancel();
+        if (response.status === 204) return reply.code(204).send();
+        const status = [400, 401, 404, 409, 413, 429].includes(response.status)
+          ? response.status
+          : 503;
+        throw new AppError("PROVIDER_CALLBACK_REJECTED", status);
+      });
+    },
+    { prefix: "/webhooks/v3" },
+  );
   async function upstream(
     url: URL,
     headers: Record<string, string>,

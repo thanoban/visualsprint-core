@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, createHmac } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { databasePool, migrate, ServiceIdentity, WorkOSVerifier } from "@visualsprint/platform";
@@ -18,6 +18,11 @@ import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
 import { bootstrap } from "../../services/authz/src/bootstrap.js";
 import { AuthzPolicy } from "../../services/workspace/src/infrastructure/policy-client.js";
 import { browserMeetingFlow } from "./browser-flow.js";
+import { CaptureService } from "../../services/ingest/src/application/capture-service.js";
+import { PostgresCapture } from "../../services/ingest/src/infrastructure/store.js";
+import { Authorities } from "../../services/ingest/src/infrastructure/authorities.js";
+import { RecallSignatures } from "../../services/ingest/src/infrastructure/webhook-signature.js";
+import { ingestApp } from "../../services/ingest/src/http/app.js";
 
 test("gateway, separate Account/Workspace databases and signed services enforce the complete private meeting flow", async () => {
   const accountMigration = databasePool(
@@ -45,6 +50,20 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     fileURLToPath(new URL("../../services/workspace/migrations", import.meta.url)),
   );
   const gatewayKey = await generateKeyPair("EdDSA");
+  const ingestMigration = databasePool(
+    "postgres://vs_ingest_migration:local-migration-only@127.0.0.1:55436/ingest",
+    1,
+  );
+  const ingestDb = databasePool(
+    "postgres://vs_ingest_runtime:local-runtime-only@127.0.0.1:55436/ingest",
+    2,
+  );
+  await migrate(
+    ingestMigration,
+    fileURLToPath(new URL("../../services/ingest/migrations", import.meta.url)),
+  );
+  const ingestKey = await generateKeyPair("EdDSA");
+  const ingestPublic = { ...(await exportJWK(ingestKey.publicKey)), kid: "ingest-test" };
   const workspaceKey = await generateKeyPair("EdDSA");
   const workosKey = await generateKeyPair("RS256");
   const gatewayPublic = { ...(await exportJWK(gatewayKey.publicKey)), kid: "gateway-test" };
@@ -62,7 +81,11 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   const account = accountApp(
     new AccountService(new PostgresAccount(accountDb), "dev-cell"),
     (token) => workos.verify(token),
-    new ServiceIdentity("account", { gateway: [gatewayPublic], workspace: [workspacePublic] }),
+    new ServiceIdentity("account", {
+      gateway: [gatewayPublic],
+      workspace: [workspacePublic],
+      ingest: [ingestPublic],
+    }),
   );
   const accountUrl = await account.listen({ host: "127.0.0.1", port: 0 });
   const identity = new ServiceIdentity("workspace", { gateway: [gatewayPublic] });
@@ -84,12 +107,50 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       new AuthzPolicy(authzUrl, workspaceKey.privateKey, "workspace-test"),
     ),
     async (token) => (await identity.verify(token)).actor,
+    async (token) =>
+      (await new ServiceIdentity("workspace", { ingest: [ingestPublic] }).verify(token)).actor,
   );
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
+  const authorities = new Authorities(
+    workspaceUrl,
+    accountUrl,
+    ingestKey.privateKey,
+    "ingest-test",
+  );
+  const captureRepository = new PostgresCapture(ingestDb);
+  const providerId = randomUUID();
+  const captureService = new CaptureService(
+    captureRepository,
+    authorities,
+    authorities,
+    {
+      async create() {
+        return { kind: "accepted", providerId };
+      },
+      async findAttempt() {
+        return { kind: "not_found" };
+      },
+      async inspect() {
+        return { providerId, status: "in_call_recording", occurredAt: new Date().toISOString() };
+      },
+      async leave() {
+        return "accepted";
+      },
+    },
+    "https://capture.example/webhooks/v3/cells/dev-cell/recall",
+  );
+  const webhookKey = randomBytes(32);
+  const ingestIdentity = new ServiceIdentity("ingest", { gateway: [gatewayPublic] });
+  const ingest = ingestApp(
+    captureService,
+    async (token) => (await ingestIdentity.verify(token)).actor,
+    new RecallSignatures([`whsec_${webhookKey.toString("base64")}`]),
+  );
+  const ingestUrl = await ingest.listen({ host: "127.0.0.1", port: 0 });
   const gateway = gatewayApp(
     {
       accountUrl,
-      cells: { "dev-cell": { workspace: workspaceUrl } },
+      cells: { "dev-cell": { workspace: workspaceUrl, ingest: ingestUrl } },
       privateKey: gatewayKey.privateKey,
       keyId: "gateway-test",
     },
@@ -190,6 +251,65 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     assert.equal(revoke.status, 200);
     assert.equal((await invoke("GET", meetingUrl, memberHeaders)).status, 403);
     const gatewayUrl = await gateway.listen({ host: "127.0.0.1", port: 0 });
+    const captureMeeting = await invoke(
+      "POST",
+      `${base}/meetings`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { title: "Live capture test", joinUrl: "https://meet.google.com/abc-defg-hij" },
+    );
+    assert.equal(captureMeeting.status, 201);
+    const capture = await invoke(
+      "POST",
+      `${base}/captures`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { meetingId: captureMeeting.data.id, expectedMeetingVersion: 1, maxDurationSeconds: 120 },
+    );
+    assert.equal(capture.status, 202, JSON.stringify(capture.data));
+    assert.equal(capture.data.ready, true);
+    await captureService.work(workspaceId, String(capture.data.id));
+    const record = (await captureRepository.scoped(workspaceId, (tx) =>
+      tx.load(String(capture.data.id)),
+    ))!;
+    const raw = JSON.stringify({
+      event: "transcript.data",
+      data: {
+        bot: { id: providerId, metadata: { attempt_id: record.attemptId } },
+        transcript: { id: randomUUID() },
+        data: {
+          words: [
+            { text: "Approved", start_timestamp: { relative: 0 }, end_timestamp: { relative: 1 } },
+          ],
+          participant: { id: 1, name: "Founder" },
+        },
+      },
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = createHmac("sha256", webhookKey)
+      .update(`composition_msg.${timestamp}.${raw}`)
+      .digest("base64");
+    const callback = await gateway.inject({
+      method: "POST",
+      url: "/webhooks/v3/cells/dev-cell/recall",
+      payload: raw,
+      headers: {
+        "content-type": "application/json",
+        "webhook-id": "composition_msg",
+        "webhook-timestamp": timestamp,
+        "webhook-signature": `v1,${signature}`,
+      },
+    });
+    assert.equal(callback.statusCode, 204, callback.body);
+    const evidence = await invoke(
+      "GET",
+      `${base}/captures/${capture.data.id}/transcript`,
+      ownerHeaders,
+    );
+    assert.equal(evidence.status, 200);
+    assert.equal((evidence.data.segments as { text: string }[])[0]?.text, "Approved");
+    assert.equal(
+      (await invoke("GET", `${base}/captures/${capture.data.id}/transcript`, memberHeaders)).status,
+      403,
+    );
     await browserMeetingFlow(
       gatewayUrl,
       ownerToken,
@@ -210,6 +330,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
   } finally {
     await gateway.close();
+    await ingest.close();
+    await ingestDb.end();
+    await ingestMigration.end();
     await workspace.close();
     await authz.close();
     await fetch(`http://127.0.0.1:4180/stores/${fga.storeId}`, {
