@@ -50,13 +50,41 @@ export function accountApp(
   app.register(
     async (routes) => {
       const actors = new WeakMap<object, Actor>();
+      const callers = new WeakMap<object, string>();
       routes.addHook("preHandler", async (request) => {
         const hop = await serviceIdentity.verify(bearer(request.headers.authorization));
         const workspaceId = id.parse((request.params as { workspaceId: string }).workspaceId);
         if (workspaceId !== hop.actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, hop.actor);
+        callers.set(request, hop.caller);
+        const capability = request.routeOptions.url?.split("/").at(-1);
+        const allowed =
+          capability === "membership"
+            ? [
+                "gateway",
+                "workspace",
+                "ingest",
+                "intelligence",
+                "integration",
+                "workflow",
+                "reporting",
+                "notification",
+              ]
+            : ["reserve", "settle", "release"].includes(capability ?? "")
+              ? ["ingest"]
+              : ["gateway"];
+        if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.post("/usage/reserve", (request) =>
+        service.reserveCapture(actor(request), request.body),
+      );
+      routes.post("/usage/settle", (request) =>
+        service.settleCapture(actor(request), request.body),
+      );
+      routes.post("/usage/release", (request) =>
+        service.settleCapture(actor(request), request.body, true),
+      );
       routes.get("/directory", (request) => service.directory(actor(request)));
       routes.post("/membership", (request) =>
         service.checkMember(

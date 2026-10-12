@@ -100,3 +100,18 @@ database/runtime/composition tests. Browser identity fixtures have their own tes
 the production entry point. Actual hosted WorkOS consent/session refresh still requires configured
 identity settings. F1 still needs Azure messaging/telemetry and deployment qualification.
 Next: complete durable capture endpoints/worker/webhooks, then calendar and intelligence slices.
+
+## Capture usage admission slice (F2 prerequisite)
+
+- Account-owned entitlements, capture reservations and append-only measured usage ledger.
+- Initial server-owned limits: five active captures and 360,000 seconds per UTC start month.
+- Workspace-wide transaction locks enforce concurrent admission; retries reserve/charge once.
+- A provider-ambiguous attempt holds capacity until reconciled. Age alone never releases a reservation.
+- Measured overruns remain recorded; exhausted budget blocks future admission instead of hiding costs.
+- Signed Ingest alone can reserve/settle/release. Cleanup can finish after logout or membership loss.
+- Service capabilities prevent a Workspace signing key from changing Account memberships.
+- Runtime cannot modify entitlement limits or update/delete ledger rows; forced RLS protects all tables.
+
+Verification: 25 fast tests and 16 integration/runtime/composition tests. Capture dispatch is not
+yet wired to this ledger; no paid capture call has been made. Reservation maximum is four hours;
+the provider/worker must enforce that duration before this slice can qualify F2.

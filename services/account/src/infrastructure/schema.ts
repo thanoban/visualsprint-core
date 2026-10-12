@@ -7,7 +7,42 @@ import {
   timestamp,
   jsonb,
   primaryKey,
+  date,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+export const entitlements = pgTable("entitlements", {
+  workspaceId: uuid("workspace_id").primaryKey(),
+  maxConcurrent: integer("max_concurrent").notNull().default(5),
+  monthlySeconds: integer("monthly_seconds").notNull().default(360000),
+});
+export const captureReservations = pgTable(
+  "capture_reservations",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    requestId: uuid("request_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    maxSeconds: integer("max_seconds").notNull(),
+    period: date("period")
+      .notNull()
+      .default(sql`date_trunc('month',now() AT TIME ZONE 'UTC')::date`),
+    state: text("state").$type<"held" | "settled" | "released">().notNull().default("held"),
+    chargedSeconds: integer("charged_seconds"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    version: integer("version").notNull().default(1),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.requestId] })],
+);
+export const usageLedger = pgTable(
+  "usage_ledger",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    requestId: uuid("request_id").notNull(),
+    period: date("period").notNull(),
+    seconds: integer("seconds").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.requestId] })],
+);
 export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
   subject: text("subject").notNull().unique(),

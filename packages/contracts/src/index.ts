@@ -33,6 +33,9 @@ export const captureError = z.enum([
 export const eventTypes = [
   "workspace.created.v1",
   "membership.changed.v1",
+  "usage.reserved.v1",
+  "usage.settled.v1",
+  "usage.released.v1",
   "customer.created.v1",
   "project.created.v1",
   "meeting.updated.v1",

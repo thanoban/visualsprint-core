@@ -59,6 +59,107 @@ class AccountTx implements AccountTransaction {
     if (!this.workspaceId) throw new Error("WORKSPACE_CONTEXT_REQUIRED");
     return this.workspaceId;
   }
+  async lockUsage() {
+    await this.db.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.scope() + ":usage"},0))`,
+    );
+    // Limits come from server-owned defaults; the runtime cannot update entitlements.
+    // Insert only this column: runtime has no INSERT/UPDATE privilege on limit fields.
+    await this.db.execute(
+      sql`INSERT INTO entitlements(workspace_id) VALUES(${this.scope()}) ON CONFLICT DO NOTHING`,
+    );
+  }
+  async usage() {
+    const entitlement = (
+      await this.db
+        .select()
+        .from(schema.entitlements)
+        .where(eq(schema.entitlements.workspaceId, this.scope()))
+    )[0];
+    if (!entitlement) throw new AppError("ENTITLEMENT_UNAVAILABLE", 503);
+    const active = (
+      await this.db
+        .select({
+          count: sql<number>`count(*)`.mapWith(Number),
+          seconds:
+            sql<number>`coalesce(sum(case when period=date_trunc('month',now() AT TIME ZONE 'UTC')::date then max_seconds else 0 end),0)`.mapWith(
+              Number,
+            ),
+        })
+        .from(schema.captureReservations)
+        .where(
+          and(
+            eq(schema.captureReservations.workspaceId, this.scope()),
+            eq(schema.captureReservations.state, "held"),
+          ),
+        )
+    )[0]!;
+    const consumed = (
+      await this.db
+        .select({ seconds: sql<number>`coalesce(sum(seconds),0)`.mapWith(Number) })
+        .from(schema.usageLedger)
+        .where(
+          and(
+            eq(schema.usageLedger.workspaceId, this.scope()),
+            sql`period=date_trunc('month',now() AT TIME ZONE 'UTC')::date`,
+          ),
+        )
+    )[0]!;
+    return {
+      maxConcurrent: entitlement.maxConcurrent,
+      monthlySeconds: entitlement.monthlySeconds,
+      active: active.count,
+      reservedSeconds: active.seconds,
+      consumedSeconds: consumed.seconds,
+    };
+  }
+  async reservation(requestId: string) {
+    return (
+      await this.db
+        .select()
+        .from(schema.captureReservations)
+        .where(
+          and(
+            eq(schema.captureReservations.workspaceId, this.scope()),
+            eq(schema.captureReservations.requestId, requestId),
+          ),
+        )
+        .limit(1)
+    )[0];
+  }
+  async reserve(requestId: string, maxSeconds: number) {
+    return (
+      await this.db
+        .insert(schema.captureReservations)
+        .values({ workspaceId: this.scope(), requestId, ownerId: this.actorId, maxSeconds })
+        .returning()
+    )[0]!;
+  }
+  async finishReservation(requestId: string, state: "settled" | "released", seconds: number) {
+    const reservation = (
+      await this.db
+        .update(schema.captureReservations)
+        .set({
+          state,
+          chargedSeconds: seconds,
+          version: sql`${schema.captureReservations.version}+1`,
+        })
+        .where(
+          and(
+            eq(schema.captureReservations.workspaceId, this.scope()),
+            eq(schema.captureReservations.requestId, requestId),
+            eq(schema.captureReservations.state, "held"),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!reservation) throw new AppError("RESERVATION_CONFLICT", 409);
+    if (state === "settled")
+      await this.db
+        .insert(schema.usageLedger)
+        .values({ workspaceId: this.scope(), requestId, period: reservation.period, seconds });
+    return reservation;
+  }
   async membership(userId: string) {
     return (
       await this.db

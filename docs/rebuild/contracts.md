@@ -89,3 +89,18 @@ Workspace deletion barrier → owning-service deletion requests → purge/acknow
 provider cleanup verification → completion. Include vectors, chat derivatives and exports.
 Backups have separate disclosed retention; restore applies tombstones before opening reads.
 Exports reauthorize all source content and retrieval; private blobs use expiring authorized links.
+# Account capture usage operations
+
+Internal signed Ingest operations (not public gateway routes):
+
+- `POST /internal/workspaces/{workspaceId}/usage/reserve`: `{requestId,maxSeconds}`; maximum 14,400 seconds.
+- `POST .../usage/settle`: `{requestId,seconds}`; measured consumption, idempotent on identical result.
+- `POST .../usage/release`: `{requestId,confirmedNoCapture:true}`; requires reconciled no-capture evidence.
+
+Tenant/request IDs identify one reservation. A changed owner or maximum is a conflict. Held
+reservations count against concurrency until confirmed departure/no-capture reconciliation;
+there is no automatic time-based release. Usage belongs to the UTC month when admission began.
+Settlement records actual overruns without erasing spend and atomically appends the usage ledger
+and metadata outbox event. Cleanup remains permitted to the signed owning Ingest service after
+user session revocation; this capability grants no transcript or meeting access. Entitlement
+changes are operator/billing-owned, not accepted from browser input or capture commands.

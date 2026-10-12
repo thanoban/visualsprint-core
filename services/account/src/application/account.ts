@@ -4,6 +4,7 @@ import { id, eventEnvelope } from "@visualsprint/contracts";
 import { AppError, type Actor, type Identity } from "@visualsprint/platform";
 import { mayChangeMembership } from "../domain/membership.js";
 import type { AccountRepository, AccountTransaction } from "./ports.js";
+import { reservationFailure } from "../domain/usage.js";
 
 const keySchema = z
   .string()
@@ -132,5 +133,79 @@ export class AccountService {
       await tx.revokeSession(identity.sessionId);
       return { revoked: true };
     });
+  }
+  reserveCapture(actor: Actor, body: unknown) {
+    const input = z
+      .object({ requestId: id, maxSeconds: z.number().int().min(1).max(14400) })
+      .strict()
+      .parse(body);
+    return this.repository.actor(actor, async (tx) => {
+      await this.access(tx, actor);
+      await tx.lockUsage();
+      const old = await tx.reservation(input.requestId);
+      if (old) {
+        if (old.ownerId !== actor.actorId || old.maxSeconds !== input.maxSeconds)
+          throw new AppError("IDEMPOTENCY_CONFLICT", 409);
+        return old;
+      }
+      const failure = reservationFailure(await tx.usage(), input.maxSeconds);
+      if (failure) throw new AppError(failure, failure === "CONCURRENCY_LIMIT" ? 429 : 402);
+      const reservation = await tx.reserve(input.requestId, input.maxSeconds);
+      await this.usageEvent(tx, actor, "usage.reserved.v1", input.requestId, reservation.version);
+      return reservation;
+    });
+  }
+  settleCapture(actor: Actor, body: unknown, release = false) {
+    const input = release
+      ? z
+          .object({ requestId: id, confirmedNoCapture: z.literal(true) })
+          .strict()
+          .parse(body)
+      : z
+          .object({ requestId: id, seconds: z.number().int().min(0).max(604800) })
+          .strict()
+          .parse(body);
+    const seconds = "seconds" in input ? input.seconds : 0;
+    const state = release ? "released" : "settled";
+    return this.repository.actor(actor, async (tx) => {
+      // Only signed Ingest calls reach this method. Cleanup must still work after
+      // the user logs out or loses membership; it never grants data access.
+      await tx.lockUsage();
+      const old = await tx.reservation(input.requestId);
+      if (!old || old.ownerId !== actor.actorId) throw new AppError("NOT_FOUND", 404);
+      if (old.state === state && old.chargedSeconds === seconds) return old;
+      if (old.state !== "held") throw new AppError("RESERVATION_CONFLICT", 409);
+      const reservation = await tx.finishReservation(input.requestId, state, seconds);
+      await this.usageEvent(
+        tx,
+        actor,
+        release ? "usage.released.v1" : "usage.settled.v1",
+        input.requestId,
+        reservation.version,
+      );
+      return reservation;
+    });
+  }
+  private usageEvent(
+    tx: AccountTransaction,
+    actor: Actor,
+    type: "usage.reserved.v1" | "usage.settled.v1" | "usage.released.v1",
+    requestId: string,
+    version: number,
+  ) {
+    return tx.emit(
+      eventEnvelope.parse({
+        eventId: randomUUID(),
+        type,
+        schemaVersion: 1,
+        workspaceId: actor.workspaceId,
+        aggregateId: requestId,
+        aggregateVersion: version,
+        occurredAt: new Date().toISOString(),
+        traceId: randomBytes(16).toString("hex"),
+        actorId: actor.actorId,
+        references: [{ kind: "capture", id: requestId }],
+      }),
+    );
   }
 }
