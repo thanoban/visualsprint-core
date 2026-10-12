@@ -1,0 +1,5 @@
+{
+  "name":"@visualsprint/gateway","version":"0.1.0","private":true,"type":"module",
+  "scripts":{"typecheck":"tsc --noEmit","test":"tsx --test test/*.test.ts","build":"tsc --outDir dist","start":"tsx src/main.ts"},
+  "dependencies":{"@visualsprint/contracts":"workspace:*","@visualsprint/platform":"workspace:*","fastify":"5.12.5","jose":"6.2.12","zod":"4.1.12"}
+}

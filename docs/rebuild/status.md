@@ -25,8 +25,8 @@ The code foundation is published as a separate checkpoint following those checks
 
 ## Not yet implemented / not represented as ready
 
-WorkOS login/refresh and Account membership runtime, OpenFGA runtime, Azure broker adapter/daemon,
-API gateway, capture HTTP endpoints, webhook
+WorkOS browser login/refresh, OpenFGA runtime, Azure broker adapter/daemon,
+capture HTTP endpoints, webhook
 signature verification/consumption, provider reconciliation/stop worker, calendar sync, web UI,
 AI pipeline, saved chat, approved connectors, notifications, exports/deletion and Azure Bicep.
 Live and visual Flows remain later scope.
@@ -49,6 +49,20 @@ Verification: 18 fast tests, all four packages typechecked/compiled, and eight r
 PostgreSQL/HTTP integration tests passed locally on 2026-10-12. Account is a controlled
 membership provider in this suite; actual inter-service Account wiring is the next slice.
 
-F1 remains open until Account/WorkOS login, OpenFGA, gateway, web UI and broker wiring pass together.
-Next slice: Account identity/membership/cell directory and gateway; then F2
+## Account and gateway slice (F1 in progress)
+
+- Separate physical local Account PostgreSQL server, private logical database and migration/runtime roles.
+- Verified WorkOS identity mapping, idempotent workspace creation, server-controlled cell assignment,
+  versioned membership changes, immediate membership barriers and local session revocation.
+- Account endpoints require both a gateway proof and verified user token; internal requests verify
+  caller-specific signing keys plus the delegated actor/session/workspace.
+- Stateless gateway resolves identities/membership/cell through Account and routes to configured origins.
+- Workspace reads current Account membership over signed HTTP; it fails closed on authority outages.
+- Composition tests exercise the real gateway and services over HTTP with both real databases.
+
+WorkOS signatures use a controlled RSA/JWKS provider in tests. Live WorkOS login and refresh remain
+external qualification. F1 remains open until OpenFGA, web UI and broker wiring pass together.
+Verification: 20 fast tests, six compiled/typechecked packages, two Account database tests,
+eight Workspace database/HTTP tests and one multi-service HTTP composition test passed.
+Next slice: OpenFGA authorization runtime and React private workspace UI; then F2
 durable signed capture ingress and UI. Do not expose the create adapter directly as a public endpoint.

@@ -35,8 +35,20 @@ The verifier requires signature, issuer, audience, expiry, session ID and matchi
 It returns 503 for unavailable signing-key infrastructure and 401 for invalid credentials.
 [WorkOS verification guidance](https://workos.com/blog/verify-workos-access-tokens-in-your-own-api).
 
+Account runs on a separate PostgreSQL server on loopback port 55434. Its service owns identity
+mapping, membership, session revocation and the cell directory. Start Account with its service
+`.env.example` variables, then Workspace, then gateway. The gateway resolves destinations from
+the Account cell ID and operator-configured `CELL_ROUTES`; clients cannot supply a service URL.
+Gateway and Account verify the WorkOS access token independently, and gateway-to-Account
+requests additionally require a short signed identity assertion. Other service requests carry
+an audience-specific signed actor/workspace/session assertion.
+
+`pnpm test:integration` runs both owning-service suites and a composition suite through real
+HTTP listeners. Only composition tests import several service entry points. The Account and
+Workspace databases are separate; runtime source never reads another service's tables.
+
 The outbox publisher is a port with PostgreSQL claims/fencing; the Azure broker adapter and
-daemon arrive in a subsequent slice. OpenFGA, Account, gateway and web UI wiring have their
+daemon arrive in a subsequent slice. OpenFGA and web UI wiring have their
 own acceptance gates. Passing the Workspace suite does not qualify a live meeting bot.
 
 To stop these local dependencies while keeping test data:

@@ -13,6 +13,7 @@ export class AccountMemberships implements MembershipAuthority {
         body: JSON.stringify({userId}), redirect: "error", signal: AbortSignal.timeout(3000),
       });
     } catch { throw new AppError("ACCOUNT_UNAVAILABLE", 503); }
+    if (response.status === 401) throw new AppError("UNAUTHENTICATED", 401);
     if (response.status === 403 || response.status === 404) throw new AppError("FORBIDDEN", 403);
     if (!response.ok) throw new AppError("ACCOUNT_UNAVAILABLE", 503);
     let allowed = false;

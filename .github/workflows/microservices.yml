@@ -1,10 +1,10 @@
 name: Microservices rebuild
 on:
   pull_request:
-    paths: ["packages/**", "services/**", "infra/local/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+    paths: ["packages/**", "services/**", "tests/**", "infra/local/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
   push:
     branches: [main, codex/zedex-web-rebuild]
-    paths: ["packages/**", "services/**", "infra/local/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+    paths: ["packages/**", "services/**", "tests/**", "infra/local/**", "scripts/check-boundaries.mjs", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
   workflow_dispatch:
 permissions:
   contents: read

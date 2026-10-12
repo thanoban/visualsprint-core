@@ -49,7 +49,7 @@ export class ServiceIdentity {
   constructor(private readonly audience: string, publicKeysByIssuer: Record<string, JWK[]>) {
     this.issuers = new Map(Object.entries(publicKeysByIssuer).map(([issuer, keys]) => [issuer, createLocalJWKSet({ keys })]));
   }
-  async verify(token: string): Promise<{ caller: string; actor: Actor }> {
+  private async payload(token: string) {
     try {
       // Unverified issuer selects a pinned key set; verification establishes trust.
       const issuer = decodeJwt(token).iss;
@@ -57,11 +57,21 @@ export class ServiceIdentity {
       if (!issuer || !keys) throw new Error("UNKNOWN_CALLER");
       const { payload } = await jwtVerify(token, keys, {
         audience: this.audience, issuer, algorithms: ["EdDSA"],
-        requiredClaims: ["exp", "iat", "jti", "sub", "actor"], maxTokenAge: "30s",
+        requiredClaims: ["exp", "iat", "jti", "sub"], maxTokenAge: "30s",
       });
       if (payload.sub !== payload.iss || !payload.iss) throw new Error("INVALID_CALLER");
-      return { caller: payload.iss, actor: delegatedActor.parse(payload.actor) };
+      return payload;
     } catch { throw new AppError("UNAUTHENTICATED_SERVICE", 401); }
+  }
+  async verify(token: string): Promise<{caller: string; actor: Actor}> {
+    const payload = await this.payload(token);
+    try { return {caller: payload.iss!, actor: delegatedActor.parse(payload.actor)}; }
+    catch {throw new AppError("UNAUTHENTICATED_SERVICE", 401);}
+  }
+  async verifyIdentity(token: string): Promise<{caller: string; identity: Identity}> {
+    const payload = await this.payload(token);
+    try { return {caller: payload.iss!, identity: z.object({subject: z.string().regex(/^user_[A-Za-z0-9]+$/), sessionId: z.string().min(1).max(200)}).strict().parse(payload.identity)}; }
+    catch {throw new AppError("UNAUTHENTICATED_SERVICE", 401);}
   }
 }
 
@@ -71,5 +81,11 @@ export function serviceToken(input: {
   return new SignJWT({ actor: delegatedActor.parse(input.actor) })
     .setProtectedHeader({ alg: "EdDSA", kid: input.keyId }).setSubject(input.caller)
     .setIssuer(input.caller).setAudience(input.audience).setJti(randomUUID())
+    .setIssuedAt().setExpirationTime("30s").sign(input.privateKey);
+}
+
+export function identityToken(input: {caller: string; audience: string; identity: Identity; keyId: string; privateKey: CryptoKey}): Promise<string> {
+  return new SignJWT({identity: input.identity}).setProtectedHeader({alg: "EdDSA", kid: input.keyId})
+    .setSubject(input.caller).setIssuer(input.caller).setAudience(input.audience).setJti(randomUUID())
     .setIssuedAt().setExpirationTime("30s").sign(input.privateKey);
 }

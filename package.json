@@ -6,15 +6,17 @@
   "packageManager": "pnpm@11.1.3",
   "engines": { "node": ">=22.19.0" },
   "scripts": {
-    "check": "pnpm boundaries && pnpm typecheck && pnpm test",
+    "check": "pnpm boundaries && pnpm typecheck && pnpm test && tsc -p tests/tsconfig.json --noEmit",
     "boundaries": "node scripts/check-boundaries.mjs",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "build": "turbo run build",
-    "test:integration": "pnpm -r --if-present run test:integration"
+    "test:integration": "pnpm -r --if-present run test:integration && tsx --test tests/system/*.test.ts"
   },
   "devDependencies": {
+    "@visualsprint/platform": "workspace:*",
     "@types/node": "22.18.6",
+    "jose": "6.2.12",
     "tsx": "4.20.6",
     "turbo": "2.6.0",
     "typescript": "5.9.3"
