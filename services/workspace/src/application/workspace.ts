@@ -3,7 +3,12 @@ import { z } from "zod";
 import { id, eventEnvelope, type DomainEvent } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import { canManageMeeting, canReadMeeting } from "../domain/permissions.js";
-import type { MembershipAuthority, WorkspaceRepository, WorkspaceTransaction } from "./ports.js";
+import type {
+  MembershipAuthority,
+  PolicyAuthority,
+  WorkspaceRepository,
+  WorkspaceTransaction,
+} from "./ports.js";
 
 const label = z.string().trim().min(1).max(200);
 export const createCustomer = z.object({ name: label }).strict();
@@ -41,6 +46,7 @@ export class WorkspaceService {
   constructor(
     private readonly repository: WorkspaceRepository,
     private readonly memberships: MembershipAuthority,
+    private readonly policy: PolicyAuthority,
   ) {}
 
   private async authorize(actor: Actor) {
@@ -62,6 +68,8 @@ export class WorkspaceService {
   private async owner(tx: WorkspaceTransaction, actor: Actor, meetingId: string) {
     const access = await tx.meetingAccess(id.parse(meetingId));
     if (!access || !canManageMeeting(actor.actorId, access)) throw new AppError("NOT_FOUND", 404);
+    if (!(await this.policy.check(actor, meetingId, access, "can_manage")))
+      throw new AppError("NOT_FOUND", 404);
   }
   private event(
     actor: Actor,
@@ -98,7 +106,21 @@ export class WorkspaceService {
         const project = await tx.project(id.parse(projectId));
         if (!project) throw new AppError("NOT_FOUND", 404);
       }
-      return tx.listMeetings(projectId);
+      const meetings = await tx.listMeetings(projectId);
+      const candidates = [];
+      for (const meeting of meetings) {
+        const access = await tx.meetingAccess(meeting.id);
+        if (access && canReadMeeting(actor.actorId, access)) candidates.push({ meeting, access });
+      }
+      const allowed = await this.policy.checkMany(
+        actor,
+        candidates.map(({ meeting, access }) => ({
+          meetingId: meeting.id,
+          access,
+          relation: "can_view",
+        })),
+      );
+      return candidates.filter((_, index) => allowed[index]).map(({ meeting }) => meeting);
     });
   }
   async meeting(actor: Actor, meetingId: string) {
@@ -106,6 +128,8 @@ export class WorkspaceService {
     return this.repository.read(actor, async (tx) => {
       const access = await tx.meetingAccess(id.parse(meetingId));
       if (!access || !canReadMeeting(actor.actorId, access)) throw new AppError("NOT_FOUND", 404);
+      if (!(await this.policy.check(actor, meetingId, access, "can_view")))
+        throw new AppError("NOT_FOUND", 404);
       const meeting = await tx.meeting(meetingId);
       if (!meeting) throw new AppError("NOT_FOUND", 404);
       return meeting;

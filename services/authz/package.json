@@ -1,0 +1,20 @@
+{
+  "name": "@visualsprint/authz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "test:integration": "tsx --test test/integration/*.test.ts",
+    "build": "tsc --outDir dist && node ../../scripts/build-service.mjs",
+    "start": "node dist/main.mjs",
+    "bootstrap": "tsx src/bootstrap.ts"
+  },
+  "dependencies": {
+    "@visualsprint/contracts": "workspace:*",
+    "@visualsprint/platform": "workspace:*",
+    "fastify": "5.12.5",
+    "zod": "4.1.12"
+  }
+}

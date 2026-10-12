@@ -47,7 +47,15 @@ const memberships = {
       throw new AppError("FORBIDDEN", 403);
   },
 };
-const service = new WorkspaceService(repository, memberships);
+// Persistence tests isolate the remote policy port; composition tests run real OpenFGA.
+const service = new WorkspaceService(repository, memberships, {
+  async check() {
+    return true;
+  },
+  async checkMany(_actor, checks) {
+    return checks.map(() => true);
+  },
+});
 before(async () => {
   await migrate(migrationPool, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(runtimePool);

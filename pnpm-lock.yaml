@@ -89,6 +89,21 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
 
+  services/authz:
+    dependencies:
+      '@visualsprint/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@visualsprint/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
   services/gateway:
     dependencies:
       '@visualsprint/contracts':

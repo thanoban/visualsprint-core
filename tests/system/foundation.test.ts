@@ -13,6 +13,10 @@ import { PostgresWorkspace } from "../../services/workspace/src/infrastructure/s
 import { AccountMemberships } from "../../services/workspace/src/infrastructure/account-client.js";
 import { workspaceApp } from "../../services/workspace/src/http/app.js";
 import { gatewayApp } from "../../services/gateway/src/http/app.js";
+import { authzApp } from "../../services/authz/src/app.js";
+import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
+import { bootstrap } from "../../services/authz/src/bootstrap.js";
+import { AuthzPolicy } from "../../services/workspace/src/infrastructure/policy-client.js";
 
 test("gateway, separate Account/Workspace databases and signed services enforce the complete private meeting flow", async () => {
   const accountMigration = databasePool(
@@ -61,10 +65,22 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   );
   const accountUrl = await account.listen({ host: "127.0.0.1", port: 0 });
   const identity = new ServiceIdentity("workspace", { gateway: [gatewayPublic] });
+  const fga = await bootstrap(
+    "http://127.0.0.1:4180",
+    "local-openfga-only",
+    `composition-${randomUUID()}`,
+  );
+  const authzIdentity = new ServiceIdentity("authz", { workspace: [workspacePublic] });
+  const authz = authzApp(
+    new OpenFgaPolicy("http://127.0.0.1:4180", "local-openfga-only", fga.storeId, fga.modelId),
+    async (token) => (await authzIdentity.verify(token)).actor,
+  );
+  const authzUrl = await authz.listen({ host: "127.0.0.1", port: 0 });
   const workspace = workspaceApp(
     new WorkspaceService(
       new PostgresWorkspace(workspaceDb),
       new AccountMemberships(accountUrl, workspaceKey.privateKey, "workspace-test"),
+      new AuthzPolicy(authzUrl, workspaceKey.privateKey, "workspace-test"),
     ),
     async (token) => (await identity.verify(token)).actor,
   );
@@ -186,6 +202,11 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   } finally {
     await gateway.close();
     await workspace.close();
+    await authz.close();
+    await fetch(`http://127.0.0.1:4180/stores/${fga.storeId}`, {
+      method: "DELETE",
+      headers: { authorization: "Bearer local-openfga-only" },
+    });
     await account.close();
     await accountDb.end();
     await workspaceDb.end();

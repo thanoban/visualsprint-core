@@ -1,5 +1,52 @@
 name: visualsprint-v3-local
 services:
+  authz-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55435:5432"]
+    volumes:
+      - authz-db:/var/lib/postgresql/data
+      - ./authz-init.sql:/docker-entrypoint-initdb.d/001-authz.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  authz-migrate:
+    image: openfga/openfga:v1.22.0
+    depends_on:
+      authz-db:
+        condition: service_healthy
+    command: migrate
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://vs_authz_migration:local-migration-only@authz-db:5432/authz?sslmode=disable
+  authz-grants:
+    image: postgres:17.6-alpine
+    depends_on:
+      authz-migrate:
+        condition: service_completed_successfully
+    environment:
+      PGPASSWORD: local-migration-only
+    command: ["psql", "--host=authz-db", "--username=vs_authz_migration", "--dbname=authz", "--file=/runtime-grants.sql"]
+    volumes:
+      - ./authz-grants.sql:/runtime-grants.sql:ro
+  openfga:
+    image: openfga/openfga:v1.22.0
+    depends_on:
+      authz-grants:
+        condition: service_completed_successfully
+    command: run
+    environment:
+      OPENFGA_DATASTORE_ENGINE: postgres
+      OPENFGA_DATASTORE_URI: postgres://vs_authz_runtime:local-runtime-only@authz-db:5432/authz?sslmode=disable
+      OPENFGA_AUTHN_METHOD: preshared
+      OPENFGA_AUTHN_PRESHARED_KEYS: local-openfga-only
+      OPENFGA_PLAYGROUND_ENABLED: "false"
+      OPENFGA_LOG_FORMAT: json
+    ports: ["127.0.0.1:4180:8080"]
   account-db:
     image: postgres:17.6-alpine
     environment:
@@ -29,5 +76,6 @@ services:
       timeout: 3s
       retries: 30
 volumes:
+  authz-db:
   account-db:
   workspace-db:

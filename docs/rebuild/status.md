@@ -25,7 +25,7 @@ The code foundation is published as a separate checkpoint following those checks
 
 ## Not yet implemented / not represented as ready
 
-WorkOS browser login/refresh, OpenFGA runtime, Azure broker adapter/daemon,
+WorkOS browser login/refresh, Azure broker adapter/daemon,
 capture HTTP endpoints, webhook
 signature verification/consumption, provider reconciliation/stop worker, calendar sync, web UI,
 AI pipeline, saved chat, approved connectors, notifications, exports/deletion and Azure Bicep.
@@ -66,5 +66,19 @@ Verification: 20 fast tests, six compiled/typechecked packages, two Account data
 eight Workspace database/HTTP tests and one multi-service HTTP composition test passed.
 Native Node runtime bundles now boot Account, Workspace and gateway successfully in a
 separate process test. Code formatting is standardized across the rebuilt TypeScript tree.
-Next slice: OpenFGA authorization runtime and React private workspace UI; then F2
+Next slice: React private workspace UI; then F2
 durable signed capture ingress and UI. Do not expose the create adapter directly as a public endpoint.
+
+## OpenFGA authorization slice (F1 in progress)
+
+- Independent Authz API and pinned OpenFGA 1.22.0 PostgreSQL runtime/database/migration roles.
+- Operator bootstrap writes the versioned model; runtime checks pin both store and model IDs.
+- Workspace uses signed Authz delegation after current Account membership and local ACL checks.
+- Current owner/reader/deletion facts are an upper bound; stale engine relationships cannot expand access.
+- Meeting lists batch remote policy requests; checks run with bounded parallelism.
+- No project/customer association grants permissions. Model/runtime outages fail closed.
+- Integration tests use real OpenFGA and PostgreSQL; HTTP composition includes Authz.
+
+Verification: 22 fast tests, seven service/package builds and 13 database/runtime/composition
+tests passed locally. Production private TLS, WorkOS hosted login, Azure broker wiring and
+live meeting capture remain unqualified. The product is not yet a completed release.

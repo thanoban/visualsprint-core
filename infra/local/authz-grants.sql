@@ -1,0 +1,3 @@
+GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO vs_authz_runtime;
+GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO vs_authz_runtime;
+REVOKE INSERT,UPDATE,DELETE ON goose_db_version FROM vs_authz_runtime;

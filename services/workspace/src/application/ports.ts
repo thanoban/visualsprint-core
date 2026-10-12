@@ -6,6 +6,18 @@ export interface MembershipAuthority {
   requireActive(actor: Actor): Promise<void>;
   requireMember(workspaceId: string, userId: string, delegatedBy: Actor): Promise<void>;
 }
+export interface PolicyAuthority {
+  checkMany(
+    actor: Actor,
+    checks: { meetingId: string; access: MeetingAccess; relation: "can_view" | "can_manage" }[],
+  ): Promise<boolean[]>;
+  check(
+    actor: Actor,
+    meetingId: string,
+    access: MeetingAccess,
+    relation: "can_view" | "can_manage",
+  ): Promise<boolean>;
+}
 export interface EventPublisher {
   publish(event: DomainEvent): Promise<void>;
 }

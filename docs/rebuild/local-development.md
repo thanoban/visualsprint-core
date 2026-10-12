@@ -1,5 +1,14 @@
 # Local v3 development
 
+Authz runs OpenFGA 1.22.0 backed by its own database. Compose runs vendor migrations
+with a migration role, then grants limited runtime permissions. HTTP is loopback port 4180
+with the public `local-openfga-only` fixture key; never use that key remotely.
+Run `pnpm --filter @visualsprint/authz bootstrap` with `OPENFGA_URL` and `OPENFGA_API_KEY`
+in the process environment. Save returned store/model IDs in the Authz runtime environment.
+Bootstrap creates a fresh store; do not run on every API startup or deployment.
+Configure Workspace `AUTHZ_INTERNAL_URL` and Authz `WORKSPACE_PUBLIC_JWKS`; no runtime
+local-policy fallback exists. Production needs private HTTPS and separate Key Vault keys.
+
 Use the isolated `codex/zedex-web-rebuild` checkout. Commands below affect the v3
 development Compose project only. Loopback database credentials are public test fixtures.
 Production credentials must come from Key Vault and must use separate roles.

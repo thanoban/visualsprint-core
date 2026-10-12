@@ -4,12 +4,14 @@ import { assertRuntimeRole, databasePool, ServiceIdentity } from "@visualsprint/
 import { WorkspaceService } from "./application/workspace.js";
 import { PostgresWorkspace } from "./infrastructure/store.js";
 import { AccountMemberships } from "./infrastructure/account-client.js";
+import { AuthzPolicy } from "./infrastructure/policy-client.js";
 import { workspaceApp } from "./http/app.js";
 
 const config = z
   .object({
     WORKSPACE_DATABASE_URL: z.string().min(1),
     ACCOUNT_INTERNAL_URL: z.string().url(),
+    AUTHZ_INTERNAL_URL: z.string().url(),
     SERVICE_PRIVATE_JWK: z.string().min(1),
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
@@ -40,6 +42,7 @@ const app = workspaceApp(
   new WorkspaceService(
     new PostgresWorkspace(pool),
     new AccountMemberships(config.ACCOUNT_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
+    new AuthzPolicy(config.AUTHZ_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
   ),
   async (token) => (await identity.verify(token)).actor,
 );

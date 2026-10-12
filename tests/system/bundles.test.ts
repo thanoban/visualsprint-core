@@ -53,6 +53,7 @@ test("compiled Account, Workspace and gateway entry points boot as native Node s
         WORKSPACE_DATABASE_URL:
           "postgres://vs_workspace_runtime:local-runtime-only@127.0.0.1:55433/workspace",
         ACCOUNT_INTERNAL_URL: accountUrl,
+        AUTHZ_INTERNAL_URL: "http://127.0.0.1:4103",
       },
     },
     {
