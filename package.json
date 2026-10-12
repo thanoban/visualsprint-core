@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.1.3",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "check": "pnpm boundaries && pnpm typecheck && pnpm test && tsc -p tests/tsconfig.json --noEmit",
     "boundaries": "node scripts/check-boundaries.mjs",
@@ -14,13 +16,15 @@
     "test:integration": "pnpm -r --if-present run test:integration && tsx --test tests/system/*.test.ts"
   },
   "devDependencies": {
-    "@visualsprint/platform": "workspace:*",
+    "@playwright/test": "1.64.0",
     "@types/node": "22.18.6",
+    "@visualsprint/platform": "workspace:*",
+    "esbuild": "0.28.2",
     "jose": "6.2.12",
-    "esbuild": "0.25.12",
     "prettier": "3.6.2",
     "tsx": "4.20.6",
     "turbo": "2.6.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vite": "8.3.4"
   }
 }

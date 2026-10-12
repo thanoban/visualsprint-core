@@ -13,6 +13,19 @@ Use the isolated `codex/zedex-web-rebuild` checkout. Commands below affect the v
 development Compose project only. Loopback database credentials are public test fixtures.
 Production credentials must come from Key Vault and must use separate roles.
 
+The rebuilt browser lives in `apps/web`, separate from the legacy frontend. Configure its
+public WorkOS client ID (and the owned authentication hostname in production). Register its
+origin/redirect URI in WorkOS and configure the API JWT audience to match Account/gateway
+`WORKOS_TOKEN_AUDIENCE`. Hosted sign-in/refresh use AuthKit. Never put WorkOS secret keys,
+Recall credentials, signing keys or model keys in `VITE_*` variables.
+Run `pnpm --filter @visualsprint/web dev` after starting signed local APIs. Same-origin
+`/api/v3` proxies to loopback gateway port 4100. Production routes that same path to the gateway
+instead of exposing individual services. Missing identity configuration shows setup guidance,
+not an insecure demo login.
+Run `pnpm --filter @visualsprint/web test:browser` for controlled browser checks. Windows uses
+installed Edge; CI installs Playwright Chromium. Root integration also opens a browser against
+real service APIs/databases and closes it after persistence verification.
+
 ```powershell
 pnpm install --frozen-lockfile
 docker compose -f infra/local/compose.yml up -d --wait --quiet-pull

@@ -25,9 +25,9 @@ The code foundation is published as a separate checkpoint following those checks
 
 ## Not yet implemented / not represented as ready
 
-WorkOS browser login/refresh, Azure broker adapter/daemon,
+Live WorkOS login/refresh qualification, Azure broker adapter/daemon,
 capture HTTP endpoints, webhook
-signature verification/consumption, provider reconciliation/stop worker, calendar sync, web UI,
+signature verification/consumption, provider reconciliation/stop worker, calendar sync, capture/intelligence web UI,
 AI pipeline, saved chat, approved connectors, notifications, exports/deletion and Azure Bicep.
 Live and visual Flows remain later scope.
 
@@ -82,3 +82,21 @@ durable signed capture ingress and UI. Do not expose the create adapter directly
 Verification: 22 fast tests, seven service/package builds and 13 database/runtime/composition
 tests passed locally. Production private TLS, WorkOS hosted login, Azure broker wiring and
 live meeting capture remain unqualified. The product is not yet a completed release.
+
+## Web workspace slice (F1 in progress)
+
+- React/Vite and TanStack Router web app with WorkOS AuthKit session/refresh integration.
+- Customer/project creation, workspace switching, private meeting creation, project-filtered
+  lists, notes editing, owner-confirmed assignments and separate explicit sharing/revocation.
+- Browser API credentials stay on same-origin `/api/v3`; redirects are rejected. No secret browser envs.
+- Request cancellation/scope reset removes stale data when changing workspace/project/access.
+- Retry keys survive uncertain command responses; version conflicts do not silently overwrite edits.
+- Browser tests cover context separation, assignment/sharing, script-like text and outage behavior.
+- A real browser saves/reloads notes through gateway, Account, Workspace, Authz and PostgreSQL.
+  Only hosted identity is controlled; service responses and persistence are not mocked.
+
+Verification: 24 fast tests, eight checked/built packages, three browser fixture tests and 13
+database/runtime/composition tests. Browser identity fixtures have their own test root, never
+the production entry point. Actual hosted WorkOS consent/session refresh still requires configured
+identity settings. F1 still needs Azure messaging/telemetry and deployment qualification.
+Next: complete durable capture endpoints/worker/webhooks, then calendar and intelligence slices.

@@ -17,6 +17,7 @@ import { authzApp } from "../../services/authz/src/app.js";
 import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
 import { bootstrap } from "../../services/authz/src/bootstrap.js";
 import { AuthzPolicy } from "../../services/workspace/src/infrastructure/policy-client.js";
+import { browserMeetingFlow } from "./browser-flow.js";
 
 test("gateway, separate Account/Workspace databases and signed services enforce the complete private meeting flow", async () => {
   const accountMigration = databasePool(
@@ -188,6 +189,14 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(revoke.status, 200);
     assert.equal((await invoke("GET", meetingUrl, memberHeaders)).status, 403);
+    const gatewayUrl = await gateway.listen({ host: "127.0.0.1", port: 0 });
+    await browserMeetingFlow(
+      gatewayUrl,
+      ownerToken,
+      workspaceId,
+      String(meeting.data.id),
+      String(project.data.id),
+    );
     assert.equal((await invoke("POST", "/api/v3/logout", ownerHeaders)).status, 200);
     assert.equal((await invoke("GET", meetingUrl, ownerHeaders)).status, 401);
     assert.equal(

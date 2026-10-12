@@ -52,3 +52,5 @@ visualsprint-mentors/
 
 # Codex scratch directory
 .codex-tmp/
+test-results/
+playwright-report/
