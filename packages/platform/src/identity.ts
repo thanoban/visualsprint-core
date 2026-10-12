@@ -17,8 +17,17 @@ export const delegatedActor = z
     actorId: id,
     sessionId: z.string().min(1).max(200),
     workspaceId: id,
+    operationGrantId: id.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((actor, context) => {
+    if (
+      actor.operationGrantId
+        ? actor.sessionId !== `operation:${actor.operationGrantId}`
+        : actor.sessionId.startsWith("operation:")
+    )
+      context.addIssue({ code: "custom", message: "Invalid operation principal" });
+  });
 export type Actor = z.infer<typeof delegatedActor>;
 export type Identity = { subject: string; sessionId: string };
 

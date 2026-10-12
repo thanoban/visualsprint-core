@@ -62,6 +62,80 @@ test("reservation reconciliation is owner-scoped and remains possible after logo
     null,
   );
 });
+test("explicit calendar automation survives logout but not grant or membership revocation", async () => {
+  const { actor, identity } = await owner();
+  const connectionId = randomUUID(),
+    key = randomUUID();
+  assert.throws(() => account.changeAutomationGrant(actor, key, { connectionId, consent: false }));
+  const grant = await account.changeAutomationGrant(actor, key, { connectionId, consent: true });
+  assert.equal(
+    (await account.changeAutomationGrant(actor, key, { connectionId, consent: true })).id,
+    grant.id,
+  );
+  const operation: Actor = {
+    ...actor,
+    operationGrantId: grant.id,
+    sessionId: `operation:${grant.id}`,
+  };
+  await account.logout(identity);
+  const requestId = randomUUID();
+  assert.equal(
+    (await account.reserveCapture(operation, { requestId, maxSeconds: 120 })).state,
+    "held",
+  );
+  assert.throws(() => account.members(operation), /FORBIDDEN/);
+  assert.throws(() => account.checkMember(operation, randomUUID()), /FORBIDDEN/);
+  await assert.rejects(
+    account.reserveCapture(
+      { ...operation, workspaceId: randomUUID() },
+      { requestId: randomUUID(), maxSeconds: 120 },
+    ),
+    /FORBIDDEN/,
+  );
+  const relogged = { ...actor, sessionId: randomUUID() };
+  await account.changeAutomationGrant(
+    relogged,
+    randomUUID(),
+    { grantId: grant.id, expectedVersion: 1 },
+    true,
+  );
+  assert.equal(
+    (await account.changeAutomationGrant(relogged, key, { connectionId, consent: true })).active,
+    false,
+  );
+  await assert.rejects(
+    account.reserveCapture(operation, { requestId: randomUUID(), maxSeconds: 120 }),
+    /FORBIDDEN/,
+  );
+  // Cleanup is narrower than authority to start new work.
+  await account.settleCapture(operation, { requestId, confirmedNoCapture: true }, true);
+  const participant = await account.me({
+    subject: `user_${randomUUID().replaceAll("-", "")}`,
+    sessionId: randomUUID(),
+  });
+  await account.changeMember(relogged, randomUUID(), {
+    userId: participant.userId,
+    active: true,
+    expectedVersion: 0,
+  });
+  const memberActor = { ...relogged, actorId: participant.userId };
+  const another = await account.changeAutomationGrant(memberActor, randomUUID(), {
+    connectionId: randomUUID(),
+    consent: true,
+  });
+  await account.changeMember(relogged, randomUUID(), {
+    userId: participant.userId,
+    active: false,
+    expectedVersion: 1,
+  });
+  await assert.rejects(
+    account.reserveCapture(
+      { ...memberActor, operationGrantId: another.id, sessionId: `operation:${another.id}` },
+      { requestId: randomUUID(), maxSeconds: 120 },
+    ),
+    /FORBIDDEN/,
+  );
+});
 test("concurrent reserve retries debit once and atomically cap five active meetings", async () => {
   const { actor } = await owner();
   const requestId = randomUUID();
@@ -146,7 +220,11 @@ test("only signed Ingest callers can reserve or settle; a trusted Workspace key 
     async () => {
       throw new Error("NO_USER_AUTH_IN_INTERNAL_TEST");
     },
-    new ServiceIdentity("account", { workspace: [publicKey], ingest: [publicKey] }),
+    new ServiceIdentity("account", {
+      workspace: [publicKey],
+      ingest: [publicKey],
+      gateway: [publicKey],
+    }),
   );
   const token = (caller: string) =>
     serviceToken({
@@ -181,6 +259,42 @@ test("only signed Ingest callers can reserve or settle; a trusted Workspace key 
       payload: { userId: actor.actorId, active: false, expectedVersion: 1 },
     });
     assert.equal(membership.statusCode, 403);
+    const grant = await account.changeAutomationGrant(actor, randomUUID(), {
+      connectionId: randomUUID(),
+      consent: true,
+    });
+    const operation: Actor = {
+      ...actor,
+      operationGrantId: grant.id,
+      sessionId: `operation:${grant.id}`,
+    };
+    const operationToken = async (caller: string) =>
+      serviceToken({
+        caller,
+        audience: "account",
+        actor: operation,
+        privateKey: keys.privateKey,
+        keyId: "usage-test",
+      });
+    for (const caller of ["gateway", "ingest"]) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/internal/workspaces/${actor.workspaceId}/membership`,
+        headers: { authorization: `Bearer ${await operationToken(caller)}` },
+        payload: { userId: actor.actorId },
+      });
+      assert.equal(response.statusCode, caller === "ingest" ? 200 : 403);
+    }
+    const mutation = await app.inject({
+      method: "POST",
+      url: `/internal/workspaces/${actor.workspaceId}/automation-grants`,
+      headers: {
+        authorization: `Bearer ${await operationToken("ingest")}`,
+        "idempotency-key": randomUUID(),
+      },
+      payload: { connectionId: randomUUID(), consent: true },
+    });
+    assert.equal(mutation.statusCode, 403);
   } finally {
     await app.close();
   }

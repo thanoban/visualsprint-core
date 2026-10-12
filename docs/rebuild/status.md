@@ -153,3 +153,16 @@ Verification: 36 fast tests, nine package/service builds, 27 database/runtime/co
 four browser fixture tests and a clean production dependency audit. Azure transport is controlled
 in local tests; no live namespace has been contacted. See [event delivery record](messaging-implementation.md).
 F3–F6 and live provider/deployment qualification remain unfinished; this is not the final product.
+
+## Calendar operation principals (F3 prerequisite)
+
+Account owns consented calendar-capture grants; the gateway exposes owner-scoped grant lifecycle
+commands. Short signed operation delegation is distinct from WorkOS sessions. Logout does not
+erase approved background authority, but current grant/member/workspace revocation blocks new
+work. Public user APIs reject operation principals; grants cannot edit memberships or approve
+external writes. Ingest preserves the principal during durable recovery. See
+[operation-principal record](automation-principals.md). Calendar sync and automatic capture are
+still not implemented end to end.
+Verification: 37 fast tests, nine builds, 28 database/runtime/composition tests and four browser
+fixture tests passed. A test assertion was corrected to respect the scheduler's bounded batch
+rather than assuming every accumulated fixture workspace appears in its first page.

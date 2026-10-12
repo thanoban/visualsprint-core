@@ -27,6 +27,10 @@ export type Membership = {
   version: number;
 };
 export interface AccountTransaction {
+  grant(grantId: string): Promise<OperationGrant | undefined>;
+  grants(): Promise<OperationGrant[]>;
+  createGrant(connectionId: string): Promise<OperationGrant>;
+  revokeGrant(grantId: string, expectedVersion: number): Promise<OperationGrant>;
   actorId: string;
   setWorkspace(workspaceId: string): Promise<void>;
   workspaces(): Promise<AccountWorkspace[]>;
@@ -50,6 +54,16 @@ export interface AccountTransaction {
     seconds: number,
   ): Promise<CaptureReservation>;
 }
+export type OperationGrant = {
+  workspaceId: string;
+  id: string;
+  ownerId: string;
+  connectionId: string;
+  capability: "calendar_capture";
+  active: boolean;
+  version: number;
+  createdAt: Date;
+};
 export interface AccountRepository {
   identity<T>(identity: Identity, work: (tx: AccountTransaction) => Promise<T>): Promise<T>;
   actor<T>(actor: Actor, work: (tx: AccountTransaction) => Promise<T>): Promise<T>;

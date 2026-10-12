@@ -62,6 +62,7 @@ export function ingestApp(
       const actors = new WeakMap<object, Actor>();
       routes.addHook("preHandler", async (request) => {
         const actor = await authenticate(bearer(request.headers.authorization));
+        if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
         if (id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId)
           throw new AppError("FORBIDDEN", 403);
         actors.set(request, actor);

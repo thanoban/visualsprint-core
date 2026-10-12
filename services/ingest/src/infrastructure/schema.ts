@@ -19,6 +19,7 @@ export const requests = pgTable(
     meetingId: uuid("meeting_id").notNull(),
     ownerId: uuid("owner_id").notNull(),
     sessionId: text("session_id").notNull(),
+    operationGrantId: uuid("operation_grant_id"),
     meetingVersion: integer("meeting_version").notNull(),
     joinUrl: text("join_url").notNull(),
     maxSeconds: integer("max_seconds").notNull(),

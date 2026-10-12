@@ -8,6 +8,28 @@ const actor = {
   workspaceId: "f6a0e47d-0c68-43f2-886e-49d0a3cbf2ec",
   sessionId: "session-test",
 };
+test("operation delegation is bound to its grant and cannot masquerade as a login", async () => {
+  const key = await generateKeyPair("EdDSA");
+  const grantId = "7fa951d9-9ef3-4dc7-8eed-17c38bd9b091";
+  const verifier = new ServiceIdentity("account", {
+    integration: [{ ...(await exportJWK(key.publicKey)), kid: "operation-test" }],
+  });
+  const operation = { ...actor, operationGrantId: grantId, sessionId: `operation:${grantId}` };
+  const options = {
+    caller: "integration",
+    audience: "account",
+    keyId: "operation-test",
+    privateKey: key.privateKey,
+  };
+  const token = await serviceToken({ ...options, actor: operation });
+  assert.deepEqual((await verifier.verify(token)).actor, operation);
+  assert.throws(() =>
+    serviceToken({ ...options, actor: { ...operation, sessionId: "user-session" } }),
+  );
+  assert.throws(() =>
+    serviceToken({ ...options, actor: { ...actor, sessionId: `operation:${grantId}` } }),
+  );
+});
 test("service delegation binds caller, audience, key, expiry and actor tenant", async () => {
   const gateway = await generateKeyPair("EdDSA");
   const other = await generateKeyPair("EdDSA");

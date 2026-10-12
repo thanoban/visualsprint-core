@@ -266,6 +266,15 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(capture.status, 202, JSON.stringify(capture.data));
     assert.equal(capture.data.ready, true);
+    const automation = await invoke(
+      "POST",
+      `${base}/automation-grants`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { connectionId: randomUUID(), consent: true },
+    );
+    assert.equal(automation.status, 200, JSON.stringify(automation.data));
+    assert.equal(automation.data.capability, "calendar_capture");
+    assert.equal((await invoke("GET", `${base}/automation-grants`, ownerHeaders)).status, 200);
     await captureService.work(workspaceId, String(capture.data.id));
     const record = (await captureRepository.scoped(workspaceId, (tx) =>
       tx.load(String(capture.data.id)),

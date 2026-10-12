@@ -24,6 +24,7 @@ export type Capture = {
   meetingId: string;
   ownerId: string;
   sessionId: string;
+  operationGrantId: string | null;
   meetingVersion: number;
   joinUrl: string;
   maxSeconds: number;

@@ -208,7 +208,7 @@ export function gatewayApp(
           .object({ cellId: z.string().min(1) })
           .passthrough()
           .parse(directory.data).cellId;
-        const isMembers = /^members$/.test(params["*"]);
+        const isMembers = /^(?:members|automation-grants(?:\/revoke)?)$/.test(params["*"]);
         const service = routeService(params["*"]);
         const target = isMembers
           ? config.accountUrl
@@ -230,7 +230,7 @@ export function gatewayApp(
         };
         if (typeof request.headers["idempotency-key"] === "string")
           headers["idempotency-key"] = request.headers["idempotency-key"];
-        const path = isMembers ? `/internal/workspaces/${workspaceId}/members` : request.url;
+        const path = isMembers ? `/internal/workspaces/${workspaceId}/${params["*"]}` : request.url;
         const result = await upstream(new URL(path, target), headers, request.method, request.body);
         return reply.code(result.status).send(result.data);
       });

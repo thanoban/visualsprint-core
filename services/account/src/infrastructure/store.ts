@@ -59,6 +59,85 @@ class AccountTx implements AccountTransaction {
     if (!this.workspaceId) throw new Error("WORKSPACE_CONTEXT_REQUIRED");
     return this.workspaceId;
   }
+  async grant(grantId: string) {
+    return (
+      await this.db
+        .select()
+        .from(schema.operationGrants)
+        .where(
+          and(
+            eq(schema.operationGrants.workspaceId, this.scope()),
+            eq(schema.operationGrants.id, id.parse(grantId)),
+          ),
+        )
+        .limit(1)
+    )[0];
+  }
+  grants() {
+    return this.db
+      .select()
+      .from(schema.operationGrants)
+      .where(
+        and(
+          eq(schema.operationGrants.workspaceId, this.scope()),
+          eq(schema.operationGrants.ownerId, this.actorId),
+        ),
+      )
+      .orderBy(asc(schema.operationGrants.createdAt))
+      .limit(100);
+  }
+  async createGrant(connectionId: string) {
+    await this.db.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.scope() + ":grant:" + this.actorId + ":" + connectionId},0))`,
+    );
+    const old = (
+      await this.db
+        .select()
+        .from(schema.operationGrants)
+        .where(
+          and(
+            eq(schema.operationGrants.workspaceId, this.scope()),
+            eq(schema.operationGrants.ownerId, this.actorId),
+            eq(schema.operationGrants.connectionId, connectionId),
+            eq(schema.operationGrants.active, true),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (old) return old;
+    return (
+      await this.db
+        .insert(schema.operationGrants)
+        .values({
+          workspaceId: this.scope(),
+          id: randomUUID(),
+          ownerId: this.actorId,
+          connectionId,
+          capability: "calendar_capture",
+        })
+        .returning()
+    )[0]!;
+  }
+  async revokeGrant(grantId: string, expectedVersion: number) {
+    const old = await this.grant(grantId);
+    if (!old || old.ownerId !== this.actorId) throw new AppError("NOT_FOUND", 404);
+    const row = (
+      await this.db
+        .update(schema.operationGrants)
+        .set({ active: false, version: sql`${schema.operationGrants.version}+1` })
+        .where(
+          and(
+            eq(schema.operationGrants.workspaceId, this.scope()),
+            eq(schema.operationGrants.id, grantId),
+            eq(schema.operationGrants.ownerId, this.actorId),
+            eq(schema.operationGrants.version, expectedVersion),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!row) throw new AppError("VERSION_CONFLICT", 409);
+    return row;
+  }
   async lockUsage() {
     await this.db.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.scope() + ":usage"},0))`,

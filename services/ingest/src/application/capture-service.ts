@@ -42,6 +42,7 @@ const actorFor = (record: Capture): Actor => ({
   actorId: record.ownerId,
   workspaceId: record.workspaceId,
   sessionId: record.sessionId,
+  ...(record.operationGrantId ? { operationGrantId: record.operationGrantId } : {}),
 });
 export class CaptureService {
   constructor(

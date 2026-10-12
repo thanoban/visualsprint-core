@@ -34,6 +34,7 @@ export const captureError = z.enum([
 export const eventTypes = [
   "workspace.created.v1",
   "membership.changed.v1",
+  "automation.grant.changed.v1",
   "usage.reserved.v1",
   "usage.settled.v1",
   "usage.released.v1",
@@ -81,6 +82,7 @@ export const eventEnvelope = z
               "capture",
               "transcript",
               "occurrence",
+              "connection",
               "proposal",
               "action",
               "deletion",

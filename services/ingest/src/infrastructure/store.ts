@@ -105,6 +105,7 @@ class CaptureTx implements CaptureTransaction {
           meetingId: input.context.meetingId,
           ownerId: input.actor.actorId,
           sessionId: input.actor.sessionId,
+          operationGrantId: input.actor.operationGrantId ?? null,
           meetingVersion: input.context.version,
           joinUrl: input.context.joinUrl,
           maxSeconds: input.maxSeconds,

@@ -47,6 +47,7 @@ export function workspaceApp(
     async (routes) => {
       routes.addHook("preHandler", async (request) => {
         const actor = await authenticate(bearer(request.headers.authorization));
+        if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
         const workspaceId = id.parse((request.params as { workspaceId: string }).workspaceId);
         if (workspaceId !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, actor);

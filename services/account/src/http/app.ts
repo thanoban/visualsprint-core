@@ -58,6 +58,14 @@ export function accountApp(
         actors.set(request, hop.actor);
         callers.set(request, hop.caller);
         const capability = request.routeOptions.url?.split("/").at(-1);
+        if (
+          hop.actor.operationGrantId &&
+          (!["integration", "workspace", "ingest"].includes(hop.caller) ||
+            !["membership", "reserve", "reservation", "settle", "release"].includes(
+              capability ?? "",
+            ))
+        )
+          throw new AppError("FORBIDDEN", 403);
         const allowed =
           capability === "membership"
             ? [
@@ -76,6 +84,13 @@ export function accountApp(
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.get("/automation-grants", (request) => service.automationGrants(actor(request)));
+      for (const revoke of [false, true])
+        routes.post(revoke ? "/automation-grants/revoke" : "/automation-grants", (request) => {
+          const key = request.headers["idempotency-key"];
+          if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+          return service.changeAutomationGrant(actor(request), key, request.body, revoke);
+        });
       routes.post("/usage/reserve", (request) =>
         service.reserveCapture(actor(request), request.body),
       );

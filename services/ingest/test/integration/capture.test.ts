@@ -99,7 +99,15 @@ test("owning outbox retries a lost broker acknowledgement with the same event id
   );
   assert.equal(deliveries.length, 2);
   assert.equal(deliveries[0], deliveries[1]);
-  assert.ok((await repository.eventWorkspaces()).includes(f.actor.workspaceId));
+  assert.equal(
+    (
+      await pool.query("SELECT 1 FROM event_work_index WHERE workspace_id=$1", [
+        f.actor.workspaceId,
+      ])
+    ).rowCount,
+    1,
+  );
+  assert.ok((await repository.eventWorkspaces()).length <= 20);
 });
 test("transcript paging is complete and a provider replay cannot replace a human revision", async () => {
   const f = fixture();

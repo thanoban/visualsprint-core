@@ -22,7 +22,19 @@ export class AccountService {
     if (await tx.sessionRevoked(sessionId)) throw new AppError("UNAUTHENTICATED", 401);
   }
   private async access(tx: AccountTransaction, actor: Actor) {
-    await this.session(tx, actor.sessionId);
+    if (actor.operationGrantId) {
+      const grant = await tx.grant(actor.operationGrantId);
+      if (
+        actor.sessionId !== `operation:${actor.operationGrantId}` ||
+        !grant?.active ||
+        grant.ownerId !== actor.actorId ||
+        grant.capability !== "calendar_capture"
+      )
+        throw new AppError("FORBIDDEN", 403);
+    } else {
+      if (actor.sessionId.startsWith("operation:")) throw new AppError("FORBIDDEN", 403);
+      await this.session(tx, actor.sessionId);
+    }
     const membership = await tx.membership(actor.actorId);
     const workspace = await tx.workspace(actor.workspaceId);
     if (!membership?.active || !workspace || workspace.blocked)
@@ -76,12 +88,14 @@ export class AccountService {
     });
   }
   directory(actor: Actor) {
+    this.userOnly(actor);
     return this.repository.actor(actor, async (tx) => {
       const { membership, workspace } = await this.access(tx, actor);
       return { cellId: workspace.cellId, membershipVersion: membership.version };
     });
   }
   checkMember(actor: Actor, userId: string) {
+    if (actor.operationGrantId && userId !== actor.actorId) throw new AppError("FORBIDDEN", 403);
     id.parse(userId);
     return this.repository.actor(actor, async (tx) => {
       await this.access(tx, actor);
@@ -90,12 +104,14 @@ export class AccountService {
     });
   }
   members(actor: Actor) {
+    this.userOnly(actor);
     return this.repository.actor(actor, async (tx) => {
       await this.access(tx, actor);
       return tx.members();
     });
   }
   changeMember(actor: Actor, key: string, body: unknown) {
+    this.userOnly(actor);
     const input = z
       .object({ userId: id, active: z.boolean(), expectedVersion: z.number().int().nonnegative() })
       .strict()
@@ -126,6 +142,57 @@ export class AccountService {
         );
         return member;
       });
+    });
+  }
+  private userOnly(actor: Actor) {
+    if (actor.operationGrantId || actor.sessionId.startsWith("operation:"))
+      throw new AppError("FORBIDDEN", 403);
+  }
+  automationGrants(actor: Actor) {
+    this.userOnly(actor);
+    return this.repository.actor(actor, async (tx) => {
+      await this.access(tx, actor);
+      return tx.grants();
+    });
+  }
+  changeAutomationGrant(actor: Actor, key: string, body: unknown, revoke = false) {
+    this.userOnly(actor);
+    keySchema.parse(key);
+    const input = revoke
+      ? z.object({ grantId: id, expectedVersion: z.number().int().positive() }).strict().parse(body)
+      : z
+          .object({ connectionId: id, consent: z.literal(true) })
+          .strict()
+          .parse(body);
+    return this.repository.actor(actor, async (tx) => {
+      await this.access(tx, actor);
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify(["automation.grant", actor.workspaceId, revoke, input]))
+        .digest("hex");
+      const result = await tx.command(key, fingerprint, async () => {
+        const record =
+          "grantId" in input
+            ? await tx.revokeGrant(input.grantId, input.expectedVersion)
+            : await tx.createGrant(input.connectionId);
+        await tx.emit(
+          eventEnvelope.parse({
+            eventId: randomUUID(),
+            type: "automation.grant.changed.v1",
+            schemaVersion: 1,
+            workspaceId: actor.workspaceId,
+            aggregateId: record.id,
+            aggregateVersion: record.version,
+            occurredAt: new Date().toISOString(),
+            traceId: randomBytes(16).toString("hex"),
+            actorId: actor.actorId,
+            references: [{ kind: "connection", id: record.connectionId }],
+          }),
+        );
+        return record;
+      });
+      const current = await tx.grant(result.id);
+      if (!current || current.ownerId !== actor.actorId) throw new AppError("NOT_FOUND", 404);
+      return current;
     });
   }
   logout(identity: Identity) {

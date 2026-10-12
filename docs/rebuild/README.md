@@ -15,6 +15,7 @@ Legacy applications and existing production data are preserved.
 - [Local development](local-development.md): service runtime configuration and PostgreSQL tests.
 - [Capture implementation](capture-implementation.md): durable flow, configuration and open gates.
 - [Event delivery implementation](messaging-implementation.md): owning outboxes and Azure transport.
+- [Calendar automation principals](automation-principals.md): consent and session-independent authority.
 
 ## Approved scope
 

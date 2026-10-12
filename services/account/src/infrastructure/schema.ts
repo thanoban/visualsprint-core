@@ -47,6 +47,20 @@ export const users = pgTable("users", {
   id: uuid("id").primaryKey(),
   subject: text("subject").notNull().unique(),
 });
+export const operationGrants = pgTable(
+  "operation_grants",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    id: uuid("id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    capability: text("capability").$type<"calendar_capture">().notNull(),
+    active: boolean("active").notNull().default(true),
+    version: integer("version").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.workspaceId, table.id] })],
+);
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey(),
   creatorId: uuid("creator_id").notNull(),
