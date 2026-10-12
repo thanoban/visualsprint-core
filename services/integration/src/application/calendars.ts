@@ -338,6 +338,105 @@ export class CalendarService {
       };
     });
   }
+  async synchronize(actor: Actor, connectionId: string, key: string) {
+    await this.authorize(actor);
+    keySchema.parse(key);
+    return this.repository.scoped(actor.workspaceId, async (tx) => {
+      const record = await this.owned(tx, actor, connectionId);
+      if (record.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
+      return this.syncView(await tx.queueSync(actor, key, record, this.now()));
+    });
+  }
+  private syncView(job: import("../domain/sync.js").CalendarSync) {
+    return {
+      id: job.id,
+      state: job.state,
+      pageCount: job.pageCount,
+      errorCode: job.errorCode,
+      window: { startsAt: job.startsAt.toISOString(), endsAt: job.endsAt.toISOString() },
+    };
+  }
+  async syncStatus(actor: Actor, connectionId: string) {
+    await this.authorize(actor);
+    return this.repository.scoped(actor.workspaceId, async (tx) => {
+      await this.owned(tx, actor, connectionId);
+      const job = await tx.latestSync(connectionId);
+      return job ? this.syncView(job) : null;
+    });
+  }
+  async storedOccurrences(actor: Actor, connectionId: string, after?: string) {
+    await this.authorize(actor);
+    return this.repository.scoped(actor.workspaceId, async (tx) => {
+      const record = await this.owned(tx, actor, connectionId);
+      if (record.status !== "connected") throw new AppError("CONNECTION_UNAVAILABLE", 409);
+      return tx.storedOccurrences(connectionId, record.calendarId, after);
+    });
+  }
+  private async syncWork(record: Connection) {
+    const job = await this.repository.scoped(record.workspaceId, (tx) =>
+      tx.latestSync(record.id, true),
+    );
+    if (!job) return;
+    if (
+      record.status !== "connected" ||
+      record.version !== job.connectionVersion ||
+      this.now().getTime() > job.endsAt.getTime()
+    ) {
+      await this.repository.scoped(record.workspaceId, (tx) =>
+        tx.endSync(job, "superseded", "CONNECTION_CHANGED"),
+      );
+      return;
+    }
+    const actor: Actor = {
+      actorId: job.ownerId,
+      workspaceId: record.workspaceId,
+      sessionId: job.sessionId,
+    };
+    try {
+      await this.withTokens(actor, record.id, async (leased, token) => {
+        const page = await this.provider(record.provider).occurrences(
+          token,
+          job.calendarId,
+          { startsAt: job.startsAt.toISOString(), endsAt: job.endsAt.toISOString() },
+          job.cursor ?? undefined,
+        );
+        await this.authority.requireActive(actor);
+        await this.repository.scoped(record.workspaceId, async (tx) => {
+          const current = await tx.get(record.id);
+          if (
+            current?.leaseToken !== leased.leaseToken ||
+            current.status !== "connected" ||
+            current.version !== job.connectionVersion
+          )
+            throw new AppError("CONNECTION_CHANGED", 409);
+          await tx.syncPage(job, page);
+        });
+      });
+    } catch (error) {
+      if (error instanceof AppError && [401, 403].includes(error.status))
+        await this.repository.scoped(record.workspaceId, (tx) =>
+          tx.endSync(job, "blocked", error.code),
+        );
+      else if (
+        error instanceof AppError &&
+        [
+          "CALENDAR_SYNC_LIMIT",
+          "CALENDAR_CURSOR_LOOP",
+          "CALENDAR_INCONSISTENT_PAGE",
+          "INVALID_CALENDAR_CURSOR",
+          "CONNECTION_CHANGED",
+        ].includes(error.code)
+      )
+        await this.repository.scoped(record.workspaceId, (tx) =>
+          tx.endSync(
+            job,
+            error.code === "CONNECTION_CHANGED" ? "superseded" : "failed",
+            error.code,
+          ),
+        );
+      else throw error;
+    }
+  }
   async select(actor: Actor, connectionId: string, key: string, body: unknown) {
     keySchema.parse(key);
     const input = z
@@ -413,6 +512,7 @@ export class CalendarService {
   async work(workspaceId: string, connectionId: string) {
     const record = await this.repository.scoped(workspaceId, (tx) => tx.get(connectionId));
     if (!record) return;
+    await this.syncWork(record);
     if (
       record.status === "exchanging" &&
       record.exchangeAt &&

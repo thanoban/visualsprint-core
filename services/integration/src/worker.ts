@@ -12,7 +12,10 @@ try {
           due.slice(offset, offset + 5).map(async (ref) => {
             try {
               await service.work(ref.workspaceId, ref.connectionId);
-              await repository.defer(ref.workspaceId, ref.connectionId, 30);
+              const pending = await repository.scoped(ref.workspaceId, (tx) =>
+                tx.latestSync(ref.connectionId, true),
+              );
+              await repository.defer(ref.workspaceId, ref.connectionId, pending ? 1 : 30);
             } catch {
               console.error(JSON.stringify({ code: "CALENDAR_RECOVERY_PENDING" }));
               await repository.defer(ref.workspaceId, ref.connectionId, 60);

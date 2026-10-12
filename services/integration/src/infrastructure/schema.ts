@@ -7,9 +7,33 @@ import {
   timestamp,
   jsonb,
   primaryKey,
+  bigserial,
 } from "drizzle-orm/pg-core";
 import type { ConnectionStatus, CalendarProviderName } from "../domain/records.js";
 import type { DomainEvent } from "@visualsprint/contracts";
+import type { CalendarSync } from "../domain/sync.js";
+export const syncs = pgTable(
+  "calendar_syncs",
+  {
+    sequence: bigserial("sequence", { mode: "number" }).notNull(),
+    workspaceId: uuid("workspace_id").notNull(),
+    id: uuid("id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    calendarId: text("calendar_id").notNull(),
+    connectionVersion: integer("connection_version").notNull(),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    state: text("state").$type<CalendarSync["state"]>().notNull(),
+    cursor: text("cursor"),
+    cursorHashes: jsonb("cursor_hashes").$type<string[]>().notNull(),
+    pageCount: integer("page_count").notNull(),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
+);
 export const connections = pgTable(
   "connections",
   {

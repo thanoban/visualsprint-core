@@ -57,6 +57,23 @@ export function integrationApp(
       routes.get("/:connectionId/occurrences", (request) =>
         service.occurrences(actor(request), connectionId(request.params), request.query),
       );
+      routes.post("/:connectionId/sync", async (request, reply) =>
+        reply
+          .code(202)
+          .send(
+            await service.synchronize(actor(request), connectionId(request.params), key(request)),
+          ),
+      );
+      routes.get("/:connectionId/sync", (request) =>
+        service.syncStatus(actor(request), connectionId(request.params)),
+      );
+      routes.get("/:connectionId/stored-occurrences", (request) =>
+        service.storedOccurrences(
+          actor(request),
+          connectionId(request.params),
+          (request.query as { after?: string }).after,
+        ),
+      );
       routes.post("/:connectionId/calendar", (request) =>
         service.select(actor(request), connectionId(request.params), key(request), request.body),
       );

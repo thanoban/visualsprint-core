@@ -135,44 +135,45 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   );
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
   const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
-  const integration = integrationApp(
-    new CalendarService(
-      new PostgresCalendars(integrationDb),
-      new AccountCalendars(accountUrl, integrationKey.privateKey, "integration-test"),
-      {
-        google: {
-          authorizationUrl: (state, challenge) =>
-            `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&code_challenge=${challenge}`,
-          async exchange() {
-            return {
-              accessToken: "controlled-access",
-              refreshToken: "controlled-refresh",
-              expiresAt: new Date(Date.now() + 3600000),
-            };
-          },
-          async refresh() {
-            return {
-              accessToken: "controlled-access",
-              refreshToken: "controlled-refresh",
-              expiresAt: new Date(Date.now() + 3600000),
-            };
-          },
-          async calendars() {
-            return {
-              items: [{ id: "calendar-test", name: "Team calendar", primary: true }],
-              nextCursor: null,
-            };
-          },
-          async resolveCalendar() {
-            return { id: "calendar-test", name: "Team calendar", primary: true };
-          },
-          async occurrences() {
-            return { items: [], nextCursor: null };
-          },
+  const integrationService = new CalendarService(
+    new PostgresCalendars(integrationDb),
+    new AccountCalendars(accountUrl, integrationKey.privateKey, "integration-test"),
+    {
+      google: {
+        authorizationUrl: (state, challenge) =>
+          `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&code_challenge=${challenge}`,
+        async exchange() {
+          return {
+            accessToken: "controlled-access",
+            refreshToken: "controlled-refresh",
+            expiresAt: new Date(Date.now() + 3600000),
+          };
+        },
+        async refresh() {
+          return {
+            accessToken: "controlled-access",
+            refreshToken: "controlled-refresh",
+            expiresAt: new Date(Date.now() + 3600000),
+          };
+        },
+        async calendars() {
+          return {
+            items: [{ id: "calendar-test", name: "Team calendar", primary: true }],
+            nextCursor: null,
+          };
+        },
+        async resolveCalendar() {
+          return { id: "calendar-test", name: "Team calendar", primary: true };
+        },
+        async occurrences() {
+          return { items: [], nextCursor: null };
         },
       },
-      new AesTokenVault("test", { test: randomBytes(32).toString("base64") }),
-    ),
+    },
+    new AesTokenVault("test", { test: randomBytes(32).toString("base64") }),
+  );
+  const integration = integrationApp(
+    integrationService,
     async (token) => (await calendarIdentity.verify(token)).actor,
     ["google"],
   );
@@ -311,6 +312,30 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     assert.equal(occurrences.status, 200);
     assert.deepEqual(occurrences.data.items, []);
     assert.equal(occurrences.data.nextCursor, null);
+    const sync = await invoke("POST", `${base}/connections/calendar/${calendarRecord.id}/sync`, {
+      ...ownerHeaders,
+      "idempotency-key": randomUUID(),
+    });
+    assert.equal(sync.status, 202);
+    assert.equal(sync.data.state, "queued");
+    // Use the same service application object as the native independent worker.
+    await integrationService.work(workspaceId, calendarRecord.id);
+    const syncStatus = await invoke(
+      "GET",
+      `${base}/connections/calendar/${calendarRecord.id}/sync`,
+      ownerHeaders,
+    );
+    assert.equal(syncStatus.data.state, "complete");
+    assert.equal(
+      (
+        await invoke(
+          "GET",
+          `${base}/connections/calendar/${calendarRecord.id}/stored-occurrences`,
+          ownerHeaders,
+        )
+      ).status,
+      200,
+    );
     const denied = await invoke("GET", `${base}/meetings`, memberHeaders);
     assert.equal(denied.status, 403);
     const grant = await invoke(

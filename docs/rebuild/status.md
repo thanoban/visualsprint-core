@@ -198,3 +198,23 @@ ten builds, 33 database/runtime/composition tests and five browser fixtures pass
 The actual service composition and browser call the new read endpoint with controlled vendor
 responses. Calendar occurrence persistence, incremental synchronization, capture policy and
 automatic dispatch are **not** complete; live vendor qualification remains outstanding.
+
+### Durable calendar snapshots (F3 in progress)
+
+Integration now persists explicit sync jobs, page cursors/staging and versioned normalized
+occurrences. Its worker resumes after interruptions, publishes only complete snapshots with
+atomic metadata outbox changes, and fences logout/disconnect/configuration races. Database
+sequence ordering fixes equal-timestamp snapshots. Batched page and outbox writes avoid
+per-event database round trips. Public endpoints and web controls show queued/completed
+states. See [implementation and limitations](calendar-sync.md).
+
+This delivers durable requested snapshots, not complete unattended calendar automation.
+Incremental cursors, notifications/reconciliation, background grant activation and cross-service
+meeting/capture orchestration remain next. Intelligence/chat, approvals/connectors, exports/
+deletion and live production qualification are still required before a final release.
+
+Local verification: 52 fast tests, 36 database/runtime/composition tests, five browser
+fixtures and ten builds passed. Production dependency audit found no known vulnerabilities.
+Tests verify exactly-once occurrence effects through the outbox, metadata-only events and
+complete-snapshot visibility across provider outages. These are controlled-provider local
+results, not live calendar or automatic meeting-join qualification.

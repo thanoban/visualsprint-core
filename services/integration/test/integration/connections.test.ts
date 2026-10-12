@@ -37,6 +37,7 @@ function fixture(unknown = false) {
     refreshes = 0,
     active = true,
     clock = new Date("2026-10-12T10:00:00Z");
+  let pages: CalendarProvider["occurrences"] = async () => ({ items: [], nextCursor: null });
   const provider: CalendarProvider = {
     authorizationUrl: (state, challenge) =>
       `https://accounts.google.com/o/oauth2/v2/auth?state=${state}&code_challenge=${challenge}`,
@@ -70,9 +71,7 @@ function fixture(unknown = false) {
         primary: id === "primary",
       };
     },
-    async occurrences() {
-      return { items: [], nextCursor: null };
-    },
+    occurrences: (...args) => pages(...args),
   };
   const service = new CalendarService(
     repository,
@@ -95,6 +94,9 @@ function fixture(unknown = false) {
     service,
     start,
     counters: () => ({ calls, refreshes }),
+    pages: (value: CalendarProvider["occurrences"]) => {
+      pages = value;
+    },
     revoke: () => {
       active = false;
     },
@@ -151,6 +153,122 @@ test("PKCE start retries keep one connection; actor, session and tenant isolate 
   assert.equal(record.oauthCipher, null);
   assert.equal(record.tokenCipher?.includes("private-refresh"), false);
   assert.equal(JSON.stringify(result).includes("private-access"), false);
+});
+async function connected() {
+  const f = fixture(),
+    started = await f.start(),
+    connectionId = started.connection.id;
+  await f.service.finish(f.actor, {
+    connectionId,
+    state: new URL(started.authorizationUrl!).searchParams.get("state")!,
+    code: "code",
+  });
+  await f.service.initialize(f.actor, connectionId);
+  return { ...f, connectionId };
+}
+const event = {
+  sourceKey: "source-a",
+  providerEventId: "vendor-a",
+  title: "Customer call",
+  status: "confirmed" as const,
+  startsAt: "2026-10-12T11:00:00Z",
+  endsAt: "2026-10-12T12:00:00Z",
+  allDay: false,
+  declined: false,
+  joinUrl: "https://meet.google.com/abc-defg-hij",
+};
+test("durable sync resumes committed pages, publishes once and preserves the prior complete snapshot", async () => {
+  const f = await connected();
+  f.pages(async () => ({ items: [event], nextCursor: null }));
+  const first = await f.service.synchronize(f.actor, f.connectionId, "sync-first-key");
+  assert.deepEqual(await f.service.synchronize(f.actor, f.connectionId, "sync-first-key"), first);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal((await f.service.syncStatus(f.actor, f.connectionId))!.state, "complete");
+  const original = (await f.service.storedOccurrences(f.actor, f.connectionId)).items as {
+    id: string;
+    version: number;
+    title: string;
+  }[];
+  assert.equal(original[0]!.version, 1);
+  let outage = true;
+  f.pages(async (_token, _calendar, _window, cursor) => {
+    if (!cursor)
+      return { items: [{ ...event, title: "Rescheduled call" }], nextCursor: "next-page" };
+    if (outage) throw new AppError("CALENDAR_PROVIDER_UNAVAILABLE", 503);
+    return {
+      items: [{ ...event, sourceKey: "source-b", providerEventId: "vendor-b" }],
+      nextCursor: null,
+    };
+  });
+  await f.service.synchronize(f.actor, f.connectionId, "sync-second-key");
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal((await f.service.syncStatus(f.actor, f.connectionId))!.pageCount, 1);
+  assert.deepEqual((await f.service.storedOccurrences(f.actor, f.connectionId)).items, original);
+  await assert.rejects(
+    f.service.work(f.actor.workspaceId, f.connectionId),
+    /CALENDAR_PROVIDER_UNAVAILABLE/,
+  );
+  outage = false;
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  const updated = (await f.service.storedOccurrences(f.actor, f.connectionId)).items as {
+    id: string;
+    version: number;
+    title: string;
+  }[];
+  assert.equal(updated.length, 2);
+  assert.equal(updated.find((x) => x.id === original[0]!.id)!.version, 2);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.deepEqual((await f.service.storedOccurrences(f.actor, f.connectionId)).items, updated);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.workspace_id',$1,true)", [f.actor.workspaceId]);
+    const events = await client.query(
+      "SELECT event FROM outbox WHERE event->>'type'='calendar.occurrence.changed.v1'",
+    );
+    assert.equal(events.rows.length, 3);
+    assert.equal(JSON.stringify(events.rows).includes("Customer call"), false);
+    assert.equal(JSON.stringify(events.rows).includes("meet.google.com"), false);
+    await client.query("ROLLBACK");
+  } finally {
+    client.release();
+  }
+  assert.equal(
+    await repository.scoped(randomUUID(), (tx) => tx.latestSync(f.connectionId)),
+    undefined,
+  );
+});
+test("repeating pagination cannot publish partial changes; revocation blocks outstanding work", async () => {
+  const f = await connected();
+  f.pages(async () => ({ items: [event], nextCursor: "loop" }));
+  await f.service.synchronize(f.actor, f.connectionId, "sync-loop-key");
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal((await f.service.syncStatus(f.actor, f.connectionId))!.state, "failed");
+  assert.deepEqual((await f.service.storedOccurrences(f.actor, f.connectionId)).items, []);
+  await f.service.synchronize(f.actor, f.connectionId, "sync-revoke-key");
+  f.revoke();
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  await assert.rejects(f.service.syncStatus(f.actor, f.connectionId), /FORBIDDEN/);
+  const job = await repository.scoped(f.actor.workspaceId, (tx) => tx.latestSync(f.connectionId));
+  assert.equal(job!.state, "blocked");
+});
+test("disconnect during a provider page fences publication and clears staged work", async () => {
+  const f = await connected();
+  f.pages(async () => {
+    const version = (await f.service.list(f.actor))[0]!.version;
+    await f.service.disconnect(f.actor, f.connectionId, "disconnect-during-sync", {
+      expectedVersion: version,
+    });
+    return { items: [event], nextCursor: null };
+  });
+  await f.service.synchronize(f.actor, f.connectionId, "sync-disconnect-key");
+  await f.service.work(f.actor.workspaceId, f.connectionId);
+  assert.equal((await f.service.syncStatus(f.actor, f.connectionId))!.state, "superseded");
+  await assert.rejects(
+    f.service.storedOccurrences(f.actor, f.connectionId),
+    /CONNECTION_UNAVAILABLE/,
+  );
 });
 test("unknown code-exchange result never silently retries redemption", async () => {
   const f = fixture(true);

@@ -208,6 +208,19 @@ test("calendar selection and disconnect use versioned commands without claiming 
       path = new URL(request.url()).pathname;
     if (path.endsWith("/providers"))
       return route.fulfill({ json: { providers: ["google"], automaticCaptureReady: false } });
+    if (path.endsWith("/sync")) {
+      if (request.method() === "POST") expect(request.headers()["idempotency-key"]).toBeTruthy();
+      return route.fulfill({
+        status: request.method() === "POST" ? 202 : 200,
+        json: {
+          id,
+          state: request.method() === "POST" ? "queued" : "complete",
+          pageCount: request.method() === "POST" ? 0 : 1,
+          errorCode: null,
+          window: { startsAt: "2026-10-12T00:00:00Z", endsAt: "2026-10-26T00:00:00Z" },
+        },
+      });
+    }
     if (path.endsWith("/calendars"))
       return route.fulfill({
         json: {
@@ -243,6 +256,14 @@ test("calendar selection and disconnect use versioned commands without claiming 
   await expect(panel).toContainText("Automatic meeting capture is not enabled");
   await panel.getByRole("button", { name: "Preview upcoming events", exact: true }).click();
   await expect(panel).toContainText("No events in this page");
+  await panel.getByRole("button", { name: "Synchronize calendar", exact: true }).click();
+  await expect(panel.getByRole("status").filter({ hasText: /Calendar sync:/ })).toContainText(
+    "queued",
+  );
+  await panel.getByRole("button", { name: "Refresh sync status", exact: true }).click();
+  await expect(panel.getByRole("status").filter({ hasText: /Calendar sync:/ })).toContainText(
+    "complete",
+  );
   await panel.getByRole("combobox", { name: "Calendar", exact: true }).selectOption("team-id");
   await panel.getByRole("button", { name: "Save calendar", exact: true }).click();
   await expect(panel.getByRole("heading", { name: "Customer calls", exact: true })).toBeVisible();

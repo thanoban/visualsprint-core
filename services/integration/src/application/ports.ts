@@ -1,6 +1,7 @@
 import type { Actor } from "@visualsprint/platform";
 import type { CalendarProviderName, Connection, Tokens, Calendar } from "../domain/records.js";
 import type { CalendarWindow, OccurrencePage } from "../domain/occurrences.js";
+import type { CalendarSync } from "../domain/sync.js";
 export interface CalendarProvider {
   authorizationUrl(state: string, challenge: string): string;
   exchange(code: string, verifier: string): Promise<Tokens>;
@@ -27,6 +28,19 @@ export interface CalendarAuthority {
   disableGrant(actor: Actor, connectionId: string): Promise<void>;
 }
 export interface ConnectionTx {
+  queueSync(actor: Actor, key: string, connection: Connection, now: Date): Promise<CalendarSync>;
+  latestSync(connectionId: string, activeOnly?: boolean): Promise<CalendarSync | undefined>;
+  syncPage(sync: CalendarSync, page: OccurrencePage): Promise<void>;
+  endSync(
+    sync: CalendarSync,
+    state: "failed" | "blocked" | "superseded",
+    code: string,
+  ): Promise<void>;
+  storedOccurrences(
+    connectionId: string,
+    calendarId: string,
+    after?: string,
+  ): Promise<{ items: unknown[]; nextCursor: string | null }>;
   get(id: string): Promise<Connection | undefined>;
   list(ownerId: string): Promise<Connection[]>;
   create(record: Connection): Promise<Connection>;

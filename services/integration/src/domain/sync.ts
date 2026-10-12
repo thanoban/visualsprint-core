@@ -1,0 +1,18 @@
+export type CalendarSync = {
+  sequence: number;
+  workspaceId: string;
+  id: string;
+  connectionId: string;
+  ownerId: string;
+  sessionId: string;
+  calendarId: string;
+  connectionVersion: number;
+  startsAt: Date;
+  endsAt: Date;
+  state: "queued" | "running" | "complete" | "failed" | "blocked" | "superseded";
+  cursor: string | null;
+  cursorHashes: string[];
+  pageCount: number;
+  errorCode: string | null;
+  createdAt: Date;
+};

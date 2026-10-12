@@ -43,6 +43,13 @@ const occurrencePage = z.object({
     .max(100),
   nextCursor: z.string().nullable(),
 });
+const syncResult = z.object({
+  id: z.string().uuid(),
+  state: z.string(),
+  pageCount: z.number().int(),
+  errorCode: z.string().nullable(),
+  window: z.object({ startsAt: z.string(), endsAt: z.string() }),
+});
 export function CalendarPanel({ api, workspaceId }: { api: Api; workspaceId: string }) {
   const [refresh, setRefresh] = useState(0),
     [provider, setProvider] = useState<"google" | "microsoft">("google");
@@ -157,6 +164,8 @@ function CalendarEditor({
   const [calendarId, setCalendarId] = useState(item.calendarId);
   const [pageCursor, setPageCursor] = useState<string>();
   const preview = useCommand();
+  const synchronize = useCommand();
+  const [sync, setSync] = useState<z.infer<typeof syncResult> | null>();
   const [occurrences, setOccurrences] = useState<z.infer<typeof occurrencePage>>();
   const loadOccurrences = (next = false) => {
     const parameters =
@@ -279,6 +288,42 @@ function CalendarEditor({
                 ) : null}
               </>
             ) : null}
+          </Form>
+          <Form
+            title="Durable calendar synchronization"
+            button="Synchronize calendar"
+            command={synchronize}
+            submit={() =>
+              void synchronize.run(
+                item.id,
+                (key) =>
+                  api.request(`${path}/${item.id}/sync`, syncResult, { method: "POST", key }),
+                setSync,
+              )
+            }
+          >
+            <p>
+              Save a complete 14-day snapshot. Interrupted pages resume on the worker. Automatic
+              capture is not enabled.
+            </p>
+            {sync ? (
+              <p role="status">
+                Calendar sync: {sync.state}; pages: {sync.pageCount}
+                {sync.errorCode ? ` — ${sync.errorCode}` : ""}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() =>
+                void synchronize.run(
+                  "status",
+                  () => api.request(`${path}/${item.id}/sync`, syncResult.nullable()),
+                  setSync,
+                )
+              }
+            >
+              Refresh sync status
+            </button>
           </Form>
         </>
       ) : null}
