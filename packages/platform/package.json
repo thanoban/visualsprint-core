@@ -1,7 +1,25 @@
 {
-  "name": "@visualsprint/platform", "version": "0.1.0", "private": true, "type": "module",
-  "exports": {".": "./src/index.ts"},
-  "scripts": {"typecheck": "tsc --noEmit", "test": "tsx --test test/*.test.ts", "build": "tsc --outDir dist"},
-  "dependencies": {"@visualsprint/contracts": "workspace:*", "fastify": "5.12.5", "jose": "6.2.12", "pg": "8.23.1", "zod": "4.1.12"},
-  "devDependencies": {"@types/pg": "8.23.1"}
+  "name": "@visualsprint/platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "build": "tsc --outDir dist"
+  },
+  "dependencies": {
+    "@visualsprint/contracts": "workspace:*",
+    "fastify": "5.12.5",
+    "jose": "6.2.12",
+    "pg": "8.23.1",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
 }

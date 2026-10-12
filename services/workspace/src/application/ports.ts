@@ -6,11 +6,28 @@ export interface MembershipAuthority {
   requireActive(actor: Actor): Promise<void>;
   requireMember(workspaceId: string, userId: string, delegatedBy: Actor): Promise<void>;
 }
-export interface EventPublisher { publish(event: DomainEvent): Promise<void> }
-export type Customer = { id: string; workspaceId: string; ownerId: string; name: string; version: number };
+export interface EventPublisher {
+  publish(event: DomainEvent): Promise<void>;
+}
+export type Customer = {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  name: string;
+  version: number;
+};
 export type Project = Customer & { customerId: string | null };
-export type Meeting = { id: string; workspaceId: string; ownerId: string; title: string; notes: string;
-  joinUrl: string | null; version: number; blocked: boolean; createdAt: Date };
+export type Meeting = {
+  id: string;
+  workspaceId: string;
+  ownerId: string;
+  title: string;
+  notes: string;
+  joinUrl: string | null;
+  version: number;
+  blocked: boolean;
+  createdAt: Date;
+};
 export interface WorkspaceTransaction {
   customer(id: string): Promise<Customer | undefined>;
   project(id: string): Promise<Project | undefined>;
@@ -22,7 +39,11 @@ export interface WorkspaceTransaction {
   createCustomer(record: Customer): Promise<Customer>;
   createProject(record: Project): Promise<Project>;
   createMeeting(record: Omit<Meeting, "createdAt">): Promise<Meeting>;
-  updateMeeting(id: string, expectedVersion: number, changes: { title?: string; notes?: string }): Promise<Meeting>;
+  updateMeeting(
+    id: string,
+    expectedVersion: number,
+    changes: { title?: string; notes?: string },
+  ): Promise<Meeting>;
   assign(meetingId: string, projectId: string, actorId: string): Promise<void>;
   share(meetingId: string, userId: string): Promise<void>;
   unshare(meetingId: string, userId: string): Promise<void>;
@@ -30,5 +51,11 @@ export interface WorkspaceTransaction {
 }
 export interface WorkspaceRepository {
   read<T>(actor: Actor, work: (tx: WorkspaceTransaction) => Promise<T>): Promise<T>;
-  command<T>(actor: Actor, key: string, fingerprint: string, work: (tx: WorkspaceTransaction) => Promise<T>, guard?: (tx: WorkspaceTransaction) => Promise<void>): Promise<T>;
+  command<T>(
+    actor: Actor,
+    key: string,
+    fingerprint: string,
+    work: (tx: WorkspaceTransaction) => Promise<T>,
+    guard?: (tx: WorkspaceTransaction) => Promise<void>,
+  ): Promise<T>;
 }

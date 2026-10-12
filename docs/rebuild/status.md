@@ -64,5 +64,7 @@ WorkOS signatures use a controlled RSA/JWKS provider in tests. Live WorkOS login
 external qualification. F1 remains open until OpenFGA, web UI and broker wiring pass together.
 Verification: 20 fast tests, six compiled/typechecked packages, two Account database tests,
 eight Workspace database/HTTP tests and one multi-service HTTP composition test passed.
+Native Node runtime bundles now boot Account, Workspace and gateway successfully in a
+separate process test. Code formatting is standardized across the rebuilt TypeScript tree.
 Next slice: OpenFGA authorization runtime and React private workspace UI; then F2
 durable signed capture ingress and UI. Do not expose the create adapter directly as a public endpoint.

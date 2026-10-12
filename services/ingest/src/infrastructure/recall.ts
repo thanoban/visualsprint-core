@@ -23,11 +23,13 @@ export function buildRecallRequest(input: {
       transcript: {
         provider: { recallai_streaming: { mode: "prioritize_low_latency", language_code: "en" } },
       },
-      realtime_endpoints: [{
-        type: "webhook",
-        url: webhook.href,
-        events: ["transcript.data"],
-      }],
+      realtime_endpoints: [
+        {
+          type: "webhook",
+          url: webhook.href,
+          events: ["transcript.data"],
+        },
+      ],
     },
   };
 }
@@ -65,7 +67,9 @@ export class RecallProvider implements CaptureProvider {
       const providerId = id.safeParse(
         typeof result === "object" && result !== null && "id" in result ? result.id : undefined,
       );
-      return providerId.success ? { kind: "accepted", providerId: providerId.data } : { kind: "unknown" };
+      return providerId.success
+        ? { kind: "accepted", providerId: providerId.data }
+        : { kind: "unknown" };
     } catch {
       // A timeout may follow provider acceptance. The caller must reconcile the
       // persisted attempt; this adapter never blindly resends a create request.

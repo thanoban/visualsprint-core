@@ -1,8 +1,20 @@
-import type {Actor, Identity} from "@visualsprint/platform";
-import type {DomainEvent} from "@visualsprint/contracts";
-import type {Role} from "../domain/membership.js";
-export type AccountWorkspace = {id: string; creatorId: string; name: string; cellId: string; blocked: boolean};
-export type Membership = {workspaceId: string; userId: string; role: Role; active: boolean; version: number};
+import type { Actor, Identity } from "@visualsprint/platform";
+import type { DomainEvent } from "@visualsprint/contracts";
+import type { Role } from "../domain/membership.js";
+export type AccountWorkspace = {
+  id: string;
+  creatorId: string;
+  name: string;
+  cellId: string;
+  blocked: boolean;
+};
+export type Membership = {
+  workspaceId: string;
+  userId: string;
+  role: Role;
+  active: boolean;
+  version: number;
+};
 export interface AccountTransaction {
   actorId: string;
   setWorkspace(workspaceId: string): Promise<void>;

@@ -18,6 +18,9 @@ schema or migration ledger. Tenant context is transaction-local; FORCE RLS block
 without a workspace context and cross-workspace writes. API checks additionally restrict
 meetings to owners and explicit readers. Customers/projects are initially creator-private.
 
+Build first with `pnpm build`. Services start from compiled native Node bundles;
+production runtime does not require a TypeScript loader. Workspace packages are bundled
+into each service; external dependencies remain service-local.
 `pnpm --filter @visualsprint/workspace migrate` runs the service-owned migrations.
 `pnpm --filter @visualsprint/workspace start` starts its HTTP service after the Account
 membership authority is available and service keys have been configured. See its

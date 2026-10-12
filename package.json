@@ -17,6 +17,8 @@
     "@visualsprint/platform": "workspace:*",
     "@types/node": "22.18.6",
     "jose": "6.2.12",
+    "esbuild": "0.25.12",
+    "prettier": "3.6.2",
     "tsx": "4.20.6",
     "turbo": "2.6.0",
     "typescript": "5.9.3"

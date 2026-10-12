@@ -9,7 +9,10 @@ const transitions: Record<CaptureState, readonly CaptureState[]> = {
   capturing: ["stopping", "finalizing"],
   stopping: ["finalizing", "failed"],
   finalizing: ["complete", "partial", "failed"],
-  complete: [], partial: [], failed: [], cancelled: [],
+  complete: [],
+  partial: [],
+  failed: [],
+  cancelled: [],
 };
 
 export function transitionCapture(current: CaptureState, next: CaptureState): CaptureState {
@@ -44,6 +47,9 @@ export function shouldLeave(input: {
   nowMs: number;
 }): boolean {
   if (input.explicitEnd || input.stopRequested || input.hostRemoved) return true;
-  return input.nonBotParticipants === 0 && input.aloneSinceMs !== null
-    && input.nowMs >= input.aloneSinceMs + 90_000;
+  return (
+    input.nonBotParticipants === 0 &&
+    input.aloneSinceMs !== null &&
+    input.nowMs >= input.aloneSinceMs + 90_000
+  );
 }

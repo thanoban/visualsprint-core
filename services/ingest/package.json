@@ -8,5 +8,7 @@
     "test": "tsx --test test/*.test.ts",
     "build": "tsc --outDir dist"
   },
-  "dependencies": { "@visualsprint/contracts": "workspace:*" }
+  "dependencies": {
+    "@visualsprint/contracts": "workspace:*"
+  }
 }
