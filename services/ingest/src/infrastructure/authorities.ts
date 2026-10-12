@@ -103,6 +103,15 @@ export class Authorities implements MeetingAuthority, UsageAuthority {
       .object({ state: z.enum(["held", "settled", "released"]) })
       .parse(await this.call(actor, "account", "usage/reserve", { requestId, maxSeconds })).state;
   }
+  async lookup(actor: Actor, requestId: string) {
+    return z
+      .object({
+        state: z.enum(["held", "settled", "released"]),
+        maxSeconds: z.number().int().positive(),
+      })
+      .nullable()
+      .parse(await this.call(actor, "account", "usage/reservation", { requestId }));
+  }
   async release(actor: Actor, requestId: string) {
     await this.call(actor, "account", "usage/release", { requestId, confirmedNoCapture: true });
   }

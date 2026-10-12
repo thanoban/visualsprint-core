@@ -43,6 +43,25 @@ async function owner() {
     } satisfies Actor,
   };
 }
+test("reservation reconciliation is owner-scoped and remains possible after logout", async () => {
+  const { actor, identity } = await owner();
+  const requestId = randomUUID();
+  assert.equal(await account.captureReservation(actor, { requestId }), null);
+  await account.reserveCapture(actor, { requestId, maxSeconds: 120 });
+  await account.logout(identity);
+  assert.deepEqual(await account.captureReservation(actor, { requestId }), {
+    state: "held",
+    maxSeconds: 120,
+  });
+  await assert.rejects(
+    account.captureReservation({ ...actor, actorId: randomUUID() }, { requestId }),
+    /FORBIDDEN/,
+  );
+  assert.equal(
+    await account.captureReservation({ ...actor, workspaceId: randomUUID() }, { requestId }),
+    null,
+  );
+});
 test("concurrent reserve retries debit once and atomically cap five active meetings", async () => {
   const { actor } = await owner();
   const requestId = randomUUID();

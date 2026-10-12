@@ -124,13 +124,24 @@ class CaptureTx implements CaptureTransaction {
     const record = (
       await this.db
         .update(schema.requests)
-        .set({ ...changes, version: sql`${schema.requests.version}+1` })
+        .set({
+          ...changes,
+          version: Object.keys(changes).some((key) => key !== "leaseUntil" && key !== "leaseToken")
+            ? sql`${schema.requests.version}+1`
+            : sql`${schema.requests.version}`,
+        })
         .where(
           and(eq(schema.requests.workspaceId, this.workspaceId), eq(schema.requests.id, requestId)),
         )
         .returning()
     )[0];
     if (!record) throw new AppError("NOT_FOUND", 404);
+    // A late reservation acknowledgement can reopen cleanup work after a stop
+    // raced a scheduler removal. Enqueue in the same owning transaction.
+    if (record.quotaState === "held" || record.quotaState === "pending")
+      await this.db.execute(
+        sql`INSERT INTO capture_work_index(request_id,workspace_id) VALUES(${requestId},${this.workspaceId}) ON CONFLICT DO NOTHING`,
+      );
     return record;
   }
   async emit(capture: Capture, type: DomainEvent["type"], references?: DomainEvent["references"]) {

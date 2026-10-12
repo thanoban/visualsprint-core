@@ -155,6 +155,16 @@ export class AccountService {
       return reservation;
     });
   }
+  captureReservation(actor: Actor, body: unknown) {
+    const { requestId } = z.object({ requestId: id }).strict().parse(body);
+    return this.repository.actor(actor, async (tx) => {
+      const record = await tx.reservation(requestId);
+      if (!record) return null;
+      if (record.ownerId !== actor.actorId) throw new AppError("FORBIDDEN", 403);
+      // Cleanup-only capability: no meeting/member content and no entitlement mutation.
+      return { state: record.state, maxSeconds: record.maxSeconds };
+    });
+  }
   settleCapture(actor: Actor, body: unknown, release = false) {
     const input = release
       ? z

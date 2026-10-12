@@ -133,3 +133,11 @@ Azure messaging/deployment and live Meet/Zoom/Teams qualification remain incompl
 Verified locally: 33 fast tests, eight package/service builds, 23 database/runtime/composition
 tests and three browser fixture tests passed. Dependency audit reports no known production
 vulnerabilities. These results do not establish live provider admission or production capacity.
+
+### Reservation recovery hardening
+
+Pending quota intent is reconciled automatically through Account's signed Ingest-only lookup,
+including lost responses and cancellation races. Lookup exposes only owned reservation state and
+maximum seconds, not meeting content. Late acknowledgements re-enqueue cleanup; logout cannot strand
+usage. Lease bookkeeping no longer advances user-facing aggregate versions.
+Verification: 33 fast tests, eight builds and 26 database/runtime/composition tests passed.

@@ -14,6 +14,10 @@ export interface MeetingAuthority {
   manage(actor: Actor, meetingId: string): Promise<void>;
 }
 export interface UsageAuthority {
+  lookup(
+    actor: Actor,
+    requestId: string,
+  ): Promise<{ state: "held" | "settled" | "released"; maxSeconds: number } | null>;
   reserve(
     actor: Actor,
     requestId: string,

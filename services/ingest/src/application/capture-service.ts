@@ -255,6 +255,8 @@ export class CaptureService {
     });
   }
   async work(workspaceId: string, requestId: string) {
+    const pending = await this.repository.scoped(workspaceId, (tx) => tx.load(requestId));
+    if (pending?.quotaState === "pending") await this.recoverAdmission(pending);
     const token = randomUUID();
     const now = this.now();
     const claim = await this.repository.scoped(workspaceId, async (tx) => {
@@ -436,5 +438,46 @@ export class CaptureService {
           await tx.update(requestId, { leaseUntil: null, leaseToken: null });
       });
     }
+  }
+  private async recoverAdmission(record: Capture) {
+    const actor = actorFor(record);
+    let reservation = await this.usage.lookup(actor, record.id);
+    let failure: string | null = null;
+    if (!terminal.has(record.state)) {
+      try {
+        const context = await this.meetings.capture(actor, record.meetingId);
+        if (context.version !== record.meetingVersion || context.joinUrl !== record.joinUrl)
+          throw new AppError("VERSION_CONFLICT", 409);
+        if (!reservation) {
+          const state = await this.usage.reserve(actor, record.id, record.maxSeconds);
+          reservation = { state, maxSeconds: record.maxSeconds };
+        }
+      } catch (error) {
+        if (
+          !(error instanceof AppError) ||
+          ![400, 401, 402, 403, 404, 409, 429].includes(error.status)
+        )
+          throw error;
+        failure = error.code;
+        // An earlier reserve may have succeeded even if its reply was lost.
+        reservation = await this.usage.lookup(actor, record.id);
+      }
+    }
+    await this.repository.scoped(record.workspaceId, async (tx) => {
+      const latest = await tx.load(record.id);
+      if (!latest || latest.quotaState !== "pending") return;
+      if (reservation && reservation.maxSeconds !== latest.maxSeconds)
+        throw new AppError("RESERVATION_CONFLICT", 409);
+      const closed = terminal.has(latest.state);
+      const held = reservation?.state === "held";
+      const updated = await tx.update(record.id, {
+        quotaState: reservation?.state ?? "released",
+        ready: !closed && !failure && held,
+        state: closed ? latest.state : failure || !held ? "failed" : latest.state,
+        errorCode: failure ?? (!closed && !held ? "RESERVATION_CONFLICT" : latest.errorCode),
+        providerDone: failure !== null || latest.providerDone,
+      });
+      await tx.emit(updated, updated.ready ? "capture.requested.v1" : "capture.state.changed.v1");
+    });
   }
 }

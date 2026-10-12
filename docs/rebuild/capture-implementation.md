@@ -66,10 +66,15 @@ draining, quota cleanup, human revision protection, pagination and duration ceil
 tests run gateway, Account, Workspace, Authz/OpenFGA and Ingest with separate databases.
 Hosted identity and the external capture provider are controlled fixtures in these tests.
 
-Open: Azure Service Bus outbox publishing/telemetry, automatic pending-reservation reconciliation,
+Open: Azure Service Bus outbox publishing/telemetry,
 operator resolution of indefinitely unknown dispatch, permission/deletion-triggered cancellation,
 calendar operation principals, full transcript paging UI, health/gap instrumentation, real provider
 admission/end/full-duration tests and performance qualification. The current worker uses a durable
 owning-database routing index; it is not yet the final Azure event transport. Existing populated
 Ingest databases require an explicitly scoped work-index backfill, not a bypass-RLS migration.
 F3 calendars, F4 intelligence/chat, F5 integrations/data rights and F6 staging remain unfinished.
+
+Interrupted Account reservation replies now recover through a signed, owner-scoped cleanup-only
+lookup. Workers recheck the stored meeting version before pending dispatch; changed/revoked context
+fails closed and held quota is released. Cancellation and late reservation acknowledgements enqueue
+cleanup transactionally, including after scheduler removal. Logout does not prevent quota cleanup.

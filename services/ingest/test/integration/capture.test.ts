@@ -111,7 +111,7 @@ test("absolute duration stops capture without treating quiet audio as meeting en
   assert.equal(f.counters().leaves, 1);
   assert.equal((await f.service.status(f.actor, requested.id)).state, "stopping");
 });
-function fixture(kind: "accepted" | "unknown" | "capacity" = "accepted") {
+function fixture(kind: "accepted" | "unknown" | "capacity" = "accepted", loseReserveReply = false) {
   const actor: Actor = {
     workspaceId: randomUUID(),
     actorId: randomUUID(),
@@ -126,6 +126,7 @@ function fixture(kind: "accepted" | "unknown" | "capacity" = "accepted") {
     settlements = 0,
     allowed = true;
   let status = "in_call_recording";
+  let held = false;
   const provider: ManagedCaptureProvider = {
     async create() {
       creates++;
@@ -168,7 +169,13 @@ function fixture(kind: "accepted" | "unknown" | "capacity" = "accepted") {
     authority,
     {
       async reserve() {
+        const first = !held;
+        held = true;
+        if (first && loseReserveReply) throw new AppError("ACCOUNT_UNAVAILABLE", 503);
         return "held";
+      },
+      async lookup() {
+        return held ? { state: "held", maxSeconds: 120 } : null;
       },
       async release() {
         releases++;
@@ -219,6 +226,26 @@ test("durable intent, tenant isolation and uncertain dispatch never duplicate cr
     repository.attempt(randomUUID(), async () => undefined),
     /UNKNOWN_CAPTURE_ATTEMPT/,
   );
+});
+test("worker recovers a quota response lost after Account commit without another bot", async () => {
+  const f = fixture("accepted", true);
+  await assert.rejects(f.request(), /ACCOUNT_UNAVAILABLE/);
+  const pending = (await repository.scoped(f.actor.workspaceId, (tx) => tx.list(f.meetingId)))[0]!;
+  assert.equal(pending.ready, false);
+  await f.service.work(f.actor.workspaceId, pending.id);
+  assert.equal((await f.service.status(f.actor, pending.id)).ready, true);
+  assert.equal(f.counters().creates, 1);
+  await f.service.work(f.actor.workspaceId, pending.id);
+  assert.equal(f.counters().creates, 1);
+});
+test("cancellation after a lost quota reply cleans the held reservation without dispatch", async () => {
+  const f = fixture("accepted", true);
+  await assert.rejects(f.request(), /ACCOUNT_UNAVAILABLE/);
+  const pending = (await repository.scoped(f.actor.workspaceId, (tx) => tx.list(f.meetingId)))[0]!;
+  await f.service.stop(f.actor, pending.id);
+  await f.service.work(f.actor.workspaceId, pending.id);
+  assert.equal(f.counters().creates, 0);
+  assert.equal(f.counters().releases, 1);
 });
 test("stop while joining is durable; acceptance alone cannot finalize; late text drains", async () => {
   const f = fixture();

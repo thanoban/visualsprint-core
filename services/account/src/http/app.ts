@@ -70,7 +70,7 @@ export function accountApp(
                 "reporting",
                 "notification",
               ]
-            : ["reserve", "settle", "release"].includes(capability ?? "")
+            : ["reserve", "settle", "release", "reservation"].includes(capability ?? "")
               ? ["ingest"]
               : ["gateway"];
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
@@ -78,6 +78,9 @@ export function accountApp(
       const actor = (request: object) => actors.get(request)!;
       routes.post("/usage/reserve", (request) =>
         service.reserveCapture(actor(request), request.body),
+      );
+      routes.post("/usage/reservation", (request) =>
+        service.captureReservation(actor(request), request.body),
       );
       routes.post("/usage/settle", (request) =>
         service.settleCapture(actor(request), request.body),
