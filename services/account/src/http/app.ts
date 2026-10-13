@@ -5,6 +5,7 @@ import {
   AppError,
   bearer,
   installErrorHandler,
+  privateHttpLogger,
   type Actor,
   type Identity,
   type ServiceIdentity,
@@ -17,9 +18,7 @@ export function accountApp(
 ) {
   const app = Fastify({
     bodyLimit: 16_000,
-    logger: {
-      redact: ["req.headers.authorization", "req.headers.x-service-authorization", "req.body"],
-    },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "account" }));

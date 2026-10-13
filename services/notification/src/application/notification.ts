@@ -111,7 +111,7 @@ export class NotificationService {
       if (delivery.channel === "email" && delivery.errorCode === "RECONCILE") {
         sideEffectPossible = true;
         const result = await this.email.lookup(delivery.id);
-        if (result.state === "sent") return finish("delivered", null, result.externalId);
+        if (result.state === "sent") return finish("provider_sent", null, result.externalId);
         if (result.state === "rejected") return finish("failed", result.code);
         if (result.state === "not_sent") return finish("queued");
         return finish("unknown", "EMAIL_RESPONSE_UNKNOWN");
@@ -126,20 +126,33 @@ export class NotificationService {
       if (delivery.channel === "in_app") return finish("delivered");
       if (!this.email.configured) return finish("held", "EMAIL_NOT_CONFIGURED");
       if (!profile.verifiedEmail) return finish("held", "VERIFIED_EMAIL_REQUIRED");
+      await this.email.prepare?.();
+      const currentPreference = await this.repository.transaction(workspaceId, (tx) =>
+        tx.preferences(delivery.userId),
+      );
+      if (!currentPreference.email) return finish("cancelled", "PREFERENCE_DISABLED");
+      const currentProfile = await this.authority.profile(
+        workspaceId,
+        delivery.userId,
+        delivery.id,
+      );
+      await this.authority.source(workspaceId, delivery.userId, delivery.meetingId, delivery.id);
+      if (!currentProfile.verifiedEmail) return finish("held", "VERIFIED_EMAIL_REQUIRED");
       // Never include meeting title, customer, project, transcript, task text or provider join links in email.
       const appUrl = new URL(`/w/${workspaceId}`, this.appOrigin).toString();
       await this.repository.transaction(workspaceId, (tx) => tx.startEmail(delivery));
       sideEffectPossible = true;
       const result = await this.email.send({
         deliveryId: delivery.id,
-        to: profile.verifiedEmail,
+        to: currentProfile.verifiedEmail,
         subject: "Your VisualSprint update is ready",
         text: `An update is ready in your VisualSprint workspace. Open ${appUrl}`,
       });
-      if (result.state === "sent") return finish("delivered", null, result.externalId);
+      if (result.state === "sent") return finish("provider_sent", null, result.externalId);
       if (result.state === "rejected") return finish("failed", result.code);
       return finish("unknown", "EMAIL_RESPONSE_UNKNOWN");
     } catch (error) {
+      if (error instanceof AppError && error.code === "STALE_WORKER") return;
       if (sideEffectPossible) return finish("unknown", "EMAIL_RESPONSE_UNKNOWN");
       if (error instanceof AppError && [401, 403, 404].includes(error.status))
         return finish("held", "SOURCE_ACCESS_REVOKED");

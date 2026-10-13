@@ -5,6 +5,7 @@ export type DeliveryState =
   | "unknown"
   | "held"
   | "delivered"
+  | "provider_sent"
   | "cancelled"
   | "failed";
 export interface Preferences {

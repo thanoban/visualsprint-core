@@ -8,6 +8,7 @@ import {
 import { AccountService } from "./application/account.js";
 import { PostgresAccount } from "./infrastructure/store.js";
 import { accountApp } from "./http/app.js";
+import { configuredProfiles } from "./infrastructure/profile-runtime.js";
 const config = z
   .object({
     ACCOUNT_DATABASE_URL: z.string().min(1),
@@ -15,6 +16,7 @@ const config = z
     WORKOS_CLIENT_ID: z.string().min(1),
     WORKOS_TOKEN_ISSUER: z.string().url(),
     WORKOS_TOKEN_AUDIENCE: z.string().min(1),
+    WORKOS_PROFILE_API_KEY: z.string().min(1).optional(),
     SERVICE_TRUSTED_JWKS: z.string().min(1),
     PORT: z.coerce.number().int().positive().max(65535).default(4101),
   })
@@ -27,7 +29,11 @@ const workos = new WorkOSVerifier({
   audience: config.WORKOS_TOKEN_AUDIENCE,
 });
 const app = accountApp(
-  new AccountService(new PostgresAccount(pool), config.DEFAULT_CELL_ID),
+  new AccountService(
+    new PostgresAccount(pool),
+    config.DEFAULT_CELL_ID,
+    configuredProfiles(pool, config.WORKOS_PROFILE_API_KEY),
+  ),
   (token) => workos.verify(token),
   new ServiceIdentity("account", JSON.parse(config.SERVICE_TRUSTED_JWKS)),
 );

@@ -5,6 +5,7 @@ import { AppError, type Actor, type Identity } from "@visualsprint/platform";
 import { mayChangeMembership } from "../domain/membership.js";
 import type { AccountRepository, AccountTransaction } from "./ports.js";
 import { reservationFailure } from "../domain/usage.js";
+import type { NotificationProfiles } from "./profile-ports.js";
 
 const keySchema = z
   .string()
@@ -15,6 +16,7 @@ export class AccountService {
   constructor(
     private readonly repository: AccountRepository,
     private readonly defaultCellId: string,
+    private readonly notificationProfiles?: NotificationProfiles,
   ) {
     if (!/^[a-z0-9-]{1,100}$/.test(defaultCellId)) throw new Error("INVALID_CELL_CONFIGURATION");
   }
@@ -168,12 +170,19 @@ export class AccountService {
     this.userOnly(actor);
     const { userId } = z.object({ userId: id }).strict().parse(body);
     if (userId !== actor.actorId) throw new AppError("FORBIDDEN", 403);
-    return this.repository.actor(actor, async (tx) => {
-      const member = await tx.membership(userId),
-        workspace = await tx.workspace(actor.workspaceId);
-      if (!member?.active || !workspace || workspace.blocked) throw new AppError("FORBIDDEN", 403);
-      return { active: true, verifiedEmail: null };
-    });
+    const requireCurrent = () =>
+      this.repository.actor(actor, async (tx) => {
+        const member = await tx.membership(userId),
+          workspace = await tx.workspace(actor.workspaceId);
+        if (!member?.active || !workspace || workspace.blocked)
+          throw new AppError("FORBIDDEN", 403);
+      });
+    await requireCurrent();
+    const profile = this.notificationProfiles
+      ? await this.notificationProfiles.forActor(actor)
+      : { verifiedEmail: null };
+    await requireCurrent();
+    return { active: true as const, verifiedEmail: profile.verifiedEmail };
   }
   disableConnectionGrant(actor: Actor, body: unknown) {
     const { connectionId } = z.object({ connectionId: id }).strict().parse(body);

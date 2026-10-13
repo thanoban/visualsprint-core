@@ -1,6 +1,12 @@
 import Fastify from "fastify";
 import { eventEnvelope, id } from "@visualsprint/contracts";
-import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
+import {
+  AppError,
+  bearer,
+  installErrorHandler,
+  privateHttpLogger,
+  type Actor,
+} from "@visualsprint/platform";
 import { NotificationService, authorizedEvent } from "../application/notification.js";
 export function notificationApp(
   service: NotificationService,
@@ -10,7 +16,7 @@ export function notificationApp(
 ) {
   const app = Fastify({
     bodyLimit: 32000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "notification" }));

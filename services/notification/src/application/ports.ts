@@ -17,6 +17,7 @@ export interface Authority {
 }
 export interface EmailPort {
   readonly configured: boolean;
+  prepare?(): Promise<void>;
   send(input: {
     deliveryId: string;
     to: string;

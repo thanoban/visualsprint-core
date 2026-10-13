@@ -2,7 +2,8 @@ import { importJWK } from "jose";
 import { z } from "zod";
 import { databasePool, assertRuntimeRole } from "@visualsprint/platform";
 import { PostgresNotifications } from "./infrastructure/store.js";
-import { NotificationAuthority, DisabledEmail } from "./infrastructure/authorities.js";
+import { NotificationAuthority } from "./infrastructure/authorities.js";
+import { configuredEmail } from "./infrastructure/email-runtime.js";
 import { NotificationService } from "./application/notification.js";
 export async function runtime() {
   const config = z
@@ -11,6 +12,10 @@ export async function runtime() {
       ACCOUNT_INTERNAL_URL: z.string().url(),
       WORKSPACE_INTERNAL_URL: z.string().url(),
       WEB_APP_ORIGIN: z.string().url(),
+      AZURE_EMAIL_ENDPOINT: z.string().url().optional(),
+      AZURE_EMAIL_SENDER: z.string().min(1).optional(),
+      AZURE_CLIENT_ID: z.string().uuid().optional(),
+      ALLOW_LOCAL_EMAIL_AZURE_CLI: z.enum(["true", "false"]).default("false"),
       SERVICE_PRIVATE_JWK: z.string().min(1),
       SERVICE_KEY_ID: z.string().min(1),
     })
@@ -31,7 +36,13 @@ export async function runtime() {
         key,
         config.SERVICE_KEY_ID,
       ),
-      new DisabledEmail(),
+      configuredEmail({
+        endpoint: config.AZURE_EMAIL_ENDPOINT,
+        sender: config.AZURE_EMAIL_SENDER,
+        webOrigin: config.WEB_APP_ORIGIN,
+        identityClientId: config.AZURE_CLIENT_ID,
+        allowLocalAzureCli: config.ALLOW_LOCAL_EMAIL_AZURE_CLI === "true",
+      }),
       config.WEB_APP_ORIGIN,
     ),
   };

@@ -101,9 +101,16 @@ class Transaction implements NotificationTransaction {
       fingerprint,
     ]);
     await this.db.query(
-      "UPDATE deliveries SET state='cancelled',version=version+1,error_code='PREFERENCE_DISABLED' WHERE workspace_id=$1 AND user_id=$2 AND state IN('queued','held') AND((channel='in_app' AND NOT $3) OR(channel='email' AND NOT $4))",
+      "UPDATE deliveries SET state='cancelled',version=version+1,error_code='PREFERENCE_DISABLED',lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND user_id=$2 AND state IN('queued','held') AND((channel='in_app' AND NOT $3) OR(channel='email' AND NOT $4))",
       [this.workspaceId, userId, input.inApp, input.email],
     );
+    if (input.email && current.deliveryHourUtc !== input.deliveryHourUtc) {
+      const at = nextDelivery(new Date(), input.deliveryHourUtc);
+      await this.db.query(
+        "WITH changed AS(UPDATE deliveries SET available_at=$3,version=version+1 WHERE workspace_id=$1 AND user_id=$2 AND channel='email' AND state IN('queued','held') RETURNING workspace_id,id) UPDATE delivery_work_index SET next_at=$3 FROM changed WHERE delivery_work_index.workspace_id=changed.workspace_id AND delivery_work_index.delivery_id=changed.id",
+        [this.workspaceId, userId, at],
+      );
+    }
     return preference(row);
   }
   async consume(event: DomainEvent) {
@@ -198,7 +205,7 @@ class Transaction implements NotificationTransaction {
     ).rows[0];
     if (
       !row ||
-      ["delivered", "failed", "cancelled"].includes(row.state) ||
+      ["delivered", "provider_sent", "failed", "cancelled"].includes(row.state) ||
       new Date(row.available_at) > new Date() ||
       (row.lease_until && new Date(row.lease_until) > new Date())
     )
@@ -220,10 +227,12 @@ class Transaction implements NotificationTransaction {
     );
   }
   async startEmail(current: Delivery) {
+    // Same lock/order as savePreferences: opt-out and durable send intent serialize.
+    await this.lock("prefs:" + current.userId);
     const row = (
       await this.db.query(
-        "UPDATE deliveries SET state='dispatching',error_code=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND state IN('queued','held') RETURNING id",
-        [this.workspaceId, current.id, current.leaseToken],
+        "UPDATE deliveries SET state='dispatching',error_code=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND state IN('queued','held') AND channel='email' AND available_at<=now() AND EXISTS(SELECT 1 FROM preferences WHERE workspace_id=$1 AND user_id=$4 AND email=true) RETURNING id",
+        [this.workspaceId, current.id, current.leaseToken, current.userId],
       )
     ).rows[0];
     if (!row) throw new AppError("STALE_WORKER", 409);
@@ -240,12 +249,12 @@ class Transaction implements NotificationTransaction {
   ) {
     const updated = (
       await this.db.query(
-        "UPDATE deliveries SET state=$4,error_code=$5,external_id=$6,version=version+1,lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 RETURNING version",
+        "UPDATE deliveries SET state=$4,error_code=$5,external_id=$6,version=version+1,lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND state NOT IN('cancelled','delivered','provider_sent','failed') RETURNING version",
         [this.workspaceId, current.id, current.leaseToken, state, code, externalId],
       )
     ).rows[0];
     if (!updated) throw new AppError("STALE_WORKER", 409);
-    if (["unknown", "delivered", "failed"].includes(state) && current.channel === "email")
+    if (["unknown", "provider_sent", "failed"].includes(state) && current.channel === "email")
       await this.db.query(
         "INSERT INTO attempts(workspace_id,id,delivery_id,state,error_code,external_id) VALUES($1,$2,$3,$4,$5,$6)",
         [this.workspaceId, randomUUID(), current.id, state, code, externalId],
@@ -353,19 +362,19 @@ export class PostgresNotifications implements Repository {
       await client.query("SELECT set_config('app.workspace_id',$1,true)", [workspaceId]);
       const row = (
         await client.query(
-          "SELECT state FROM deliveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+          "SELECT state,available_at FROM deliveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
           [workspaceId, deliveryId],
         )
       ).rows[0];
-      if (!row || ["delivered", "cancelled", "failed"].includes(row.state))
+      if (!row || ["delivered", "provider_sent", "cancelled", "failed"].includes(row.state))
         await client.query(
           "DELETE FROM delivery_work_index WHERE workspace_id=$1 AND delivery_id=$2",
           [workspaceId, deliveryId],
         );
       else
         await client.query(
-          "UPDATE delivery_work_index SET next_at=now()+($3*interval '1 second') WHERE workspace_id=$1 AND delivery_id=$2",
-          [workspaceId, deliveryId, row.state === "held" ? 300 : seconds],
+          "UPDATE delivery_work_index SET next_at=greatest(now()+($3*interval '1 second'),$4::timestamptz) WHERE workspace_id=$1 AND delivery_id=$2",
+          [workspaceId, deliveryId, row.state === "held" ? 300 : seconds, row.available_at],
         );
       await client.query("COMMIT");
     } catch (error) {

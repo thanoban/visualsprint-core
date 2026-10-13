@@ -83,3 +83,21 @@ four unit tests, 12 existing database tests, five isolated review database/HTTP 
 check also passed. Review routes and meeting UI are wired; deletion purges accepted records.
 See `services/workspace/ACCEPTED_REVIEW.md` for setup and remaining CI/deployment gates.
 Profile/email activation and retrieval/preparation remain uncommitted work for later review.
+
+## Verified profile/email checkpoint
+
+The profile/email slice is now implemented with optional, disabled-by-default configuration.
+Account rechecks membership after a fresh authoritative profile lookup; outages never reuse a
+cached recipient email. Notification preflights credentials, rechecks source access and consent,
+and serializes local opt-out/scheduling against durable send intent. Unknown sends are lookup-only.
+Provider send confirmation is explicitly distinct from mailbox delivery.
+
+Both services passed typechecks/builds, boundaries and whitespace checks. Account passed five
+unit and 14 database/HTTP tests, including five enabled profile tests with zero skips. Notification
+passed six unit and 12 database/HTTP tests. No live email or paid resource was used.
+Signed composition and live sender/profile/identity/quota/delivery qualification remain gates.
+Setup and exact configuration are documented in `services/notification/EMAIL_ACTIVATION.md`.
+
+`c210424` corrects the signed-system test's missing review routes and waits for notes persistence
+before reloading; the composed browser/service test and test typecheck passed locally.
+Retrieval/preparation drafts remain unpublished and inactive for the next bounded task.

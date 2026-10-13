@@ -49,6 +49,8 @@ function fixture() {
     lookup: EmailLookup = { state: "pending" };
   const sends: { deliveryId: string; to: string; subject: string; text: string }[] = [];
   let lookups = 0;
+  let preparing: () => Promise<void> = async () => {};
+  let sourceCheck: () => Promise<void> = async () => {};
   const service = new NotificationService(
     repository,
     {
@@ -60,6 +62,7 @@ function fixture() {
         return { verifiedEmail };
       },
       async source() {
+        await sourceCheck();
         if (!allowed || !member) throw new AppError("FORBIDDEN", 403);
         return { version: 1 };
       },
@@ -67,6 +70,9 @@ function fixture() {
     {
       get configured() {
         return configured;
+      },
+      async prepare() {
+        await preparing();
       },
       async send(input) {
         sends.push(input);
@@ -120,6 +126,12 @@ function fixture() {
     },
     set lookup(value: EmailLookup) {
       lookup = value;
+    },
+    set preparing(value: () => Promise<void>) {
+      preparing = value;
+    },
+    set sourceCheck(value: () => Promise<void>) {
+      sourceCheck = value;
     },
     async prefs(email = true, hour: number | null = null) {
       return service.savePreferences(actor, randomUUID(), {
@@ -222,6 +234,7 @@ test("uncertain email only reconciles; authoritative no-send permits retry and s
   await f.service.work(f.actor.workspaceId, id);
   assert.equal(f.sends.length, 2);
   assert.equal((await f.delivery(id)).externalId, "confirmed-email");
+  assert.equal((await f.delivery(id)).state, "provider_sent");
   const g = fixture();
   await g.prefs(false);
   await g.service.receive(g.event);
@@ -243,6 +256,106 @@ test("uncertain email only reconciles; authoritative no-send permits retry and s
   await assert.rejects(
     repository.transaction(g.actor.workspaceId, (tx) => tx.finish(claim, "delivered", null, null)),
     /STALE_WORKER/,
+  );
+});
+test("credential preflight failure precedes send intent and access/destination are rechecked afterwards", async () => {
+  for (const mode of ["credential", "source", "member", "unverified", "changed"] as const) {
+    const f = fixture();
+    await f.prefs();
+    await f.service.receive(f.event);
+    const email = (await Promise.all((await f.refs()).map((id) => f.delivery(id)))).find(
+      (row) => row.channel === "email",
+    )!;
+    f.preparing = async () => {
+      if (mode === "credential") throw new AppError("EMAIL_CREDENTIAL_UNAVAILABLE", 503);
+      if (mode === "source") f.allowed = false;
+      if (mode === "member") f.member = false;
+      if (mode === "unverified") f.verifiedEmail = null;
+      if (mode === "changed") f.verifiedEmail = "fresh-verified@example.test";
+    };
+    await f.service.work(f.actor.workspaceId, email.id);
+    assert.equal(f.sends.length, mode === "changed" ? 1 : 0);
+    assert.equal((await f.delivery(email.id)).state, mode === "changed" ? "provider_sent" : "held");
+    if (mode === "changed") assert.equal(f.sends[0]!.to, "fresh-verified@example.test");
+    else {
+      const attempts = await repository.transaction(f.actor.workspaceId, async () => {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query("SELECT set_config('app.workspace_id',$1,true)", [
+            f.actor.workspaceId,
+          ]);
+          const result = await client.query("SELECT 1 FROM attempts WHERE delivery_id=$1", [
+            email.id,
+          ]);
+          await client.query("COMMIT");
+          return result.rowCount;
+        } finally {
+          client.release();
+        }
+      });
+      assert.equal(attempts, 0);
+    }
+  }
+});
+test("opt-out after final remote profile/source check cannot create a send intent or resurrect cancelled work", async () => {
+  const f = fixture();
+  await f.prefs();
+  await f.service.receive(f.event);
+  const email = (await Promise.all((await f.refs()).map((id) => f.delivery(id)))).find(
+    (row) => row.channel === "email",
+  )!;
+  let checks = 0;
+  f.sourceCheck = async () => {
+    if (++checks !== 2) return;
+    await f.service.savePreferences(f.actor, "opt-out-during-source", {
+      expectedVersion: 1,
+      inApp: true,
+      email: false,
+      deliveryHourUtc: null,
+      emailConsent: false,
+    });
+  };
+  await f.service.work(f.actor.workspaceId, email.id);
+  assert.equal(checks, 2);
+  assert.equal(f.sends.length, 0);
+  assert.equal((await f.delivery(email.id)).state, "cancelled");
+  await repository.reschedule(f.actor.workspaceId, email.id);
+  assert.equal((await f.refs()).includes(email.id), false);
+});
+test("schedule changes during remote authorization fence early send and preserve future routing", async () => {
+  const f = fixture();
+  await f.prefs();
+  await f.service.receive(f.event);
+  const email = (await Promise.all((await f.refs()).map((id) => f.delivery(id)))).find(
+    (row) => row.channel === "email",
+  )!;
+  let checks = 0;
+  f.sourceCheck = async () => {
+    if (++checks !== 2) return;
+    await f.service.savePreferences(f.actor, "schedule-during-source", {
+      expectedVersion: 1,
+      inApp: true,
+      email: true,
+      deliveryHourUtc: new Date().getUTCHours(),
+      emailConsent: true,
+    });
+  };
+  await f.service.work(f.actor.workspaceId, email.id);
+  assert.equal(f.sends.length, 0);
+  const deferred = await f.delivery(email.id);
+  assert.ok(deferred.availableAt > new Date());
+  await repository.reschedule(f.actor.workspaceId, email.id);
+  const indexed = (
+    await pool.query(
+      "SELECT next_at FROM delivery_work_index WHERE workspace_id=$1 AND delivery_id=$2",
+      [f.actor.workspaceId, email.id],
+    )
+  ).rows[0];
+  assert.ok(new Date(indexed.next_at) >= deferred.availableAt);
+  assert.equal(
+    (await repository.due()).some((row) => row.deliveryId === email.id),
+    false,
   );
 });
 test("revoked source or unavailable email setup holds delivery and denies previous in-app reads", async () => {

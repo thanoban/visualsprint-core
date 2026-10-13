@@ -71,19 +71,26 @@ Local PG55441/API4109; `local-init.sql` contains local-only role credentials. Ap
 with the migration role, never the API runtime. See `.env.example` for signed origins/keys/config.
 Production requires private TLS origins, Key Vault credentials and managed identity for Service Bus.
 
-The native email adapter is deliberately disabled, and current Account does not persist an authoritative
-WorkOS verified email (`verifiedEmail:null`). Email work remains held with explicit safe configuration/
-verified-email codes; a saved preference does **not** prove delivery. There is no fabricated destination,
-blind fallback provider, real SMTP/API call or paid provisioning in this slice.
+The optional native Azure Communication Email adapter is wired with managed identity. It remains
+disabled without the endpoint/sender pair. Account's optional WorkOS server profile adapter and owned
+`0004` projection are wired; an absent server key returns `verifiedEmail:null`. Missing configuration
+or verification holds email work with safe codes; a saved preference does **not** prove delivery.
+Credential preflight precedes durable send intent and is followed by fresh membership/source/recipient
+checks. The intent transaction serializes against local preference changes and checks schedule/consent.
+Opt-out committed before intent prevents a new send; already-committed uncertain intent remains
+lookup-only. No real provider call or paid provisioning was performed by this qualification slice.
 
-A qualified provider adapter must support idempotent send/correlation lookup, enforce recipient data
-handling and implement uncertainty semantics before configuration is enabled. Live WorkOS verified-email
-projection, email-provider delivery/bounces and actual Service Bus settlement remain release gates.
+The Azure adapter uses fixed provider operation IDs and lookup-only reconciliation after uncertain
+POST results; a missing operation is not proof of no send. `provider_sent` records send-operation
+confirmation, not actual mailbox delivery. See [EMAIL_SETUP.md](EMAIL_SETUP.md) and
+[EMAIL_ACTIVATION.md](EMAIL_ACTIVATION.md) for configuration, costs and release gates. Live WorkOS
+verification, deployment domain/RBAC/quota, mailbox delivery/bounces and Service Bus settlement remain
+release gates.
 The in-app pipeline is locally qualified with real PostgreSQL and controlled current authorities.
 
 Local verification: service/native API-worker-events build and typecheck, service boundary checks,
-two fast schedule/origin tests, nine real PostgreSQL/HTTP tests and web typecheck passed. Tests cover
+focused schedule/origin/provider tests and real PostgreSQL/HTTP tests. Tests cover
 concurrent inbox dedupe, changed event identities, schedules, consent/version/key conflicts, held source
 access, normal logout, safe generic email fixtures, unknown-send lookup-only retries, stale worker
 fencing, owner/tenant/caller isolation, deletion and outbox acknowledgement loss. The dedicated browser
-fixture is present but awaits the coordinated full browser suite; local fixture sends are not live mail.
+fixture passed in the preceding coordinated full browser suite; local fixture sends are not live mail.
