@@ -11,6 +11,8 @@ import { CommitmentsService } from "./application/commitments.js";
 import { PostgresCommitments } from "./infrastructure/commitment-store.js";
 import { AuthorizedCommitmentEvidence } from "./infrastructure/commitment-source.js";
 import { commitmentRoutes } from "./http/commitment-routes.js";
+import { WorkspacePreparationContext } from "./application/preparation-context.js";
+import { preparationContextRoutes } from "./http/preparation-context-routes.js";
 
 const config = z
   .object({
@@ -169,6 +171,19 @@ commitmentRoutes(
     : undefined,
 );
 app.addHook("onClose", () => pool.end());
+preparationContextRoutes(
+  app,
+  new WorkspacePreparationContext(service, commitments),
+  async (token) =>
+    (
+      await new ServiceIdentity(
+        "workspace",
+        config.INTELLIGENCE_PUBLIC_JWKS
+          ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+          : {},
+      ).verify(token)
+    ).actor,
+);
 for (const signal of ["SIGTERM", "SIGINT"] as const)
   process.once(signal, () => {
     void app.close();

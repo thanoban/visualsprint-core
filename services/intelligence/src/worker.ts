@@ -1,17 +1,32 @@
 import { setTimeout } from "node:timers/promises";
 import { runtime } from "./runtime.js";
-const { pool, repository, service } = await runtime();
+const {
+  pool,
+  repository,
+  service,
+  features,
+  preparation,
+  preparationRepository,
+  indexing,
+  indexRepository,
+} = await runtime();
 const abort = new AbortController();
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => abort.abort());
 try {
   while (!abort.signal.aborted) {
     try {
-      const due = await repository.due();
+      const target =
+        features.INTELLIGENCE_WORKER_KIND === "preparation"
+          ? { repository: preparationRepository!, service: preparation! }
+          : features.INTELLIGENCE_WORKER_KIND === "indexing"
+            ? { repository: indexRepository!, service: indexing! }
+            : { repository, service };
+      const due = await target.repository.due();
       for (let offset = 0; offset < due.length && !abort.signal.aborted; offset += 2)
         await Promise.all(
           due.slice(offset, offset + 2).map(async (ref) => {
             try {
-              await service.work(ref.workspaceId, ref.id);
+              await target.service.work(ref.workspaceId, ref.id);
             } catch {
               console.error(JSON.stringify({ code: "INTELLIGENCE_RECOVERY_PENDING" }));
             }

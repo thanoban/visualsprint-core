@@ -13,6 +13,7 @@ import { DataRightsPanel } from "./data-rights-panel.js";
 import { WorkflowPanel } from "./workflow-panel.js";
 import { IntelligencePanel } from "./intelligence-panel.js";
 import { CommitmentReview } from "./commitment-review.js";
+import { PreparationPanel } from "./preparation-panel.js";
 
 export function MeetingPanel({
   api,
@@ -125,6 +126,13 @@ function MeetingEditor({
         owner={owner}
       />
       <CommitmentReview api={api} workspaceId={workspaceId} meeting={meeting} owner={owner} />
+      <PreparationPanel
+        api={api}
+        workspaceId={workspaceId}
+        meeting={meeting}
+        owner={owner}
+        projects={projects}
+      />
       <DataRightsPanel
         key={`rights/${workspaceId}/${meeting.id}`}
         api={api}

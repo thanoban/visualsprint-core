@@ -122,7 +122,12 @@ export interface CommitmentStore {
     proposal: ProposalProof | null,
   ): Promise<AcceptedItem>;
   get(ws: string, itemId: string): Promise<AcceptedItem | undefined>;
-  list(ws: string, meetingIds: string[], kind: AcceptedKind): Promise<AcceptedItem[]>;
+  list(
+    ws: string,
+    meetingIds: string[],
+    kind: AcceptedKind,
+    limit?: 100 | 101,
+  ): Promise<AcceptedItem[]>;
   correct(
     actor: Actor,
     key: string,
@@ -244,7 +249,7 @@ export class CommitmentsService {
   async read(actor: Actor, itemId: string, kind: AcceptedKind) {
     return this.view(actor, await this.available(actor, itemId, kind));
   }
-  async list(actor: Actor, kind: AcceptedKind, body: unknown) {
+  async list(actor: Actor, kind: AcceptedKind, body: unknown, requireComplete = false) {
     this.user(actor);
     const input = z
       .object({ kind: z.enum(["meeting", "project", "customer", "workspace"]), id: id.nullable() })
@@ -252,7 +257,13 @@ export class CommitmentsService {
       .refine((s) => (s.kind === "workspace" ? s.id === null : s.id !== null))
       .parse(body);
     const meetings = await this.authority.readable(actor, input);
-    const rows = await this.store.list(actor.workspaceId, meetings, kind);
+    const rows = await this.store.list(
+      actor.workspaceId,
+      meetings,
+      kind,
+      requireComplete ? 101 : 100,
+    );
+    if (requireComplete && rows.length > 100) throw new AppError("REVIEW_SCOPE_TOO_LARGE", 409);
     const result = [],
       cache = new Map<string, Promise<EvidenceProof>>();
     for (let start = 0; start < rows.length; start += 8)

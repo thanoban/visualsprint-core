@@ -10,12 +10,15 @@ import {
 } from "../domain/evidence.js";
 import type { Job, Model, Repository, Sources, Thread } from "./ports.js";
 import { commandKey, messageInput, modelClaims, summaryInput, threadInput } from "./schemas.js";
+import type { ModelUsageAdmission } from "./preparation-jobs.js";
+import { admittedGeneration, modelOperationId } from "./model-usage.js";
 
 export class IntelligenceService {
   constructor(
     private readonly repository: Repository,
     private readonly sources: Sources,
     private readonly model: Model,
+    private readonly admission?: ModelUsageAdmission,
   ) {}
   private async user(actor: Actor) {
     if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
@@ -170,7 +173,21 @@ export class IntelligenceService {
         return;
       const generated = evidence.length
         ? modelClaims.parse(
-            await this.model.generate({ purpose: job.kind, question: job.question, evidence }),
+            await (this.admission
+              ? admittedGeneration(
+                  actor,
+                  modelOperationId(job.id, "generation"),
+                  job.kind === "summary" ? "summary" : "chat",
+                  { purpose: job.kind, question: job.question, evidence },
+                  this.model,
+                  this.sources,
+                  this.admission,
+                  async () => {
+                    if (fingerprint(await this.sources.read(actor, job.scope)) !== hash)
+                      throw new AppError("SOURCE_CHANGED", 409);
+                  },
+                )
+              : this.model.generate({ purpose: job.kind, question: job.question, evidence })),
           )
         : { claims: [], unsupported: true };
       validateClaims(generated.claims, evidence);

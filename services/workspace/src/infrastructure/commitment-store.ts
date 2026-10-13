@@ -171,7 +171,7 @@ export class PostgresCommitments implements CommitmentStore {
       return row ? decode(row) : undefined;
     });
   }
-  list(ws: string, meetingIds: string[], kind: AcceptedKind) {
+  list(ws: string, meetingIds: string[], kind: AcceptedKind, limit: 100 | 101 = 100) {
     if (!meetingIds.length) return Promise.resolve([]);
     return this.scoped(ws, async (tx) =>
       (
@@ -179,7 +179,7 @@ export class PostgresCommitments implements CommitmentStore {
           sql`SELECT a.*,a.due_date::text AS due_date_value FROM accepted_items a JOIN meetings m ON m.workspace_id=a.workspace_id AND m.id=a.meeting_id WHERE a.meeting_id IN(${sql.join(
             meetingIds.map((v) => sql`${v}::uuid`),
             sql`,`,
-          )}) AND a.kind=${kind} AND NOT m.blocked ORDER BY a.id LIMIT 100`,
+          )}) AND a.kind=${kind} AND NOT m.blocked ORDER BY a.id LIMIT ${limit}`,
         )
       ).rows.map(decode),
     );

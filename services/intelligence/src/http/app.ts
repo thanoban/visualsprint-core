@@ -4,12 +4,21 @@ import { z } from "zod";
 import { id } from "@visualsprint/contracts";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
 import type { IntelligenceService } from "../application/intelligence.js";
+import type { DurablePreparation } from "../application/preparation-jobs.js";
+import type { EvidenceIndexing } from "../application/indexing.js";
+import { registerPreparationRoutes } from "./preparation-app.js";
+import { registerIndexRoutes } from "./index-routes.js";
 
 export function intelligenceApp(
   service: IntelligenceService,
   authenticate: (token: string) => Promise<Actor>,
   authenticateDeletion?: (token: string) => Promise<Actor>,
-  authenticateRead?: (token:string)=>Promise<Actor>,
+  authenticateRead?: (token: string) => Promise<Actor>,
+  features?: {
+    preparation?: DurablePreparation;
+    indexing?: EvidenceIndexing;
+    purgeDerived?: (workspaceId: string, meetingId: string) => Promise<void>;
+  },
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
@@ -17,6 +26,8 @@ export function intelligenceApp(
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "intelligence" }));
+  registerPreparationRoutes(app, features?.preparation, authenticate);
+  registerIndexRoutes(app, features?.indexing, authenticate);
   app.post("/internal/workspaces/:workspaceId/deletions/:deletionId", async (request) => {
     if (!authenticateDeletion) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
     const actor = await authenticateDeletion(bearer(request.headers.authorization));
@@ -28,6 +39,9 @@ export function intelligenceApp(
       .strict()
       .parse(request.body);
     await service.purgeMeeting(workspaceId, input.meetingId, deletionId, input.sourceVersion);
+    // The owning tombstone fences all writes before any derived cleanup. Do not
+    // acknowledge until every installed repository has removed its own content.
+    await features?.purgeDerived?.(workspaceId, input.meetingId);
     return {
       deletionId,
       meetingId: input.meetingId,
@@ -39,7 +53,9 @@ export function intelligenceApp(
     async (routes) => {
       const actors = new WeakMap<object, Actor>();
       routes.addHook("preHandler", async (request) => {
-      const actor = await (request.method==="GET"&&authenticateRead?authenticateRead:authenticate)(bearer(request.headers.authorization));
+        const actor = await (
+          request.method === "GET" && authenticateRead ? authenticateRead : authenticate
+        )(bearer(request.headers.authorization));
         if (
           actor.operationGrantId ||
           id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId

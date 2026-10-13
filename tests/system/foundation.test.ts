@@ -23,6 +23,10 @@ import { CommitmentsService } from "../../services/workspace/src/application/com
 import { PostgresCommitments } from "../../services/workspace/src/infrastructure/commitment-store.js";
 import { AuthorizedCommitmentEvidence } from "../../services/workspace/src/infrastructure/commitment-source.js";
 import { commitmentRoutes } from "../../services/workspace/src/http/commitment-routes.js";
+import { WorkspacePreparationContext } from "../../services/workspace/src/application/preparation-context.js";
+import { preparationContextRoutes } from "../../services/workspace/src/http/preparation-context-routes.js";
+import { ModelUsageService } from "../../services/account/src/application/model-usage.js";
+import { PostgresModelUsage } from "../../services/account/src/infrastructure/model-usage-store.js";
 import { gatewayApp } from "../../services/gateway/src/http/app.js";
 import { authzApp } from "../../services/authz/src/app.js";
 import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
@@ -157,6 +161,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
         { ...(await exportJWK(readKeys.notification.publicKey)), kid: "notification-test" },
       ],
     }),
+    new ModelUsageService(new PostgresModelUsage(accountDb)),
   );
   const accountUrl = await account.listen({ host: "127.0.0.1", port: 0 });
   const identity = new ServiceIdentity("workspace", { gateway: [gatewayPublic] });
@@ -259,15 +264,18 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     if (!commitmentEvidence) throw new Error("COMPOSITION_NOT_READY");
     return commitmentEvidence;
   };
-  commitmentRoutes(workspace, new CommitmentsService(new PostgresCommitments(workspaceDb), {
+  const commitments = new CommitmentsService(new PostgresCommitments(workspaceDb), {
     meeting: (actor, meetingId) => workspaceService.meeting(actor, meetingId),
     readable: async (actor, scope) => (await workspaceService.intelligenceContext(actor, { scope })).meetings.map(meeting => meeting.id),
     member: (actor, userId) => new AccountMemberships(accountUrl, workspaceKey.privateKey, "workspace-test").requireMember(actor.workspaceId, userId, actor),
   }, {
     validate: (...args) => evidence().validate(...args),
     proposal: (...args) => evidence().proposal(...args),
-  }), async token => (await identity.verify(token)).actor,
+  });
+  commitmentRoutes(workspace, commitments, async token => (await identity.verify(token)).actor,
   async token => (await new ServiceIdentity("workspace", { workflow: readerPublic.workflow! }).verify(token)).actor);
+  preparationContextRoutes(workspace, new WorkspacePreparationContext(workspaceService, commitments),
+    async token => (await new ServiceIdentity("workspace", { intelligence: readerPublic.intelligence! }).verify(token)).actor);
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
   const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
   const integrationService = new CalendarService(
@@ -920,6 +928,22 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       privateKey: readKeys.reporting.privateKey,
       keyId: "reporting-test",
     });
+    const preparationProof = await serviceToken({
+      caller: "intelligence", audience: "workspace",
+      actor: { actorId: String(ownerContextForRead.data.userId), workspaceId,
+        sessionId: (await workos.verify(ownerToken)).sessionId },
+      privateKey: readKeys.intelligence.privateKey, keyId: "intelligence-test",
+    });
+    const prepContextRequest = { method: "POST" as const,
+      url: `/internal/workspaces/${workspaceId}/preparation-context`,
+      payload: { meetingId: meeting.data.id, historyScope: { kind: "project", id: project.data.id }, confirmedScope: true } };
+    const prepContext = await workspace.inject({ ...prepContextRequest,
+      headers: { authorization: `Bearer ${preparationProof}` } });
+    assert.equal(prepContext.statusCode, 200, prepContext.body);
+    assert.equal(prepContext.json().target.id, meeting.data.id);
+    assert.equal(prepContext.json().history.meetings.some((row: { id: string }) => row.id === meeting.data.id), false);
+    assert.equal((await workspace.inject({ ...prepContextRequest,
+      headers: { authorization: `Bearer ${readerProof}` } })).statusCode, 401);
     assert.equal(
       (
         await workspace.inject({

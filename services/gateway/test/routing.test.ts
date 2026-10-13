@@ -5,5 +5,8 @@ test("capture routes never become Workspace commands and unknown routes cannot s
   assert.equal(routeService("meetings/meeting-id/captures"), "ingest");
   assert.equal(routeService("meetings/meeting-id/assignments"), "workspace");
   assert.equal(routeService("chats/thread-id/messages"), "intelligence");
+  assert.equal(routeService("intelligence/preparations/job-id"), "intelligence");
+  assert.equal(routeService("commitments/commitment-id"), "workspace");
+  assert.equal(routeService("operations/operation-id"), "workflow");
   assert.equal(routeService("https://evil.example.com"), undefined);
 });

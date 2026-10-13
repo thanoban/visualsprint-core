@@ -1,6 +1,43 @@
 # Intelligence service
 
-Implemented local slice, 2026-10-13. This is not full model-quality or production qualification.
+Implemented local slice, 2026-10-14. This is not full model-quality or production qualification.
+
+## Connected preparation/retrieval checkpoint
+
+Native API/worker wiring now includes durable next-meeting preparation, reviewed Workspace facts,
+revision-bound pgvector/FTS indexing, current-source retrieval, Account model usage admission and
+owning cleanup. Optional features default disabled and fail closed when required configuration,
+extension, migrations, signed authority or budget are unavailable. No live model call was made.
+
+Public additions: POST `/preparations` with `{meetingId,historyScope,confirmedScope:true}` and GET
+`/preparations/{jobId}`; POST `/indexes` with `{scope}` and GET `/indexes/{jobId}`; POST `/retrieval`
+with `{scope,query}`. POSTs require an idempotency key. Jobs retain original sessions and private owner
+scope. Preparation excludes its target from selected history, preserves accepted decisions and
+commitments verbatim in `reviewedRecords`, and never calls a manual task status externally verified.
+Accepted human classifications override generated findings from the same cited source.
+
+`INTELLIGENCE_MODEL_ADMISSION_ENABLED=true` is mandatory for configured paid models.
+`INTELLIGENCE_PREPARATION_ENABLED` and `INTELLIGENCE_RETRIEVAL_ENABLED` select optional features.
+Separate workers use `INTELLIGENCE_WORKER_KIND=interactive|preparation|indexing`. Account owns
+purpose-isolated quota/concurrency; Intelligence commits a one-shot dispatch intent before provider
+I/O. Replayed/unknown reservations cannot issue another paid call, including after a worker crash.
+Unknown outcomes remain conservatively accounted until reconciliation; estimates are not measured
+provider tokens. A successful model response lost before publication requires operator recovery,
+not an assertion of exactly-once delivery or a blind paid retry.
+
+Original PG55438 remains available. The independently pinned qualification DB55443 contains vector
+0.8.6 and its own migration/runtime roles. `INTELLIGENCE_EXTENDED_MIGRATIONS_ENABLED=true` explicitly
+applies immutable `specs/0002_vector_index.sql` and `0003_preparation_jobs.sql` only after operator
+extension bootstrap. Ordinary migrations include the references-only model dispatch barrier and
+do not require vector. Do not reuse the original Alpine data volume in Debian/glibc. See
+[qualification and activation](specs/retrieval-preparation.md).
+
+Local evidence: 22 fast tests, eight original-DB PG/HTTP cases, 12 isolated vector/preparation
+PG/HTTP cases, TypeScript and native builds. Native route/cleanup composition is included; real
+Azure/model/retention/latency/cost and production restore qualification remain deployment gates.
+Public chat remains extractive lexical retrieval in this checkpoint. Optional indexed chat,
+multi-turn context/pagination and explicit automatic-capture processing consent are next increments;
+the separate semantic verifier is still inactive.
 
 ## Ownership and runtime
 
@@ -82,8 +119,9 @@ in-flight results or restore/replay from resurrecting deleted meeting derivative
 model-provider retention remain separate disclosed deployment/operations obligations.
 
 Crashes recover expired leases with fencing tokens. Jobs retry transient failures at most three
-attempts, without duplicating committed results. A crash after a paid model call may consume extra
-model usage on recovery; this does not claim exactly-once external billing. Metadata outbox commit
+attempts, without duplicating committed results. Native admitted calls use the same immutable
+reservation and dispatch barrier after a crash, blocking a blind paid repeat but not guaranteeing
+recovery of lost responses or exactly-once external billing. Metadata outbox commit
 is implemented; its independent broker publisher/consumer wiring remains a later delivery step.
 
 Local evidence: eight fast source/domain/transport fixtures, seven actual PostgreSQL/HTTP integration

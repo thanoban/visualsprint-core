@@ -1,0 +1,2 @@
+# SQL migration checksums must remain portable across Windows and CI checkouts.
+*.sql text eol=lf
