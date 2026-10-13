@@ -201,6 +201,9 @@ function Update({
       <p>
         {item.readAt ? "Read" : "Unread"}. Ready {new Date(item.availableAt).toLocaleString()}.
       </p>
+      {item.state === "provider_sent" ? (
+        <p>Email accepted by the provider; recipient delivery is not yet confirmed.</p>
+      ) : null}
       <a href={`/w/${workspaceId}?meetingId=${item.meetingId}`}>Open authorized meeting</a>
       {item.readAt ? null : (
         <Form

@@ -1,6 +1,12 @@
 import Fastify from "fastify";
 import { id } from "@visualsprint/contracts";
-import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
+import {
+  AppError,
+  bearer,
+  installErrorHandler,
+  privateHttpLogger,
+  type Actor,
+} from "@visualsprint/platform";
 import type { WorkspaceService } from "../application/workspace.js";
 import type { DeletionService } from "../application/deletion-service.js";
 
@@ -16,7 +22,7 @@ export function workspaceApp(
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   const actors = new WeakMap<object, Actor>();

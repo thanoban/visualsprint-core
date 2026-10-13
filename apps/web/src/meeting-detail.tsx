@@ -12,6 +12,7 @@ import { CapturePanel } from "./capture-panel.js";
 import { DataRightsPanel } from "./data-rights-panel.js";
 import { WorkflowPanel } from "./workflow-panel.js";
 import { IntelligencePanel } from "./intelligence-panel.js";
+import { CommitmentReview } from "./commitment-review.js";
 
 export function MeetingPanel({
   api,
@@ -28,7 +29,7 @@ export function MeetingPanel({
   userId: string;
   projects: Project[];
   reload: () => void;
-  onDeleted?: (jobId:string)=>void;
+  onDeleted?: (jobId: string) => void;
 }) {
   const data = useData(
     async (signal) => ({
@@ -50,7 +51,7 @@ export function MeetingPanel({
           userId={userId}
           projects={projects}
           reload={reload}
-          {...(onDeleted ? {onDeleted} : {})}
+          {...(onDeleted ? { onDeleted } : {})}
         />
       ) : null}
     </section>
@@ -73,7 +74,7 @@ function MeetingEditor({
   projects: Project[];
   members: Member[];
   reload: () => void;
-  onDeleted?: (jobId:string)=>void;
+  onDeleted?: (jobId: string) => void;
 }) {
   const [meeting, setMeeting] = useState(initial);
   const [deleted, setDeleted] = useState(false);
@@ -123,6 +124,7 @@ function MeetingEditor({
         meeting={meeting}
         owner={owner}
       />
+      <CommitmentReview api={api} workspaceId={workspaceId} meeting={meeting} owner={owner} />
       <DataRightsPanel
         key={`rights/${workspaceId}/${meeting.id}`}
         api={api}

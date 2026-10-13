@@ -50,3 +50,36 @@ Keep the existing application available until migration, rollback and live captu
   actual email sending, verified-profile database qualification and activation remain gated.
 
 These results do not prove live meeting admission, cloud reliability or production readiness.
+
+## Latest publication and interruption
+
+Published commits: `c15b61d` (combined durable service checkpoint) and `2d92111`
+(privacy-safe HTTP logging). GitHub Actions passed for `c15b61d`.
+
+Additional local work is not published: accepted commitment runtime/UI activation;
+Account verified profiles and Notification email activation; retrieval/preparation drafts;
+and Workflow/Integration accepted-commitment source binding. The latter passed 11 Workflow
+and 18 Integration database tests. Other resumed activation changes require combined review,
+migration checks, build and browser qualification before publication.
+
+Parallel agents encountered an account usage limit during the resumed request. Work was
+preserved and agent execution halted; no unfinished activation is claimed as released.
+
+## Credit-limited continuation
+
+At the owner's request, continue one agent at a time. Finish/review the existing commitment
+slice first; profile/email remains saved for a subsequent bounded slice. Do not activate
+retrieval/preparation or provision infrastructure in this credit-limited checkpoint.
+
+`a8339b5` publishes optional reviewed-commitment binding in Workflow/Integration. Both services
+built successfully; 11 Workflow and 18 Integration database tests passed. Writes linked to a
+commitment fail closed unless Workspace confirms its exact reviewed version, open status,
+meeting association and current evidence. Existing meeting-only action contracts remain supported.
+Workspace commitment route activation is a separate slice, not implied by this commit.
+
+The subsequent Workspace accepted-review slice is locally qualified and ready for publication:
+four unit tests, 12 existing database tests, five isolated review database/HTTP tests and all
+13 browser tests passed. Workspace/web builds and typechecks passed; the combined 17-task
+check also passed. Review routes and meeting UI are wired; deletion purges accepted records.
+See `services/workspace/ACCEPTED_REVIEW.md` for setup and remaining CI/deployment gates.
+Profile/email activation and retrieval/preparation remain uncommitted work for later review.

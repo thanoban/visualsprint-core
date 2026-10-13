@@ -7,12 +7,18 @@ import { AccountMemberships } from "./infrastructure/account-client.js";
 import { AuthzPolicy } from "./infrastructure/policy-client.js";
 import { workspaceApp } from "./http/app.js";
 import { deletionRuntime } from "./infrastructure/deletion-runtime.js";
+import { CommitmentsService } from "./application/commitments.js";
+import { PostgresCommitments } from "./infrastructure/commitment-store.js";
+import { AuthorizedCommitmentEvidence } from "./infrastructure/commitment-source.js";
+import { commitmentRoutes } from "./http/commitment-routes.js";
 
 const config = z
   .object({
     WORKSPACE_DATABASE_URL: z.string().min(1),
     ACCOUNT_INTERNAL_URL: z.string().url(),
     AUTHZ_INTERNAL_URL: z.string().url(),
+    INGEST_INTERNAL_URL: z.string().url().optional(),
+    INTELLIGENCE_INTERNAL_URL: z.string().url().optional(),
     SERVICE_PRIVATE_JWK: z.string().min(1),
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
@@ -81,6 +87,35 @@ const service = new WorkspaceService(
   new AccountMemberships(config.ACCOUNT_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
   new AuthzPolicy(config.AUTHZ_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
 );
+const membership = new AccountMemberships(
+  config.ACCOUNT_INTERNAL_URL,
+  privateKey,
+  config.SERVICE_KEY_ID,
+);
+const commitments = new CommitmentsService(
+  new PostgresCommitments(pool),
+  {
+    meeting: (actor, meetingId) => service.meeting(actor, meetingId),
+    readable: async (actor, scope) =>
+      (await service.intelligenceContext(actor, { scope })).meetings.map((meeting) => meeting.id),
+    member: (actor, memberId) => membership.requireMember(actor.workspaceId, memberId, actor),
+  },
+  config.INGEST_INTERNAL_URL
+    ? new AuthorizedCommitmentEvidence(
+        config.INGEST_INTERNAL_URL,
+        config.INTELLIGENCE_INTERNAL_URL,
+        privateKey,
+        config.SERVICE_KEY_ID,
+      )
+    : {
+        async validate() {
+          throw new AppError("REVIEW_SOURCE_NOT_CONFIGURED", 503);
+        },
+        async proposal() {
+          throw new AppError("PROPOSAL_REVIEW_NOT_CONFIGURED", 503);
+        },
+      },
+);
 const deletions = deletionRuntime(
   pool,
   {
@@ -119,6 +154,19 @@ const app = workspaceApp(
           : {},
       ).verify(token)
     ).actor,
+);
+commitmentRoutes(
+  app,
+  commitments,
+  async (token) => (await identity.verify(token)).actor,
+  config.WORKFLOW_PUBLIC_JWKS
+    ? async (token) =>
+        (
+          await new ServiceIdentity("workspace", {
+            workflow: JSON.parse(config.WORKFLOW_PUBLIC_JWKS!).keys,
+          }).verify(token)
+        ).actor
+    : undefined,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)
