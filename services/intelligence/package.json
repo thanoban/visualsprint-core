@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": ["dist", "migrations", "specs"],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
