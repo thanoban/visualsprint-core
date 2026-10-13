@@ -1,5 +1,18 @@
 name: visualsprint-v3-local
 services:
+  workspace-qualification-bootstrap:
+    image: postgres:17.6-alpine
+    profiles: ["qualification"]
+    environment:
+      PGPASSWORD: local-test-only
+    depends_on:
+      workspace-db:
+        condition: service_healthy
+    entrypoint: ["psql"]
+    command: ["-h", "workspace-db", "-U", "local_admin", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", "/qualification/init.sql"]
+    volumes:
+      - ./workspace-qualification-init.sql:/qualification/init.sql:ro
+    restart: "no"
   notification-db:
     image: postgres:17.6-alpine
     environment:

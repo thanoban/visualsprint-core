@@ -9,6 +9,8 @@ import { AccountService } from "./application/account.js";
 import { PostgresAccount } from "./infrastructure/store.js";
 import { accountApp } from "./http/app.js";
 import { configuredProfiles } from "./infrastructure/profile-runtime.js";
+import { ModelUsageService } from "./application/model-usage.js";
+import { PostgresModelUsage } from "./infrastructure/model-usage-store.js";
 const config = z
   .object({
     ACCOUNT_DATABASE_URL: z.string().min(1),
@@ -36,6 +38,7 @@ const app = accountApp(
   ),
   (token) => workos.verify(token),
   new ServiceIdentity("account", JSON.parse(config.SERVICE_TRUSTED_JWKS)),
+  new ModelUsageService(new PostgresModelUsage(pool)),
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

@@ -11,10 +11,12 @@ import {
   type ServiceIdentity,
 } from "@visualsprint/platform";
 import type { AccountService } from "../application/account.js";
+import type { ModelUsageService } from "../application/model-usage.js";
 export function accountApp(
   service: AccountService,
   verifyUser: (token: string) => Promise<Identity>,
   serviceIdentity: ServiceIdentity,
+  modelUsage?: ModelUsageService,
 ) {
   const app = Fastify({
     bodyLimit: 16_000,
@@ -56,6 +58,11 @@ export function accountApp(
         if (workspaceId !== hop.actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, hop.actor);
         callers.set(request, hop.caller);
+        if (request.routeOptions.url?.includes("/model-usage/")) {
+          if (hop.caller !== "intelligence" || hop.actor.operationGrantId)
+            throw new AppError("FORBIDDEN", 403);
+          return;
+        }
         const notificationMembership = request.routeOptions.url?.endsWith(
           "/notifications/membership",
         );
@@ -98,6 +105,18 @@ export function accountApp(
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.post("/model-usage/reservations", (request) => {
+        if (!modelUsage) throw new AppError("MODEL_USAGE_UNAVAILABLE", 503);
+        return modelUsage.reserve(actor(request), request.body);
+      });
+      routes.post("/model-usage/reservations/:reservationId/record", (request) => {
+        if (!modelUsage) throw new AppError("MODEL_USAGE_UNAVAILABLE", 503);
+        return modelUsage.record(
+          actor(request),
+          id.parse((request.params as { reservationId: string }).reservationId),
+          request.body,
+        );
+      });
       routes.post("/notifications/membership", (request) =>
         service.notificationMembership(actor(request), request.body),
       );

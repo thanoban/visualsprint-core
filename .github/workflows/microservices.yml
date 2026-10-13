@@ -1,10 +1,38 @@
 name: Microservices rebuild
 on:
   pull_request:
-    paths: ["apps/**", "packages/**", "services/**", "tests/**", "infra/local/**", "scripts/**", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+    paths:
+      [
+        "apps/**",
+        "packages/**",
+        "services/**",
+        "tests/**",
+        "infra/local/**",
+        "scripts/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "tsconfig.base.json",
+        "turbo.json",
+        ".github/workflows/microservices.yml",
+      ]
   push:
     branches: [main, codex/zedex-web-rebuild]
-    paths: ["apps/**", "packages/**", "services/**", "tests/**", "infra/local/**", "scripts/**", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json", ".github/workflows/microservices.yml"]
+    paths:
+      [
+        "apps/**",
+        "packages/**",
+        "services/**",
+        "tests/**",
+        "infra/local/**",
+        "scripts/**",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "tsconfig.base.json",
+        "turbo.json",
+        ".github/workflows/microservices.yml",
+      ]
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,6 +53,13 @@ jobs:
       - run: pnpm --filter @visualsprint/web exec playwright install --with-deps chromium
       - run: pnpm --filter @visualsprint/web test:browser
       - run: docker compose -f infra/local/compose.yml up -d --wait --quiet-pull
-      - run: pnpm test:integration
+      - name: Provision isolated accepted-review qualification database
+        run: docker compose -f infra/local/compose.yml --profile qualification run --rm --no-deps workspace-qualification-bootstrap
+      - name: Run integration tests including verified profiles
+        run: pnpm test:integration
+        env:
+          ACCOUNT_PROFILE_TEST_ENABLED: "true"
+      - name: Qualify accepted commitments on isolated persistence
+        run: pnpm --filter @visualsprint/workspace exec tsx --test test/qualification/commitments.test.ts
       - if: always()
         run: docker compose -f infra/local/compose.yml down
