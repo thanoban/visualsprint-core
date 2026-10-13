@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { privateHttpLogger } from "@visualsprint/platform";
 import { z } from "zod";
 import { id } from "@visualsprint/contracts";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
@@ -12,7 +13,7 @@ export function intelligenceApp(
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "intelligence" }));

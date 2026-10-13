@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { privateHttpLogger } from "@visualsprint/platform";
 import { z } from "zod";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
 import { policyFacts, type OpenFgaPolicy } from "./policy.js";
@@ -6,7 +7,7 @@ import { policyFacts, type OpenFgaPolicy } from "./policy.js";
 export function authzApp(policy: OpenFgaPolicy, authenticate: (token: string) => Promise<Actor>) {
   const app = Fastify({
     bodyLimit: 40_000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "authz" }));

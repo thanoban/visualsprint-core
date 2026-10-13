@@ -8,6 +8,7 @@ import {
   bearer,
   identityToken,
   installErrorHandler,
+  privateHttpLogger,
   serviceToken,
   type Actor,
   type Identity,
@@ -27,7 +28,7 @@ export function gatewayApp(
 ) {
   const app = Fastify({
     bodyLimit: 48_000,
-    logger: { redact: ["req.headers.authorization", "req.body"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.addHook("onSend", async (_request, reply, payload) => {

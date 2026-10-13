@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { privateHttpLogger } from "@visualsprint/platform";
 import { id } from "@visualsprint/contracts";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
 import type { ReportingService } from "../application/reporting.js";
@@ -9,7 +10,7 @@ export function reportingApp(
 ) {
   const app = Fastify({
     bodyLimit: 16000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "reporting" }));

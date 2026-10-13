@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { privateHttpLogger } from "@visualsprint/platform";
 import { createHash } from "node:crypto";
 import { id } from "@visualsprint/contracts";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
@@ -16,14 +17,7 @@ export function ingestApp(
 ) {
   const app = Fastify({
     bodyLimit: 1_000_000,
-    logger: {
-      redact: [
-        "req.headers.authorization",
-        "req.headers.webhook-signature",
-        "req.body",
-        "res.headers",
-      ],
-    },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "ingest" }));

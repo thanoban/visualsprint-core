@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { privateHttpLogger } from "@visualsprint/platform";
 import { id } from "@visualsprint/contracts";
 import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint/platform";
 import type { WorkflowService } from "../application/workflow.js";
@@ -19,7 +20,7 @@ export function workflowApp(
 ) {
   const app = Fastify({
     bodyLimit: 32000,
-    logger: { redact: ["req.headers.authorization", "req.body", "res.headers"] },
+    logger: privateHttpLogger,
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "workflow" }));
