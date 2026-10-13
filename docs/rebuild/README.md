@@ -6,6 +6,8 @@ Legacy applications and existing production data are preserved.
 
 ## Specification
 
+- [Master end-to-end project plan](MASTER_PROJECT_PLAN.md): consolidated product, architecture, workflows, implementation, setup, operations, costs and release roadmap.
+
 - [Architecture and ownership](architecture.md): boundaries, data, events, deployment and scaling.
 - [Product and API contracts](contracts.md): tenant scope, capture, projects, chat and actions.
 - [Competitor evidence](competitors.md): documented capabilities versus inference.
