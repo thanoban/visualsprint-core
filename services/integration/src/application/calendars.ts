@@ -3,6 +3,7 @@ import { z } from "zod";
 import { id, calendarMeeting } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import type { CalendarCaptureOrchestrator } from "./calendar-captures.js";
+import type { CalendarPush } from "./calendar-push.js";
 import type { Connection, Tokens } from "../domain/records.js";
 import type {
   ConnectionRepository,
@@ -66,6 +67,7 @@ export class CalendarService {
     private readonly now: () => Date = () => new Date(),
     private readonly meetings?: CalendarMeetings,
     private readonly captures?: CalendarCaptureOrchestrator,
+    private readonly push?: CalendarPush,
   ) {}
   private provider(name: Connection["provider"]) {
     const provider = this.providers[name];
@@ -270,7 +272,7 @@ export class CalendarService {
     } catch (error) {
       if (
         error instanceof AppError &&
-        ["REAUTH_REQUIRED", "CALENDAR_CONFIGURATION"].includes(error.code)
+        ["REAUTH_REQUIRED", "CALENDAR_CONFIGURATION", "CALENDAR_UNAVAILABLE"].includes(error.code)
       )
         await this.repository.scoped(actor.workspaceId, async (tx) => {
           const current = await tx.get(connectionId);
@@ -531,7 +533,67 @@ export class CalendarService {
     };
     try {
       await this.withTokens(actor, record.id, async (leased, token) => {
-        const page = await this.provider(record.provider).occurrences(
+        const provider = this.provider(record.provider);
+        if (provider.changes) {
+          const round = await this.repository.scoped(record.workspaceId, (tx) =>
+            tx.changeRound(job),
+          );
+          if (round.phase === "detecting") {
+            try {
+              const changes = await provider.changes(
+                token,
+                job.calendarId,
+                { startsAt: job.startsAt.toISOString(), endsAt: job.endsAt.toISOString() },
+                round.sourceCursor ?? undefined,
+                round.pageCursor ?? undefined,
+              );
+              await this.authority.requireActive(actor);
+              await this.repository.scoped(record.workspaceId, async (tx) => {
+                const current = await tx.get(record.id);
+                if (
+                  current?.leaseToken !== leased.leaseToken ||
+                  current.status !== "connected" ||
+                  current.version !== job.connectionVersion
+                )
+                  throw new AppError("CONNECTION_CHANGED", 409);
+                await tx.changePage(job, changes);
+              });
+              return;
+            } catch (error) {
+              if (
+                error instanceof AppError &&
+                [
+                  "CALENDAR_SYNC_EXPIRED",
+                  "CALENDAR_CHANGE_LIMIT",
+                  "CALENDAR_CHANGE_LOOP",
+                  "CALENDAR_INCREMENTAL_UNSUPPORTED",
+                  "INVALID_CHANGE_CURSOR",
+                ].includes(error.code)
+              ) {
+                await this.repository.scoped(record.workspaceId, (tx) =>
+                  tx.fallbackChanges(job, error.code),
+                );
+                return;
+              }
+              throw error;
+            }
+          }
+          if (round.phase === "unchanged") {
+            await this.authority.requireActive(actor);
+            await this.repository.scoped(record.workspaceId, async (tx) => {
+              const current = await tx.get(record.id);
+              if (
+                current?.leaseToken !== leased.leaseToken ||
+                current.status !== "connected" ||
+                current.version !== job.connectionVersion
+              )
+                throw new AppError("CONNECTION_CHANGED", 409);
+              await tx.syncPage(job, { items: [], nextCursor: null });
+            });
+            return;
+          }
+        }
+        const page = await provider.occurrences(
           token,
           job.calendarId,
           { startsAt: job.startsAt.toISOString(), endsAt: job.endsAt.toISOString() },
@@ -650,6 +712,7 @@ export class CalendarService {
   async work(workspaceId: string, connectionId: string) {
     const record = await this.repository.scoped(workspaceId, (tx) => tx.get(connectionId));
     if (!record) return;
+    if (!record.automatic || record.status !== "connected") await this.push?.retire(record);
     if (record.automatic && record.grantId && record.status === "connected") {
       const principal: Actor = {
         actorId: record.ownerId,
@@ -672,7 +735,8 @@ export class CalendarService {
           if (
             latest &&
             (["queued", "running"].includes(latest.state) ||
-              this.now().getTime() - latest.createdAt.getTime() < 300000)
+              (this.now().getTime() - latest.createdAt.getTime() < 300000 &&
+                !(await tx.syncRequested(record.id))))
           )
             return;
           await tx.queueSync(
@@ -682,6 +746,15 @@ export class CalendarService {
             this.now(),
           );
         });
+        if (this.push?.configured()) {
+          try {
+            await this.withTokens(principal, record.id, (leased, token) =>
+              this.push!.work(leased, token),
+            );
+          } catch {
+            console.error(JSON.stringify({ code: "CALENDAR_PUSH_RECOVERY_PENDING" }));
+          }
+        }
       } catch (error) {
         if (!(error instanceof AppError) || ![401, 403, 404].includes(error.status)) throw error;
         await this.repository.scoped(workspaceId, async (tx) => {

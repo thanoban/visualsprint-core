@@ -15,6 +15,9 @@ import { ActionExecutions } from "./application/action-executions.js";
 import { PostgresActionExecutions } from "./infrastructure/action-store.js";
 import { HttpWorkflowApproval } from "./infrastructure/workflow-client.js";
 import { HttpActionProvider } from "./infrastructure/action-provider.js";
+import { CalendarPush } from "./application/calendar-push.js";
+import { PostgresCalendarPush } from "./infrastructure/calendar-push-store.js";
+import { HttpCalendarPush } from "./infrastructure/calendar-push-provider.js";
 export async function runtime() {
   const config = z
     .object({
@@ -28,6 +31,10 @@ export async function runtime() {
       TOKEN_KEY_ID: z.string().min(1),
       TOKEN_KEYS: z.string().min(1),
       CALENDAR_REDIRECT_URI: z.string().url(),
+      CALENDAR_PUSH_CALLBACK_BASE: z.preprocess(
+        (v) => (v === "" ? undefined : v),
+        z.string().url().optional(),
+      ),
       GOOGLE_CALENDAR_CLIENT_ID: z.preprocess(
         (v) => (v === "" ? undefined : v),
         z.string().min(1).optional(),
@@ -49,19 +56,25 @@ export async function runtime() {
   const key = await importJWK(JSON.parse(config.SERVICE_PRIVATE_JWK), "EdDSA");
   if (key instanceof Uint8Array) throw new Error("INVALID_SERVICE_KEY");
   const providers: CalendarProviders = {};
+  const pushProviders: Partial<Record<"google" | "microsoft", HttpCalendarPush>> = {};
   for (const [provider, clientId, secret] of [
     ["google", config.GOOGLE_CALENDAR_CLIENT_ID, config.GOOGLE_CALENDAR_CLIENT_SECRET],
     ["microsoft", config.MICROSOFT_CALENDAR_CLIENT_ID, config.MICROSOFT_CALENDAR_CLIENT_SECRET],
   ] as const) {
     if (Boolean(clientId) !== Boolean(secret))
       throw new Error("INCOMPLETE_CALENDAR_OAUTH_CONFIGURATION");
-    if (clientId && secret)
+    if (clientId && secret) {
       providers[provider] = new OAuthCalendarProvider(
         provider,
         clientId,
         secret,
         config.CALENDAR_REDIRECT_URI,
       );
+      pushProviders[provider] = new HttpCalendarPush(
+        provider,
+        providers[provider] as OAuthCalendarProvider,
+      );
+    }
   }
   const vault = new AesTokenVault(
     config.TOKEN_KEY_ID,
@@ -70,6 +83,12 @@ export async function runtime() {
   const pool = databasePool(config.INTEGRATION_DATABASE_URL);
   await assertRuntimeRole(pool);
   const repository = new PostgresCalendars(pool);
+  const push = new CalendarPush(
+    new PostgresCalendarPush(pool),
+    pushProviders,
+    vault,
+    config.CALENDAR_PUSH_CALLBACK_BASE,
+  );
   const authority = new AccountCalendars(config.ACCOUNT_INTERNAL_URL, key, config.SERVICE_KEY_ID);
   const meetings = config.WORKSPACE_INTERNAL_URL
     ? new WorkspaceCalendars(config.WORKSPACE_INTERNAL_URL, key, config.SERVICE_KEY_ID)
@@ -124,7 +143,9 @@ export async function runtime() {
             new IngestCalendars(config.INGEST_INTERNAL_URL, key, config.SERVICE_KEY_ID),
           )
         : undefined,
+      push,
     ),
     providers,
+    push,
   };
 }

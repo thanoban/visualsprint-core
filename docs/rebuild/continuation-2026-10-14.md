@@ -81,3 +81,20 @@ These are controlled-provider results; semantic model quality and live deploymen
 
 Gateway calendar forwarding has three focused tests and typecheck passing. Integration calendar
 change-feed/push work is still under final owning review; do not mix it into indexed-chat publication.
+
+## Calendar qualification checkpoint
+
+Indexed chat published as `aa33121`. Integration calendar change-feed and optional push handling
+now passed 22 fast and 27 owning database/HTTP cases, typecheck/build and boundaries. Gateway
+forwarding passed three focused cases and build: fixed configured origins, provider proof/raw bytes,
+exact bounded Microsoft validation echoes and oversized-body rejection. Empty Google notifications
+are forwarded without a forced JSON content type.
+
+Calendar change tokens preserve authoritative snapshot visibility; expiration/reset, cancellation,
+deletion suppression and unknown subscription creation have explicit recovery behavior. Secondary
+Microsoft calendars remain polling where the supported delta path is unavailable. Local retirement
+does not perform remote unsubscribe; remote expiration remains a documented limit. Live provider
+consent, subscriptions, capture and complete signed composition remain release qualification gates.
+
+Automatic-processing grant/evidence/consent UI work is in progress and unpublished. Withdrawal
+must fence unknown/late grant creation; AI withdrawal and capture stop are separate commands.

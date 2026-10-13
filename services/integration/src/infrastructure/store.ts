@@ -8,6 +8,7 @@ import type { ConnectionRepository, ConnectionTx } from "../application/ports.js
 import type { Connection } from "../domain/records.js";
 import type { CalendarSync } from "../domain/sync.js";
 import type { OccurrencePage } from "../domain/occurrences.js";
+import type { CalendarChangePage, CalendarChangeRound } from "../domain/changes.js";
 import * as schema from "./schema.js";
 const database = (pool: pg.Pool) => drizzle(pool, { schema });
 type Database = ReturnType<typeof database>;
@@ -17,6 +18,78 @@ class CalendarTx implements ConnectionTx {
     private readonly db: Transaction,
     private readonly workspaceId: string,
   ) {}
+  async syncRequested(connectionId: string) {
+    const result = await this.db.execute(
+      sql`SELECT 1 FROM calendar_sync_signals s WHERE s.workspace_id=${this.workspaceId} AND s.connection_id=${connectionId} AND s.revision>coalesce((SELECT signal_revision FROM calendar_syncs WHERE workspace_id=s.workspace_id AND connection_id=s.connection_id ORDER BY sequence DESC LIMIT 1),0)`,
+    );
+    return result.rows.length > 0;
+  }
+  async changeRound(sync: CalendarSync): Promise<CalendarChangeRound> {
+    const current = await this.latestSync(sync.connectionId, true);
+    if (!current || current.id !== sync.id) throw new AppError("SYNC_FENCED", 409);
+    const checkpoint = (
+      await this.db.execute(
+        sql`SELECT * FROM calendar_sync_checkpoints WHERE workspace_id=${this.workspaceId} AND connection_id=${sync.connectionId} AND calendar_id=${sync.calendarId} AND connection_version=${sync.connectionVersion}`,
+      )
+    ).rows[0];
+    await this.db.execute(
+      sql`INSERT INTO calendar_change_rounds(workspace_id,sync_id,phase,source_cursor,base_generation) VALUES(${this.workspaceId},${sync.id},'detecting',${sync.incremental && checkpoint ? checkpoint.source_cursor : null},${sync.incremental && checkpoint ? checkpoint.generation : null}) ON CONFLICT DO NOTHING`,
+    );
+    const row = (
+      await this.db.execute(
+        sql`SELECT * FROM calendar_change_rounds WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id} FOR UPDATE`,
+      )
+    ).rows[0]!;
+    return {
+      syncId: sync.id,
+      phase: row.phase as CalendarChangeRound["phase"],
+      sourceCursor: row.source_cursor ? String(row.source_cursor) : null,
+      pageCursor: row.page_cursor ? String(row.page_cursor) : null,
+      candidateCursor: row.candidate_cursor ? String(row.candidate_cursor) : null,
+      baseGeneration: row.base_generation ? String(row.base_generation) : null,
+      changed: Boolean(row.changed),
+      pageCount: Number(row.page_count),
+    };
+  }
+  async fallbackChanges(sync: CalendarSync, code: string) {
+    await this.changeRound(sync);
+    await this.db.execute(
+      sql`UPDATE calendar_change_rounds SET phase='snapshot',candidate_cursor=NULL,error_code=${code} WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}`,
+    );
+  }
+  async changePage(sync: CalendarSync, page: CalendarChangePage) {
+    const round = await this.changeRound(sync);
+    if (round.phase !== "detecting") throw new AppError("SYNC_FENCED", 409);
+    if (round.pageCount >= 20 || (round.pageCount === 19 && page.nextCursor))
+      throw new AppError("CALENDAR_CHANGE_LIMIT", 409);
+    if (Boolean(page.nextCursor) === Boolean(page.finalCursor))
+      throw new AppError("INVALID_CHANGE_CURSOR", 503);
+    const raw = (
+      await this.db.execute(
+        sql`SELECT cursor_hashes FROM calendar_change_rounds WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}`,
+      )
+    ).rows[0]!;
+    const hashes = raw.cursor_hashes as string[];
+    if (page.nextCursor) {
+      const digest = createHash("sha256").update(page.nextCursor).digest("hex");
+      if (hashes.includes(digest)) throw new AppError("CALENDAR_CHANGE_LOOP", 409);
+      hashes.push(digest);
+    }
+    const changed = round.changed || page.changed;
+    const phase = page.nextCursor
+      ? "detecting"
+      : changed || !round.sourceCursor || !round.baseGeneration
+        ? "snapshot"
+        : "unchanged";
+    await this.db.execute(
+      sql`UPDATE calendar_change_rounds SET phase=${phase},changed=${changed},page_cursor=${page.nextCursor},candidate_cursor=${page.finalCursor},page_count=page_count+1,cursor_hashes=${JSON.stringify(hashes)}::jsonb WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}`,
+    );
+    if (phase === "unchanged") {
+      await this.db.execute(
+        sql`INSERT INTO calendar_sync_stage(workspace_id,sync_id,source_key,body,fingerprint) SELECT workspace_id,${sync.id},source_key,body,fingerprint FROM calendar_occurrences WHERE workspace_id=${this.workspaceId} AND connection_id=${sync.connectionId} AND calendar_id=${sync.calendarId} AND generation=${round.baseGeneration} AND NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=calendar_occurrences.workspace_id AND s.connection_id=calendar_occurrences.connection_id AND s.calendar_id=calendar_occurrences.calendar_id AND s.source_key=calendar_occurrences.source_key) ON CONFLICT DO NOTHING`,
+      );
+    }
+  }
   async queueSync(actor: Actor, key: string, connection: Connection, now: Date) {
     await this.db.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.workspaceId + ":sync:" + actor.actorId + ":" + key},0))`,
@@ -40,6 +113,16 @@ class CalendarTx implements ConnectionTx {
       )[0]!;
     }
     if (await this.latestSync(connection.id, true)) throw new AppError("CALENDAR_SYNC_BUSY", 409);
+    const checkpoint = (
+      await this.db.execute(
+        sql`SELECT * FROM calendar_sync_checkpoints WHERE workspace_id=${this.workspaceId} AND connection_id=${connection.id} AND calendar_id=${connection.calendarId} AND connection_version=${connection.version}`,
+      )
+    ).rows[0];
+    const incremental = Boolean(
+      actor.operationGrantId &&
+        checkpoint?.source_cursor &&
+        now.getTime() - new Date(String(checkpoint.last_full_at)).getTime() < 3600000,
+    );
     const job: CalendarSync = {
       sequence: 0,
       workspaceId: this.workspaceId,
@@ -50,17 +133,23 @@ class CalendarTx implements ConnectionTx {
       operationGrantId: actor.operationGrantId ?? null,
       calendarId: connection.calendarId,
       connectionVersion: connection.version,
-      startsAt: now,
-      endsAt: new Date(now.getTime() + 14 * 86400000),
+      startsAt: incremental ? new Date(String(checkpoint!.starts_at)) : now,
+      endsAt: incremental
+        ? new Date(String(checkpoint!.ends_at))
+        : new Date(now.getTime() + 14 * 86400000),
       state: "queued",
       cursor: null,
       cursorHashes: [],
       pageCount: 0,
       errorCode: null,
       createdAt: now,
+      incremental,
     };
     const { sequence: unused, ...insert } = job;
     const created = (await this.db.insert(schema.syncs).values(insert).returning())[0]!;
+    await this.db.execute(
+      sql`UPDATE calendar_syncs SET signal_revision=coalesce((SELECT revision FROM calendar_sync_signals WHERE workspace_id=${this.workspaceId} AND connection_id=${connection.id}),0) WHERE workspace_id=${this.workspaceId} AND id=${created.id}`,
+    );
     await this.db.execute(
       sql`INSERT INTO calendar_sync_commands(workspace_id,actor_id,key,connection_id,sync_id) VALUES(${this.workspaceId},${actor.actorId},${key},${connection.id},${job.id})`,
     );
@@ -138,11 +227,23 @@ class CalendarTx implements ConnectionTx {
     if (inconsistent.rows.length) throw new AppError("CALENDAR_INCONSISTENT_PAGE", 409);
     await this.db
       .execute(sql`INSERT INTO calendar_sync_stage(workspace_id,sync_id,source_key,body,fingerprint)
-      SELECT ${this.workspaceId}::uuid,${sync.id}::uuid,p.source_key,p.body,p.fingerprint FROM jsonb_to_recordset(${encoded}::jsonb) AS p(source_key text,body jsonb,fingerprint text) ON CONFLICT DO NOTHING`);
+      SELECT ${this.workspaceId}::uuid,${sync.id}::uuid,p.source_key,p.body,p.fingerprint FROM jsonb_to_recordset(${encoded}::jsonb) AS p(source_key text,body jsonb,fingerprint text)
+      WHERE NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=${this.workspaceId} AND s.connection_id=${sync.connectionId} AND s.calendar_id=${sync.calendarId} AND s.source_key=p.source_key) ON CONFLICT DO NOTHING`);
     if (!page.nextCursor) {
+      // A full bounded snapshot proves missing in-window occurrences no longer eligible. Keep cancellation
+      // evidence long enough for existing durable capture tasks to stop, rather than silently hiding it.
+      await this.db
+        .execute(sql`INSERT INTO calendar_sync_stage(workspace_id,sync_id,source_key,body,fingerprint)
+        SELECT o.workspace_id,${sync.id},o.source_key,o.body||'{"status":"cancelled","joinUrl":null}'::jsonb,
+          CASE WHEN o.body->>'status'='cancelled' THEN o.fingerprint ELSE 'cancelled:'||o.version::text END
+        FROM calendar_occurrences o WHERE o.workspace_id=${this.workspaceId} AND o.connection_id=${sync.connectionId} AND o.calendar_id=${sync.calendarId}
+        AND o.body->>'startsAt'<${sync.endsAt.toISOString()} AND o.body->>'endsAt'>${sync.startsAt.toISOString()}
+        AND NOT EXISTS(SELECT 1 FROM calendar_sync_stage s WHERE s.workspace_id=o.workspace_id AND s.sync_id=${sync.id} AND s.source_key=o.source_key)
+        AND NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=o.workspace_id AND s.connection_id=o.connection_id AND s.calendar_id=o.calendar_id AND s.source_key=o.source_key) ON CONFLICT DO NOTHING`);
       const changed = await this.db
         .execute(sql`INSERT INTO calendar_occurrences(workspace_id,id,connection_id,calendar_id,source_key,body,fingerprint,generation)
-        SELECT workspace_id,gen_random_uuid(),${sync.connectionId},${sync.calendarId},source_key,body,fingerprint,${sync.id} FROM calendar_sync_stage WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}
+        SELECT p.workspace_id,gen_random_uuid(),${sync.connectionId},${sync.calendarId},p.source_key,p.body,p.fingerprint,${sync.id} FROM calendar_sync_stage p WHERE p.workspace_id=${this.workspaceId} AND p.sync_id=${sync.id}
+        AND NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=p.workspace_id AND s.connection_id=${sync.connectionId} AND s.calendar_id=${sync.calendarId} AND s.source_key=p.source_key)
         ON CONFLICT(workspace_id,connection_id,calendar_id,source_key) DO UPDATE SET body=excluded.body,fingerprint=excluded.fingerprint,generation=excluded.generation,version=calendar_occurrences.version+1
         WHERE calendar_occurrences.fingerprint<>excluded.fingerprint
         AND NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=excluded.workspace_id AND s.connection_id=excluded.connection_id AND s.calendar_id=excluded.calendar_id AND s.source_key=excluded.source_key) RETURNING id,version`);
@@ -171,6 +272,15 @@ class CalendarTx implements ConnectionTx {
       await this.db.execute(
         sql`DELETE FROM calendar_sync_stage WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}`,
       );
+      const round = (
+        await this.db.execute(
+          sql`SELECT * FROM calendar_change_rounds WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}`,
+        )
+      ).rows[0];
+      if (round)
+        await this.db.execute(
+          sql`INSERT INTO calendar_sync_checkpoints(workspace_id,connection_id,calendar_id,connection_version,source_cursor,generation,starts_at,ends_at,last_full_at) VALUES(${this.workspaceId},${sync.connectionId},${sync.calendarId},${sync.connectionVersion},${round.candidate_cursor},${sync.id},${sync.startsAt},${sync.endsAt},${sync.createdAt}) ON CONFLICT(workspace_id,connection_id,calendar_id) DO UPDATE SET connection_version=excluded.connection_version,source_cursor=excluded.source_cursor,generation=excluded.generation,starts_at=excluded.starts_at,ends_at=excluded.ends_at,last_full_at=CASE WHEN ${round.phase === "unchanged"} THEN calendar_sync_checkpoints.last_full_at ELSE excluded.last_full_at END`,
+        );
     }
     await this.db
       .update(schema.syncs)

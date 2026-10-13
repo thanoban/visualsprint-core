@@ -16,4 +16,5 @@ export type CalendarSync = {
   pageCount: number;
   errorCode: string | null;
   createdAt: Date;
+  incremental?: boolean;
 };

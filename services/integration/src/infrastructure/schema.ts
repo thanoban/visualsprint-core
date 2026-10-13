@@ -8,6 +8,7 @@ import {
   jsonb,
   primaryKey,
   bigserial,
+  bigint,
 } from "drizzle-orm/pg-core";
 import type { ConnectionStatus, CalendarProviderName } from "../domain/records.js";
 import type { DomainEvent } from "@visualsprint/contracts";
@@ -75,6 +76,8 @@ export const syncs = pgTable(
     pageCount: integer("page_count").notNull(),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    incremental: boolean("incremental").notNull().default(false),
+    signalRevision: bigint("signal_revision", { mode: "number" }).notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
 );

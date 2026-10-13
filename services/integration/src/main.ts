@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ServiceIdentity, AppError, bearer } from "@visualsprint/platform";
 import { id } from "@visualsprint/contracts";
 import { actionRoutes } from "./http/action-routes.js";
+import { calendarPushRoutes } from "./http/calendar-push-routes.js";
 import { integrationApp } from "./http/app.js";
 import { runtime } from "./runtime.js";
 const config = z
@@ -12,7 +13,7 @@ const config = z
     PORT: z.coerce.number().int().min(1).max(65535).default(4105),
   })
   .parse(process.env);
-const { pool, service, providers, actions, purge } = await runtime();
+const { pool, service, providers, actions, purge, push } = await runtime();
 const identity = new ServiceIdentity("integration", {
   gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
 });
@@ -21,6 +22,7 @@ const app = integrationApp(
   async (token) => (await identity.verify(token)).actor,
   Object.keys(providers),
 );
+calendarPushRoutes(app, push);
 if (actions) {
   const workflowIdentity = new ServiceIdentity(
     "integration",

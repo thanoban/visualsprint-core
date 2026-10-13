@@ -3,6 +3,7 @@ import { AppError, boundedJson } from "@visualsprint/platform";
 import type { CalendarProvider } from "../application/ports.js";
 import type { CalendarProviderName, Tokens } from "../domain/records.js";
 import type { CalendarWindow } from "../domain/occurrences.js";
+import type { CalendarChangePage } from "../domain/changes.js";
 import { googleOccurrence, microsoftOccurrence } from "./occurrence-normalization.js";
 const tokenBody = z.object({
   access_token: z.string().min(1).max(16000),
@@ -160,7 +161,7 @@ export class OAuthCalendarProvider implements CalendarProvider {
         headers: {
           authorization: `Bearer ${accessToken}`,
           ...(this.provider === "microsoft"
-            ? { Prefer: 'IdType="ImmutableId", outlook.timezone="UTC"' }
+            ? { Prefer: 'IdType="ImmutableId", outlook.timezone="UTC", odata.maxpagesize=100' }
             : {}),
         },
         redirect: "error",
@@ -172,6 +173,10 @@ export class OAuthCalendarProvider implements CalendarProvider {
     if (response.status === 401) {
       await response.body?.cancel();
       throw new AppError("REAUTH_REQUIRED", 401);
+    }
+    if (response.status === 410) {
+      await response.body?.cancel();
+      throw new AppError("CALENDAR_SYNC_EXPIRED", 409);
     }
     if (response.status === 403 || response.status === 404) {
       await response.body?.cancel();
@@ -366,5 +371,97 @@ export class OAuthCalendarProvider implements CalendarProvider {
       items: page.value.map(microsoftOccurrence),
       nextCursor: page["@odata.nextLink"] ?? null,
     };
+  }
+  async changes(
+    accessToken: string,
+    calendarId: string,
+    window: CalendarWindow,
+    sourceCursor?: string,
+    pageCursor?: string,
+  ): Promise<CalendarChangePage> {
+    identifier.parse(calendarId);
+    if (this.provider === "google") {
+      const url = new URL(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+      );
+      for (const [key, value] of Object.entries({
+        singleEvents: "false",
+        showDeleted: "true",
+        maxResults: "100",
+        fields: "items(id),nextPageToken,nextSyncToken",
+      }))
+        url.searchParams.set(key, value);
+      if (sourceCursor)
+        url.searchParams.set("syncToken", z.string().min(1).max(16000).parse(sourceCursor));
+      if (pageCursor)
+        url.searchParams.set("pageToken", z.string().min(1).max(16000).parse(pageCursor));
+      const page = providerPayload(
+        z.object({
+          items: z
+            .array(z.object({ id: identifier }))
+            .max(100)
+            .default([]),
+          nextPageToken: z.string().min(1).max(16000).optional(),
+          nextSyncToken: z.string().min(1).max(16000).optional(),
+        }),
+        await this.data(url, accessToken),
+      );
+      if (Boolean(page.nextPageToken) === Boolean(page.nextSyncToken))
+        throw new AppError("INVALID_CHANGE_CURSOR", 503);
+      return {
+        changed: page.items.length > 0,
+        nextCursor: page.nextPageToken ?? null,
+        finalCursor: page.nextSyncToken ?? null,
+      };
+    }
+    // v1.0 primary-calendar delta only. Beta/non-primary is not silently substituted.
+    if (
+      !sourceCursor &&
+      !pageCursor &&
+      !(await this.resolveCalendar(accessToken, calendarId)).primary
+    )
+      throw new AppError("CALENDAR_INCREMENTAL_UNSUPPORTED", 409);
+    const path = "/v1.0/me/calendarView/delta";
+    const validate = (value: string) => {
+      let url: URL;
+      try {
+        url = new URL(z.string().max(16000).parse(value));
+      } catch {
+        throw new AppError("INVALID_CHANGE_CURSOR", 400);
+      }
+      if (
+        url.origin !== "https://graph.microsoft.com" ||
+        url.pathname !== path ||
+        url.username ||
+        url.password ||
+        url.hash
+      )
+        throw new AppError("INVALID_CHANGE_CURSOR", 400);
+      return url;
+    };
+    const url = pageCursor
+      ? validate(pageCursor)
+      : sourceCursor
+        ? validate(sourceCursor)
+        : new URL("https://graph.microsoft.com" + path);
+    if (!sourceCursor && !pageCursor) {
+      url.searchParams.set("startDateTime", window.startsAt);
+      url.searchParams.set("endDateTime", window.endsAt);
+    }
+    const page = providerPayload(
+      z.object({
+        value: z.array(z.object({ id: identifier })).max(100),
+        "@odata.nextLink": z.string().min(1).max(16000).optional(),
+        "@odata.deltaLink": z.string().min(1).max(16000).optional(),
+      }),
+      await this.data(url, accessToken),
+    );
+    if (Boolean(page["@odata.nextLink"]) === Boolean(page["@odata.deltaLink"]))
+      throw new AppError("INVALID_CHANGE_CURSOR", 503);
+    const nextCursor = page["@odata.nextLink"] ?? null,
+      finalCursor = page["@odata.deltaLink"] ?? null;
+    if (nextCursor) validate(nextCursor);
+    if (finalCursor) validate(finalCursor);
+    return { changed: page.value.length > 0, nextCursor, finalCursor };
   }
 }

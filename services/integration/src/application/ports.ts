@@ -6,7 +6,15 @@ export interface CalendarMeetings {
 import type { CalendarProviderName, Connection, Tokens, Calendar } from "../domain/records.js";
 import type { CalendarWindow, OccurrencePage } from "../domain/occurrences.js";
 import type { CalendarSync } from "../domain/sync.js";
+import type { CalendarChangePage, CalendarChangeRound } from "../domain/changes.js";
 export interface CalendarProvider {
+  changes?(
+    accessToken: string,
+    calendarId: string,
+    window: CalendarWindow,
+    sourceCursor?: string,
+    pageCursor?: string,
+  ): Promise<CalendarChangePage>;
   authorizationUrl(state: string, challenge: string): string;
   exchange(code: string, verifier: string): Promise<Tokens>;
   refresh(refreshToken: string): Promise<Tokens>;
@@ -32,6 +40,10 @@ export interface CalendarAuthority {
   disableGrant(actor: Actor, connectionId: string): Promise<void>;
 }
 export interface ConnectionTx {
+  changeRound(sync: CalendarSync): Promise<CalendarChangeRound>;
+  changePage(sync: CalendarSync, page: CalendarChangePage): Promise<void>;
+  fallbackChanges(sync: CalendarSync, code: string): Promise<void>;
+  syncRequested(connectionId: string): Promise<boolean>;
   storedOccurrence(
     connectionId: string,
     calendarId: string,
