@@ -144,7 +144,8 @@ class CalendarTx implements ConnectionTx {
         .execute(sql`INSERT INTO calendar_occurrences(workspace_id,id,connection_id,calendar_id,source_key,body,fingerprint,generation)
         SELECT workspace_id,gen_random_uuid(),${sync.connectionId},${sync.calendarId},source_key,body,fingerprint,${sync.id} FROM calendar_sync_stage WHERE workspace_id=${this.workspaceId} AND sync_id=${sync.id}
         ON CONFLICT(workspace_id,connection_id,calendar_id,source_key) DO UPDATE SET body=excluded.body,fingerprint=excluded.fingerprint,generation=excluded.generation,version=calendar_occurrences.version+1
-        WHERE calendar_occurrences.fingerprint<>excluded.fingerprint RETURNING id,version`);
+        WHERE calendar_occurrences.fingerprint<>excluded.fingerprint
+        AND NOT EXISTS(SELECT 1 FROM calendar_suppressed_occurrences s WHERE s.workspace_id=excluded.workspace_id AND s.connection_id=excluded.connection_id AND s.calendar_id=excluded.calendar_id AND s.source_key=excluded.source_key) RETURNING id,version`);
       await this.db.execute(
         sql`UPDATE calendar_occurrences o SET generation=${sync.id} FROM calendar_sync_stage s WHERE o.workspace_id=${this.workspaceId} AND o.connection_id=${sync.connectionId} AND o.calendar_id=${sync.calendarId} AND s.workspace_id=o.workspace_id AND s.sync_id=${sync.id} AND s.source_key=o.source_key`,
       );

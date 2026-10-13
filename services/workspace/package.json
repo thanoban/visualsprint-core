@@ -10,6 +10,7 @@
     "build": "tsc --outDir dist && node ../../scripts/build-service.mjs",
     "start": "node dist/main.mjs",
     "events": "node dist/events.mjs",
+    "worker": "node dist/worker.mjs",
     "migrate": "node dist/migrate.mjs"
   },
   "dependencies": {

@@ -3,6 +3,7 @@ import type { DomainEvent, CalendarMeeting } from "@visualsprint/contracts";
 import type { MeetingAccess } from "../domain/permissions.js";
 
 export interface MembershipAuthority {
+  notificationActive?(actor: Actor): Promise<void>;
   operationConnection?(actor: Actor): Promise<string>;
   requireActive(actor: Actor): Promise<void>;
   requireMember(workspaceId: string, userId: string, delegatedBy: Actor): Promise<void>;
@@ -52,6 +53,7 @@ export interface WorkspaceTransaction {
   listCustomers(): Promise<Customer[]>;
   listProjects(): Promise<Project[]>;
   listMeetings(projectId?: string): Promise<Meeting[]>;
+  scopeMeetings(projectId?: string, customerId?: string): Promise<Meeting[]>;
   createCustomer(record: Customer): Promise<Customer>;
   createProject(record: Project): Promise<Project>;
   createMeeting(record: Omit<Meeting, "createdAt">): Promise<Meeting>;

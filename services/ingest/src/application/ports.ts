@@ -27,6 +27,8 @@ export interface UsageAuthority {
   settle(actor: Actor, requestId: string, seconds: number): Promise<void>;
 }
 export interface CaptureTransaction {
+  deleteMeeting(meetingId: string, deletionId: string, sourceVersion: number): Promise<boolean>;
+  calendarCommand(actor: Actor, key: string, cancel: boolean): Promise<Capture | undefined>;
   load(requestId: string): Promise<Capture | undefined>;
   list(meetingId: string): Promise<Capture[]>;
   command(
@@ -76,6 +78,7 @@ export interface CaptureTransaction {
   ): Promise<boolean>;
   transcript(requestId: string, cursor?: { startMs: number; id: string }): Promise<Segment[]>;
   segmentCount(requestId: string): Promise<number>;
+  evidence(requestId: string, segmentIds: string[]): Promise<Segment[]>;
 }
 export interface CaptureRepository {
   scoped<T>(workspaceId: string, work: (tx: CaptureTransaction) => Promise<T>): Promise<T>;

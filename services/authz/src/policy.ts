@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { id } from "@visualsprint/contracts";
-import { AppError, type Actor } from "@visualsprint/platform";
+import { AppError, boundedJson, type Actor } from "@visualsprint/platform";
+import type { MeetingDeletionBarrier } from "./deletion-service.js";
 
 export const policyFacts = z
   .object({
@@ -40,10 +41,18 @@ export class OpenFgaPolicy {
     private readonly apiKey: string,
     private readonly storeId: string,
     private readonly modelId: string,
+    private readonly deletion?: MeetingDeletionBarrier,
   ) {
     this.origin = safeOrigin(origin);
     if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(storeId) || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(modelId))
       throw new Error("INVALID_AUTHORIZATION_MODEL_ID");
+  }
+  private async tombstoned(workspaceId: string, meetingId: string) {
+    try {
+      return this.deletion ? await this.deletion.blocked(workspaceId, meetingId) : false;
+    } catch {
+      throw new AppError("AUTHZ_UNAVAILABLE", 503);
+    }
   }
   async check(actor: Actor, input: PolicyFacts): Promise<boolean> {
     const facts = policyFacts.parse(input);
@@ -55,6 +64,7 @@ export class OpenFgaPolicy {
       (facts.ownerId !== actor.actorId && (facts.relation === "can_manage" || !facts.reader))
     )
       return false;
+    if (await this.tombstoned(actor.workspaceId, facts.meetingId)) return false;
     const user = `user:${actor.actorId}`;
     const object = `meeting:${actor.workspaceId}/${facts.meetingId}`;
     const workspace = `workspace:${actor.workspaceId}`;
@@ -77,8 +87,15 @@ export class OpenFgaPolicy {
         signal: AbortSignal.timeout(2500),
         redirect: "error",
       });
-      if (!response.ok) throw new Error("POLICY_ENGINE_UNAVAILABLE");
-      return z.object({ allowed: z.boolean() }).parse(await response.json()).allowed;
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error("POLICY_ENGINE_UNAVAILABLE");
+      }
+      const allowed = z
+        .object({ allowed: z.boolean() })
+        .parse(await boundedJson(response, 16000)).allowed;
+      if (await this.tombstoned(actor.workspaceId, facts.meetingId)) return false;
+      return allowed;
     } catch {
       throw new AppError("AUTHZ_UNAVAILABLE", 503);
     }

@@ -22,6 +22,7 @@ const cell = z
     intelligence: z.string().url().optional(),
     workflow: z.string().url().optional(),
     reporting: z.string().url().optional(),
+    notification: z.string().url().optional(),
   })
   .strict();
 const cells = z

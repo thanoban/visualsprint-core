@@ -79,6 +79,7 @@ export const eventTypes = [
   "action.reconciliation.required.v1",
   "deletion.requested.v1",
   "deletion.acknowledged.v1",
+  "notification.delivery.changed.v1",
 ] as const;
 
 // Content is fetched from its owning service using authorization. Bus messages
@@ -109,6 +110,7 @@ export const eventEnvelope = z
               "proposal",
               "action",
               "deletion",
+              "notification",
             ]),
             id,
             revision: z.number().int().nonnegative().optional(),

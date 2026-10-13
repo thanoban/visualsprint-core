@@ -11,6 +11,8 @@ export function ingestApp(
   authenticate: (token: string) => Promise<Actor>,
   signatures: RecallSignatures,
   authenticateCalendar?: (token: string) => Promise<Actor>,
+  authenticateRead?: (token: string) => Promise<Actor>,
+  authenticateDeletion?: (token: string) => Promise<Actor>,
 ) {
   const app = Fastify({
     bodyLimit: 1_000_000,
@@ -25,6 +27,30 @@ export function ingestApp(
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "ingest" }));
+  app.post("/internal/workspaces/:workspaceId/evidence-batch", async (request) => {
+    if (!authenticateDeletion) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+    const actor = await authenticateDeletion(bearer(request.headers.authorization));
+    if (id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId)
+      throw new AppError("FORBIDDEN", 403);
+    return service.evidenceBatch(actor, request.body);
+  });
+  app.post("/internal/workspaces/:workspaceId/deletions/:deletionId", async (request) => {
+    if (!authenticateDeletion) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+    const actor = await authenticateDeletion(bearer(request.headers.authorization));
+    const params = request.params as { workspaceId: string; deletionId: string };
+    if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
+    return service.deleteMeeting(actor.workspaceId, id.parse(params.deletionId), request.body);
+  });
+  app.post("/internal/workspaces/:workspaceId/calendar-commands", async (request) => {
+    if (!authenticateCalendar) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+    const actor = await authenticateCalendar(bearer(request.headers.authorization));
+    if (
+      !actor.operationGrantId ||
+      id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId
+    )
+      throw new AppError("FORBIDDEN", 403);
+    return service.calendarCommand(actor, request.body);
+  });
   app.post("/internal/workspaces/:workspaceId/calendar-captures", async (request, reply) => {
     if (!authenticateCalendar) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
     const actor = await authenticateCalendar(bearer(request.headers.authorization));
@@ -35,6 +61,8 @@ export function ingestApp(
       throw new AppError("FORBIDDEN", 403);
     const key = request.headers["idempotency-key"];
     if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+    if (!key.startsWith(`calendar:${actor.operationGrantId}:`))
+      throw new AppError("FORBIDDEN", 403);
     return reply.code(202).send(await service.request(actor, key, request.body));
   });
   app.register(
@@ -74,7 +102,9 @@ export function ingestApp(
     async (routes) => {
       const actors = new WeakMap<object, Actor>();
       routes.addHook("preHandler", async (request) => {
-        const actor = await authenticate(bearer(request.headers.authorization));
+        const actor = await (
+          request.method === "GET" && authenticateRead ? authenticateRead : authenticate
+        )(bearer(request.headers.authorization));
         if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
         if (id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId)
           throw new AppError("FORBIDDEN", 403);

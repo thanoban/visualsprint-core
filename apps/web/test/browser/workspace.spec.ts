@@ -137,6 +137,28 @@ async function fixture(page: Page, captureEnabled = false, futureMode = false) {
   });
   return writes;
 }
+test("deletion tracking stays available without reopening the blocked meeting", async ({ page }) => {
+  await fixture(page);
+  const deletionId = "99999999-9999-4999-8999-999999999999";
+  let complete = false;
+  await page.route(`**/deletions/${deletionId}`, (route) => route.fulfill({
+    json: {
+      id: deletionId, meetingId, state: complete ? "complete" : "pending",
+      required: ["ingest", "authz"], completed: complete ? ["ingest", "authz"] : ["authz"],
+    },
+  }));
+  await page.goto(`/w/${workspaceId}?deletionId=${deletionId}`);
+  const panel = page.getByRole("region", { name: "Deletion status" });
+  await expect(panel).toContainText("1/2 services acknowledged");
+  await expect(panel).toContainText("Waiting for: ingest");
+  await expect(page.getByRole("textbox", { name: "Meeting notes" })).toHaveCount(0);
+  complete = true;
+  await panel.getByRole("button", { name: "Refresh deletion status" }).click();
+  await expect(panel).toContainText("Required local cleanup is complete");
+  await expect(panel).toContainText("local completion does not claim external tasks were deleted");
+  await page.getByRole("link", { name: "Second workspace" }).click();
+  await expect(panel).toHaveCount(0);
+});
 test("project context, notes, assignment and explicit sharing are separate browser flows", async ({
   page,
 }) => {

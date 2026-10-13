@@ -9,7 +9,7 @@ export class AccountMemberships implements MembershipAuthority {
     private readonly privateKey: CryptoKey,
     private readonly keyId: string,
   ) {}
-  private async check(actor: Actor, userId: string): Promise<void> {
+  private async check(actor: Actor, userId: string, background = false): Promise<void> {
     const token = await serviceToken({
       caller: "workspace",
       audience: "account",
@@ -20,7 +20,10 @@ export class AccountMemberships implements MembershipAuthority {
     let response: Response;
     try {
       response = await fetch(
-        new URL(`/internal/workspaces/${actor.workspaceId}/membership`, this.baseUrl),
+        new URL(
+          `/internal/workspaces/${actor.workspaceId}/${background ? "notifications/membership" : "membership"}`,
+          this.baseUrl,
+        ),
         {
           method: "POST",
           headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -37,7 +40,9 @@ export class AccountMemberships implements MembershipAuthority {
     if (!response.ok) throw new AppError("ACCOUNT_UNAVAILABLE", 503);
     let allowed = false;
     try {
-      allowed = z.object({ active: z.literal(true) }).parse(await response.json()).active;
+      allowed = z
+        .object({ active: z.literal(true) })
+        .parse(await boundedJson(response, 16000)).active;
     } catch {
       throw new AppError("ACCOUNT_UNAVAILABLE", 503);
     }
@@ -45,6 +50,9 @@ export class AccountMemberships implements MembershipAuthority {
   }
   requireActive(actor: Actor) {
     return this.check(actor, actor.actorId);
+  }
+  notificationActive(actor: Actor) {
+    return this.check(actor, actor.actorId, true);
   }
   async operationConnection(actor: Actor) {
     if (!actor.operationGrantId) throw new AppError("FORBIDDEN", 403);

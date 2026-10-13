@@ -14,6 +14,9 @@ import { useData, useCommand, Feedback, Form } from "./ui.js";
 import { OrganizationForms, MeetingForm } from "./organization-forms.js";
 import { MeetingPanel } from "./meeting-detail.js";
 import { CalendarPanel } from "./calendar-panel.js";
+import { IntelligencePanel } from "./intelligence-panel.js";
+import { NotificationPanel } from "./notification-panel.js";
+import { DeletionStatus } from "./deletion-status.js";
 
 type Context = { api: Api; email: string; signOut: () => void };
 const rootRoute = createRootRouteWithContext<Context>()({ component: Frame });
@@ -118,7 +121,7 @@ const workspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/w/$workspaceId",
   validateSearch: (input: Record<string, unknown>) =>
-    z.object({ projectId: id.optional(), meetingId: id.optional() }).parse(input),
+    z.object({ projectId: id.optional(), meetingId: id.optional(),deletionId:id.optional() }).parse(input),
   component: WorkspacePage,
 });
 function WorkspacePage() {
@@ -129,8 +132,10 @@ function WorkspacePage() {
 }
 function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
   const [showCalendars, setShowCalendars] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const { api } = rootRoute.useRouteContext();
-  const { projectId, meetingId } = workspaceRoute.useSearch();
+  const { projectId, meetingId,deletionId } = workspaceRoute.useSearch();
+  const navigate=workspaceRoute.useNavigate();
   const [refresh, setRefresh] = useState(0);
   const data = useData(
     async (signal) => {
@@ -169,6 +174,30 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
           {showCalendars ? (
             <CalendarPanel key={workspaceId} api={api} workspaceId={workspaceId} />
           ) : null}
+          <button className="secondary" onClick={() => setShowNotifications((value) => !value)}>
+            Notifications
+          </button>
+          {showNotifications ? (
+            <NotificationPanel key={workspaceId} api={api} workspaceId={workspaceId} />
+          ) : null}
+          {deletionId?<DeletionStatus key={`${workspaceId}/${deletionId}`} api={api} workspaceId={workspaceId} deletionId={deletionId}/>:null}
+          <IntelligencePanel
+            key={`${workspaceId}/${projectId ?? "workspace"}`}
+            api={api}
+            workspaceId={workspaceId}
+            scope={projectId ? { kind: "project", id: projectId } : { kind: "workspace", id: null }}
+            contexts={[
+              { label: "Workspace", scope: { kind: "workspace", id: null } },
+              ...value.projects.map((project) => ({
+                label: `Project: ${project.name}`,
+                scope: { kind: "project" as const, id: project.id },
+              })),
+              ...value.customers.map((customer) => ({
+                label: `Customer: ${customer.name}`,
+                scope: { kind: "customer" as const, id: customer.id },
+              })),
+            ]}
+          />
           <div className="workspace-grid">
             <section className="projects">
               <h2>Projects</h2>
@@ -244,6 +273,7 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
               userId={value.userId}
               projects={value.projects}
               reload={reload}
+              onDeleted={jobId=>{void navigate({to:"/w/$workspaceId",params:{workspaceId},search:{...(projectId?{projectId}:{}),deletionId:jobId}});}}
             />
           ) : null}
         </>

@@ -12,6 +12,49 @@ import {
 import type { ConnectionStatus, CalendarProviderName } from "../domain/records.js";
 import type { DomainEvent } from "@visualsprint/contracts";
 import type { CalendarSync } from "../domain/sync.js";
+import type { CalendarMeeting } from "@visualsprint/contracts";
+import type { CaptureIntent } from "../application/calendar-captures.js";
+export const calendarDeletions = pgTable(
+  "calendar_deletion_requests",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    id: uuid("id").notNull(),
+    meetingId: uuid("meeting_id").notNull(),
+    sourceVersion: integer("source_version").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
+);
+export const suppressedOccurrences = pgTable(
+  "calendar_suppressed_occurrences",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    calendarId: text("calendar_id").notNull(),
+    sourceKey: text("source_key").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.connectionId, t.calendarId, t.sourceKey] })],
+);
+export const captureTasks = pgTable(
+  "calendar_capture_tasks",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    connectionId: uuid("connection_id").notNull(),
+    occurrenceId: uuid("occurrence_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    grantId: uuid("grant_id").notNull(),
+    target: jsonb("target").$type<CalendarMeeting>().notNull(),
+    enabled: boolean("enabled").notNull(),
+    attempt: integer("attempt").notNull().default(1),
+    key: text("key"),
+    intent: jsonb("intent").$type<CaptureIntent>(),
+    intentFingerprint: text("intent_fingerprint"),
+    captureId: uuid("capture_id"),
+    leaseToken: uuid("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    nextAt: timestamp("next_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.connectionId, t.occurrenceId] })],
+);
 export const syncs = pgTable(
   "calendar_syncs",
   {

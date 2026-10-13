@@ -57,7 +57,12 @@ export function accountApp(
         if (workspaceId !== hop.actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, hop.actor);
         callers.set(request, hop.caller);
+        const notificationMembership = request.routeOptions.url?.endsWith(
+          "/notifications/membership",
+        );
         const capability = request.routeOptions.url?.split("/").at(-1);
+        if (notificationMembership && !["notification", "workspace"].includes(hop.caller))
+          throw new AppError("FORBIDDEN", 403);
         if (
           hop.actor.operationGrantId &&
           (!["integration", "workspace", "ingest"].includes(hop.caller) ||
@@ -94,6 +99,9 @@ export function accountApp(
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.post("/notifications/membership", (request) =>
+        service.notificationMembership(actor(request), request.body),
+      );
       routes.post("/automation/operation", (request) => service.operationContext(actor(request)));
       routes.post("/automation/disable-connection", (request) =>
         service.disableConnectionGrant(actor(request), request.body),

@@ -152,12 +152,25 @@ importers:
       '@visualsprint/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
       fastify:
         specifier: 5.12.5
         version: 5.12.5
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
       zod:
         specifier: 4.1.12
         version: 4.1.12
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
 
   services/gateway:
     dependencies:
@@ -219,6 +232,139 @@ importers:
       '@visualsprint/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@visualsprint/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+
+  services/intelligence:
+    dependencies:
+      '@azure/identity':
+        specifier: 4.13.3
+        version: 4.13.3
+      '@visualsprint/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@visualsprint/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+
+  services/notification:
+    dependencies:
+      '@azure/identity':
+        specifier: 4.13.3
+        version: 4.13.3
+      '@azure/service-bus':
+        specifier: 7.10.0
+        version: 7.10.0
+      '@visualsprint/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@visualsprint/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@visualsprint/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+
+  services/reporting:
+    dependencies:
+      '@visualsprint/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@visualsprint/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      drizzle-orm:
+        specifier: 0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
+      pg:
+        specifier: 8.23.1
+        version: 8.23.1
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+    devDependencies:
+      '@types/pg':
+        specifier: 8.23.1
+        version: 8.23.1
+
+  services/workflow:
+    dependencies:
+      '@azure/identity':
+        specifier: 4.13.3
+        version: 4.13.3
+      '@azure/service-bus':
+        specifier: 7.10.0
+        version: 7.10.0
+      '@visualsprint/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@visualsprint/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
       '@visualsprint/platform':
         specifier: workspace:*
         version: link:../../packages/platform

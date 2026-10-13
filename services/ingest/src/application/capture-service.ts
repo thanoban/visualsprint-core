@@ -122,6 +122,98 @@ export class CaptureService {
     await this.meetings.read(actor, record.meetingId);
     return captureView(record);
   }
+  async calendarCommand(actor: Actor, body: unknown) {
+    const input = z.object({ key: commandKey, cancel: z.boolean() }).strict().parse(body);
+    return this.repository.scoped(actor.workspaceId, async (tx) => {
+      const record = await tx.calendarCommand(actor, input.key, input.cancel);
+      if (!record) return { capture: null, fenced: input.cancel };
+      if (!input.cancel || record.stopRequested || terminal.has(record.state))
+        return { capture: captureView(record), fenced: input.cancel };
+      const updated = await tx.update(record.id, {
+        stopRequested: true,
+        state:
+          record.state === "scheduled"
+            ? "cancelled"
+            : record.state === "finalizing"
+              ? "finalizing"
+              : "stopping",
+      });
+      await tx.emit(updated, "capture.state.changed.v1");
+      return { capture: captureView(updated), fenced: true };
+    });
+  }
+  async deleteMeeting(workspaceId: string, deletionId: string, body: unknown) {
+    const input = z
+      .object({ meetingId: id, sourceVersion: z.number().int().positive() })
+      .strict()
+      .parse(body);
+    const complete = await this.repository.scoped(id.parse(workspaceId), (tx) =>
+      tx.deleteMeeting(input.meetingId, id.parse(deletionId), input.sourceVersion),
+    );
+    return {
+      deletionId,
+      meetingId: input.meetingId,
+      participant: "ingest",
+      state: complete ? "complete" : "pending",
+    };
+  }
+  async evidenceBatch(actor: Actor, body: unknown) {
+    if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
+    const input = z
+      .object({
+        meetingId: id,
+        citations: z
+          .array(
+            z
+              .object({ captureId: id, segmentId: id, revision: z.number().int().positive() })
+              .strict(),
+          )
+          .min(1)
+          .max(20),
+      })
+      .strict()
+      .parse(body);
+    await this.meetings.read(actor, input.meetingId);
+    const segments = await this.repository.scoped(actor.workspaceId, async (tx) => {
+      const rows = [];
+      for (const captureId of [...new Set(input.citations.map((c) => c.captureId))].sort()) {
+        const capture = await tx.load(captureId);
+        if (
+          !capture ||
+          capture.meetingId !== input.meetingId ||
+          !["complete", "partial"].includes(capture.state)
+        )
+          throw new AppError("EVIDENCE_NOT_FINAL", 409);
+        const requested = input.citations.filter((c) => c.captureId === captureId);
+        const evidence = await tx.evidence(
+          captureId,
+          requested.map((c) => c.segmentId),
+        );
+        for (const citation of requested) {
+          const segment = evidence.find(
+            (s) => s.id === citation.segmentId && s.revision === citation.revision && s.finalized,
+          );
+          if (!segment) throw new AppError("EVIDENCE_REVISION_CHANGED", 409);
+          rows.push({
+            captureId,
+            captureVersion: capture.version,
+            state: capture.state,
+            coverage: capture.coverage,
+            segmentId: segment.id,
+            revision: segment.revision,
+            text: segment.text,
+            finalized: segment.finalized,
+            startMs: segment.startMs,
+            endMs: segment.endMs,
+            speakerLabel: segment.speakerLabel,
+          });
+        }
+      }
+      return rows;
+    });
+    await this.meetings.read(actor, input.meetingId);
+    return { meetingId: input.meetingId, segments };
+  }
   async list(actor: Actor, meetingId: string) {
     await this.meetings.read(actor, id.parse(meetingId));
     return (await this.repository.scoped(actor.workspaceId, (tx) => tx.list(meetingId))).map(

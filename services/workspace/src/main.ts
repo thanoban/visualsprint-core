@@ -6,6 +6,7 @@ import { PostgresWorkspace } from "./infrastructure/store.js";
 import { AccountMemberships } from "./infrastructure/account-client.js";
 import { AuthzPolicy } from "./infrastructure/policy-client.js";
 import { workspaceApp } from "./http/app.js";
+import { deletionRuntime } from "./infrastructure/deletion-runtime.js";
 
 const config = z
   .object({
@@ -17,6 +18,11 @@ const config = z
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
     INGEST_PUBLIC_JWKS: z.string().optional(),
     INTEGRATION_PUBLIC_JWKS: z.string().optional(),
+    INTELLIGENCE_PUBLIC_JWKS: z.string().optional(),
+    REPORTING_PUBLIC_JWKS: z.string().optional(),
+    WORKFLOW_PUBLIC_JWKS: z.string().optional(),
+    NOTIFICATION_PUBLIC_JWKS: z.string().optional(),
+    DELETION_SERVICE_ORIGINS: z.string().default("{}"),
     PORT: z.coerce.number().int().min(1).max(65535).default(4102),
   })
   .parse(process.env);
@@ -38,6 +44,22 @@ if (privateKey instanceof Uint8Array) throw new Error("INVALID_SERVICE_SIGNING_K
 const identity = new ServiceIdentity("workspace", {
   gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
 });
+const readers = {
+  ...(config.INTELLIGENCE_PUBLIC_JWKS
+    ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+    : {}),
+  ...(config.REPORTING_PUBLIC_JWKS
+    ? { reporting: JSON.parse(config.REPORTING_PUBLIC_JWKS).keys }
+    : {}),
+  ...(config.WORKFLOW_PUBLIC_JWKS
+    ? { workflow: JSON.parse(config.WORKFLOW_PUBLIC_JWKS).keys }
+    : {}),
+};
+const readerIdentity = new ServiceIdentity("workspace", readers);
+const readIdentity = new ServiceIdentity("workspace", {
+  gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
+  ...readers,
+});
 const internalIdentity = new ServiceIdentity(
   "workspace",
   config.INGEST_PUBLIC_JWKS
@@ -54,12 +76,30 @@ const calendarIdentity = new ServiceIdentity(
     : {},
 );
 await assertRuntimeRole(pool);
+const service = new WorkspaceService(
+  new PostgresWorkspace(pool),
+  new AccountMemberships(config.ACCOUNT_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
+  new AuthzPolicy(config.AUTHZ_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
+);
+const deletions = deletionRuntime(
+  pool,
+  {
+    active: (actor) =>
+      new AccountMemberships(
+        config.ACCOUNT_INTERNAL_URL,
+        privateKey,
+        config.SERVICE_KEY_ID,
+      ).requireActive(actor),
+    manage: async (actor, meetingId) => {
+      await service.manageContext(actor, meetingId);
+    },
+  },
+  privateKey,
+  config.SERVICE_KEY_ID,
+  config.DELETION_SERVICE_ORIGINS,
+);
 const app = workspaceApp(
-  new WorkspaceService(
-    new PostgresWorkspace(pool),
-    new AccountMemberships(config.ACCOUNT_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
-    new AuthzPolicy(config.AUTHZ_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
-  ),
+  service,
   async (token) => (await identity.verify(token)).actor,
   async (token) => {
     const hop = await internalIdentity.verify(token);
@@ -67,6 +107,18 @@ const app = workspaceApp(
     return hop.actor;
   },
   async (token) => (await calendarIdentity.verify(token)).actor,
+  async (token) => (await readerIdentity.verify(token)).actor,
+  async (token) => (await readIdentity.verify(token)).actor,
+  deletions.service,
+  async (token) =>
+    (
+      await new ServiceIdentity(
+        "workspace",
+        config.NOTIFICATION_PUBLIC_JWKS
+          ? { notification: JSON.parse(config.NOTIFICATION_PUBLIC_JWKS).keys }
+          : {},
+      ).verify(token)
+    ).actor,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

@@ -222,6 +222,78 @@ export class WorkspaceService {
     const meeting = await this.meeting(actor, meetingId);
     return { meetingId: meeting.id, ownerId: meeting.ownerId, version: meeting.version };
   }
+  async intelligenceContext(actor: Actor, body: unknown) {
+    if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
+    const { scope } = z
+      .object({
+        scope: z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("workspace"), id: z.null() }).strict(),
+          z.object({ kind: z.enum(["meeting", "project", "customer"]), id }).strict(),
+        ]),
+      })
+      .strict()
+      .parse(body);
+    await this.authorize(actor);
+    if (scope.kind === "meeting") {
+      const meeting = await this.meeting(actor, scope.id);
+      return {
+        meetings: [
+          { id: meeting.id, version: meeting.version, title: meeting.title, notes: meeting.notes },
+        ],
+      };
+    }
+    return this.repository.read(actor, async (tx) => {
+      if (scope.kind === "project" && !(await tx.project(scope.id)))
+        throw new AppError("NOT_FOUND", 404);
+      if (scope.kind === "customer" && !(await tx.customer(scope.id)))
+        throw new AppError("NOT_FOUND", 404);
+      const candidates = await tx.scopeMeetings(
+        scope.kind === "project" ? scope.id : undefined,
+        scope.kind === "customer" ? scope.id : undefined,
+      );
+      if (candidates.length > 100) throw new AppError("SCOPE_TOO_LARGE", 409);
+      const checks = [];
+      for (const meeting of candidates) {
+        const access = await tx.meetingAccess(meeting.id);
+        if (access && canReadMeeting(actor.actorId, access)) checks.push({ meeting, access });
+      }
+      const allowed = await this.policy.checkMany(
+        actor,
+        checks.map(({ meeting, access }) => ({
+          meetingId: meeting.id,
+          access,
+          relation: "can_view",
+        })),
+      );
+      return {
+        meetings: checks
+          .filter((_, i) => allowed[i])
+          .map(({ meeting }) => ({
+            id: meeting.id,
+            version: meeting.version,
+            title: meeting.title,
+            notes: meeting.notes,
+          })),
+      };
+    });
+  }
+  async notificationContext(actor: Actor, meetingId: string) {
+    if (actor.operationGrantId || !this.memberships.notificationActive)
+      throw new AppError("FORBIDDEN", 403);
+    await this.memberships.notificationActive(actor);
+    return this.repository.read(actor, async (tx) => {
+      const access = await tx.meetingAccess(id.parse(meetingId));
+      if (
+        !access ||
+        !canReadMeeting(actor.actorId, access) ||
+        !(await this.policy.check(actor, meetingId, access, "can_view"))
+      )
+        throw new AppError("NOT_FOUND", 404);
+      const meeting = await tx.meeting(meetingId);
+      if (!meeting) throw new AppError("NOT_FOUND", 404);
+      return { meetingId, ownerId: meeting.ownerId, version: meeting.version, allowed: true };
+    });
+  }
   async manageContext(actor: Actor, meetingId: string) {
     await this.authorize(actor);
     return this.repository.read(actor, async (tx) => {

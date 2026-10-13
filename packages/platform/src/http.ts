@@ -1,5 +1,8 @@
 // Bound the bytes while streaming, rather than after allocating an untrusted body.
 export async function boundedJson(response: Response, maximumBytes = 1_000_000): Promise<unknown> {
+  return JSON.parse(await boundedText(response, maximumBytes));
+}
+export async function boundedText(response: Response, maximumBytes = 1_000_000): Promise<string> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
     throw new Error("INVALID_BODY_LIMIT");
   const reader = response.body?.getReader();
@@ -20,5 +23,5 @@ export async function boundedJson(response: Response, maximumBytes = 1_000_000):
   } finally {
     reader.releaseLock();
   }
-  return JSON.parse(Buffer.concat(chunks, bytes).toString("utf8"));
+  return Buffer.concat(chunks, bytes).toString("utf8");
 }

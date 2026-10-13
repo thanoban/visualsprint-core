@@ -29,6 +29,178 @@ before(async () => {
   await migrate(migrationPool, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(pool);
 });
+test("calendar cancellation fences lost responses and delayed creates, and cleanup survives revocation", async () => {
+  const f = fixture(),
+    grantId = randomUUID(),
+    actor = { ...f.actor, operationGrantId: grantId, sessionId: `operation:${grantId}` };
+  const key = `calendar:${grantId}:${randomUUID()}:1`;
+  const created = await f.service.request(actor, key, {
+    meetingId: f.meetingId,
+    expectedMeetingVersion: 1,
+    startsAt: "2026-10-12T11:00:00Z",
+    maxDurationSeconds: 120,
+  });
+  f.revoke();
+  const stopped = await f.service.calendarCommand(actor, { key, cancel: true });
+  assert.equal(stopped.capture!.id, created.id);
+  assert.equal(stopped.capture!.state, "cancelled");
+  await f.service.work(actor.workspaceId, created.id);
+  assert.equal(f.counters().creates, 0);
+  const otherGrant = randomUUID();
+  await assert.rejects(
+    f.service.calendarCommand(
+      { ...actor, operationGrantId: otherGrant, sessionId: `operation:${otherGrant}` },
+      { key, cancel: true },
+    ),
+    /FORBIDDEN/,
+  );
+  const fresh = fixture(),
+    freshGrant = randomUUID(),
+    principal = {
+      ...fresh.actor,
+      operationGrantId: freshGrant,
+      sessionId: `operation:${freshGrant}`,
+    };
+  const pendingKey = `calendar:${freshGrant}:${randomUUID()}:1`;
+  assert.equal(
+    (await fresh.service.calendarCommand(principal, { key: pendingKey, cancel: true })).capture,
+    null,
+  );
+  await assert.rejects(
+    fresh.service.request(principal, pendingKey, {
+      meetingId: fresh.meetingId,
+      expectedMeetingVersion: 1,
+      maxDurationSeconds: 120,
+    }),
+    /CALENDAR_CAPTURE_CANCELLED/,
+  );
+  await assert.rejects(
+    fresh.service.calendarCommand(principal, { key: "capture-test-key", cancel: true }),
+    /FORBIDDEN/,
+  );
+});
+test("meeting deletion stops capture, rejects late text and completes only after provider/quota cleanup", async () => {
+  const f = fixture(),
+    request = await f.request();
+  await f.service.work(f.actor.workspaceId, request.id);
+  const record = (await repository.scoped(f.actor.workspaceId, (tx) => tx.load(request.id)))!;
+  const deletionId = randomUUID();
+  assert.equal(
+    (
+      await f.service.deleteMeeting(f.actor.workspaceId, deletionId, {
+        meetingId: f.meetingId,
+        sourceVersion: 1,
+      })
+    ).state,
+    "pending",
+  );
+  const stopped = (await repository.scoped(f.actor.workspaceId, (tx) => tx.load(request.id)))!;
+  assert.equal(stopped.state, "stopping");
+  assert.equal(stopped.joinUrl, "https://deleted.invalid");
+  await f.service.receive("recall", randomUUID(), "late-text", {
+    kind: "transcript",
+    attemptId: record.attemptId,
+    providerId: f.providerId,
+    segment: {
+      id: randomUUID(),
+      revision: 1,
+      startMs: 0,
+      endMs: 1000,
+      text: "Deleted speech",
+      speakerLabel: null,
+      finalized: true,
+    },
+  });
+  assert.equal(
+    await repository.scoped(f.actor.workspaceId, (tx) => tx.segmentCount(request.id)),
+    0,
+  );
+  await f.service.work(f.actor.workspaceId, request.id);
+  assert.equal(f.counters().leaves, 1);
+  assert.equal(
+    (
+      await f.service.deleteMeeting(f.actor.workspaceId, deletionId, {
+        meetingId: f.meetingId,
+        sourceVersion: 1,
+      })
+    ).state,
+    "pending",
+  );
+  f.end();
+  await f.service.work(f.actor.workspaceId, request.id);
+  f.advance(31000);
+  await f.service.work(f.actor.workspaceId, request.id);
+  assert.equal(
+    (
+      await f.service.deleteMeeting(f.actor.workspaceId, deletionId, {
+        meetingId: f.meetingId,
+        sourceVersion: 1,
+      })
+    ).state,
+    "complete",
+  );
+  await assert.rejects(
+    f.service.deleteMeeting(f.actor.workspaceId, deletionId, {
+      meetingId: randomUUID(),
+      sourceVersion: 1,
+    }),
+    /DELETION_CONFLICT/,
+  );
+  await assert.rejects(
+    f.service.request(f.actor, randomUUID(), {
+      meetingId: f.meetingId,
+      expectedMeetingVersion: 1,
+      maxDurationSeconds: 120,
+    }),
+    /MEETING_DELETED/,
+  );
+});
+test("review evidence batches require exact finalized revisions and current meeting access", async () => {
+  const f = fixture(),
+    capture = await f.request(),
+    segmentId = randomUUID();
+  await repository.scoped(f.actor.workspaceId, async (tx) => {
+    await tx.storeSegment(capture.id, {
+      id: segmentId,
+      revision: 2,
+      startMs: 0,
+      endMs: 1000,
+      text: "Reviewed decision",
+      speakerLabel: null,
+      finalized: true,
+    });
+    await tx.update(capture.id, { state: "partial", providerDone: true });
+  });
+  const input = {
+    meetingId: f.meetingId,
+    citations: [{ captureId: capture.id, segmentId, revision: 2 }],
+  };
+  assert.equal(
+    (await f.service.evidenceBatch(f.actor, input)).segments[0]!.text,
+    "Reviewed decision",
+  );
+  await assert.rejects(
+    f.service.evidenceBatch(f.actor, {
+      ...input,
+      citations: [{ captureId: capture.id, segmentId, revision: 1 }],
+    }),
+    /EVIDENCE_REVISION_CHANGED/,
+  );
+  await assert.rejects(
+    f.service.evidenceBatch(f.actor, { ...input, meetingId: randomUUID() }),
+    /EVIDENCE_NOT_FINAL/,
+  );
+  const grantId = randomUUID();
+  await assert.rejects(
+    f.service.evidenceBatch(
+      { ...f.actor, operationGrantId: grantId, sessionId: `operation:${grantId}` },
+      input,
+    ),
+    /FORBIDDEN/,
+  );
+  f.revoke();
+  await assert.rejects(f.service.evidenceBatch(f.actor, input), /FORBIDDEN/);
+});
 after(async () => {
   await pool.end();
   await migrationPool.end();

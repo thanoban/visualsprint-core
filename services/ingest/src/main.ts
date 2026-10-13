@@ -16,6 +16,9 @@ const config = z
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
     INTEGRATION_PUBLIC_JWKS: z.string().optional(),
+    INTELLIGENCE_PUBLIC_JWKS: z.string().optional(),
+    REPORTING_PUBLIC_JWKS: z.string().optional(),
+    WORKSPACE_PUBLIC_JWKS: z.string().optional(),
     RECALL_API_KEY: z.string().min(1),
     RECALL_REGION: z.enum(["us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1"]),
     RECALL_WEBHOOK_URL: z.string().url(),
@@ -36,6 +39,15 @@ const authorities = new Authorities(
 const identity = new ServiceIdentity("ingest", {
   gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
 });
+const readIdentity = new ServiceIdentity("ingest", {
+  gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
+  ...(config.INTELLIGENCE_PUBLIC_JWKS
+    ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+    : {}),
+  ...(config.REPORTING_PUBLIC_JWKS
+    ? { reporting: JSON.parse(config.REPORTING_PUBLIC_JWKS).keys }
+    : {}),
+});
 const calendarIdentity = new ServiceIdentity(
   "ingest",
   config.INTEGRATION_PUBLIC_JWKS
@@ -54,6 +66,16 @@ const app = ingestApp(
   async (token) => (await identity.verify(token)).actor,
   new RecallSignatures(JSON.parse(config.RECALL_WEBHOOK_SECRETS)),
   async (token) => (await calendarIdentity.verify(token)).actor,
+  async (token) => (await readIdentity.verify(token)).actor,
+  async (token) =>
+    (
+      await new ServiceIdentity(
+        "ingest",
+        config.WORKSPACE_PUBLIC_JWKS
+          ? { workspace: JSON.parse(config.WORKSPACE_PUBLIC_JWKS).keys }
+          : {},
+      ).verify(token)
+    ).actor,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

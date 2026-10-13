@@ -136,6 +136,7 @@ export function CalendarPanel({ api, workspaceId }: { api: Api; workspaceId: str
               api={api}
               path={path}
               item={item}
+              captureConfigured={data.value?.capabilities.automaticCaptureReady ?? false}
               reload={() => setRefresh((value) => value + 1)}
             />
           ))}
@@ -152,11 +153,13 @@ function CalendarEditor({
   path,
   item,
   reload,
+  captureConfigured,
 }: {
   api: Api;
   path: string;
   item: z.infer<typeof connection>;
   reload: () => void;
+  captureConfigured: boolean;
 }) {
   const select = useCommand(),
     disconnect = useCommand(),
@@ -337,6 +340,7 @@ function CalendarEditor({
             path={`${path}/${item.id}`}
             item={item}
             reload={reload}
+            captureConfigured={captureConfigured}
           />
         </>
       ) : null}
@@ -369,11 +373,13 @@ function BackgroundCalendarPolicy({
   path,
   item,
   reload,
+  captureConfigured,
 }: {
   api: Api;
   path: string;
   item: z.infer<typeof connection>;
   reload: () => void;
+  captureConfigured: boolean;
 }) {
   const command = useCommand();
   const [consent, setConsent] = useState(false);
@@ -419,7 +425,10 @@ function BackgroundCalendarPolicy({
     >
       <p>
         Background synchronization {item.automatic ? "enabled" : "disabled"}. The owner grant
-        survives logout but can be revoked. Scheduled bot dispatch is not active in this build yet.
+        survives logout but can be revoked.{" "}
+        {captureConfigured
+          ? "Eligible meetings enter the durable capture queue. Provider capacity and host admission still apply; this is not a confirmed meeting join."
+          : "Automatic capture is not configured for this environment."}
       </p>
       {!item.automatic ? (
         <label>

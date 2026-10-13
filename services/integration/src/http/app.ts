@@ -35,7 +35,7 @@ export function integrationApp(
       };
       routes.get("/providers", () => ({
         providers: configuredProviders,
-        automaticCaptureReady: false,
+        automaticCaptureReady: service.automaticCaptureConfigured(),
       }));
       routes.get("/", (request) => service.list(actor(request)));
       routes.post("/oauth/start", async (request, reply) =>

@@ -2,6 +2,7 @@ import { createHash, randomUUID, randomBytes, timingSafeEqual } from "node:crypt
 import { z } from "zod";
 import { id, calendarMeeting } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
+import type { CalendarCaptureOrchestrator } from "./calendar-captures.js";
 import type { Connection, Tokens } from "../domain/records.js";
 import type {
   ConnectionRepository,
@@ -54,6 +55,9 @@ export function connectionView(record: Connection) {
   };
 }
 export class CalendarService {
+  automaticCaptureConfigured() {
+    return Boolean(this.captures && this.meetings);
+  }
   constructor(
     private readonly repository: ConnectionRepository,
     private readonly authority: CalendarAuthority,
@@ -61,6 +65,7 @@ export class CalendarService {
     private readonly vault: TokenVault,
     private readonly now: () => Date = () => new Date(),
     private readonly meetings?: CalendarMeetings,
+    private readonly captures?: CalendarCaptureOrchestrator,
   ) {}
   private provider(name: Connection["provider"]) {
     const provider = this.providers[name];
@@ -692,6 +697,10 @@ export class CalendarService {
       }
     }
     await this.syncWork(record);
+    if (this.captures) {
+      const current = await this.repository.scoped(workspaceId, (tx) => tx.get(connectionId));
+      if (current) await this.captures.work(current);
+    }
     if (
       record.status === "exchanging" &&
       record.exchangeAt &&

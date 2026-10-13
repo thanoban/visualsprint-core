@@ -164,6 +164,17 @@ export class AccountService {
       return { connectionId: grant.connectionId, version: grant.version };
     });
   }
+  async notificationMembership(actor: Actor, body: unknown) {
+    this.userOnly(actor);
+    const { userId } = z.object({ userId: id }).strict().parse(body);
+    if (userId !== actor.actorId) throw new AppError("FORBIDDEN", 403);
+    return this.repository.actor(actor, async (tx) => {
+      const member = await tx.membership(userId),
+        workspace = await tx.workspace(actor.workspaceId);
+      if (!member?.active || !workspace || workspace.blocked) throw new AppError("FORBIDDEN", 403);
+      return { active: true, verifiedEmail: null };
+    });
+  }
   disableConnectionGrant(actor: Actor, body: unknown) {
     const { connectionId } = z.object({ connectionId: id }).strict().parse(body);
     if (!actor.operationGrantId || actor.sessionId !== `operation:${actor.operationGrantId}`)

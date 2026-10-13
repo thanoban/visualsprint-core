@@ -3,6 +3,8 @@ import { z } from "zod";
 import { id } from "@visualsprint/contracts";
 import {
   AppError,
+  boundedJson,
+  boundedText,
   bearer,
   identityToken,
   installErrorHandler,
@@ -28,6 +30,11 @@ export function gatewayApp(
     logger: { redact: ["req.headers.authorization", "req.body"] },
   });
   installErrorHandler(app);
+  app.addHook("onSend", async (_request, reply, payload) => {
+    reply.header("cache-control", "no-store");
+    reply.header("x-content-type-options", "nosniff");
+    return payload;
+  });
   const identities = new WeakMap<object, Identity>();
   app.get("/health", async () => ({ status: "ok", service: "gateway" }));
   // Provider callbacks are authenticated by Ingest against the original bytes,
@@ -98,17 +105,21 @@ export function gatewayApp(
     } catch {
       throw new AppError("UPSTREAM_UNAVAILABLE", 503);
     }
-    const length = Number(response.headers.get("content-length") ?? 0);
-    if (length > 1_000_000) throw new AppError("UPSTREAM_RESPONSE_TOO_LARGE", 503);
+    const download = /\/exports\/[0-9a-f-]+\/download$/i.test(url.pathname) && method === "GET";
     let data: unknown;
     try {
-      data = await response.json();
+      data =
+        download && response.ok && response.headers.get("content-type")?.startsWith("text/plain")
+          ? await boundedText(response, 2_100_000)
+          : await boundedJson(response, download ? 2_100_000 : 1_000_000);
     } catch {
       throw new AppError("UPSTREAM_UNAVAILABLE", 503);
     }
-    if (JSON.stringify(data).length > 1_000_000)
-      throw new AppError("UPSTREAM_RESPONSE_TOO_LARGE", 503);
-    return { status: response.status, data };
+    return {
+      status: response.status,
+      data,
+      contentType: download && response.ok ? response.headers.get("content-type") : null,
+    };
   }
   async function account(request: FastifyRequest, path: string) {
     const identity = identities.get(request)!;
@@ -232,6 +243,7 @@ export function gatewayApp(
           headers["idempotency-key"] = request.headers["idempotency-key"];
         const path = isMembers ? `/internal/workspaces/${workspaceId}/${params["*"]}` : request.url;
         const result = await upstream(new URL(path, target), headers, request.method, request.body);
+        if (result.contentType?.startsWith("text/plain")) reply.type("text/plain; charset=utf-8");
         return reply.code(result.status).send(result.data);
       });
     },

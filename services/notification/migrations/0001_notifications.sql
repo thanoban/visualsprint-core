@@ -1,0 +1,20 @@
+CREATE TABLE preferences(workspace_id uuid NOT NULL,user_id uuid NOT NULL,version integer NOT NULL CHECK(version>0),in_app boolean NOT NULL,email boolean NOT NULL,delivery_hour_utc integer CHECK(delivery_hour_utc BETWEEN 0 AND 23),PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE commands(workspace_id uuid NOT NULL,user_id uuid NOT NULL,key text NOT NULL,fingerprint text NOT NULL,PRIMARY KEY(workspace_id,user_id,key));
+CREATE TABLE inbox(workspace_id uuid NOT NULL,event_id uuid NOT NULL,fingerprint text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(workspace_id,event_id));
+CREATE TABLE deliveries(workspace_id uuid NOT NULL,id uuid NOT NULL,user_id uuid NOT NULL,meeting_id uuid NOT NULL,event_id uuid NOT NULL,kind text NOT NULL CHECK(kind IN('summary_ready','action_completed','capture_updated')),source_version integer NOT NULL,channel text NOT NULL CHECK(channel IN('in_app','email')),state text NOT NULL CHECK(state IN('queued','dispatching','unknown','held','delivered','cancelled','failed')),version integer NOT NULL DEFAULT 1,available_at timestamptz NOT NULL,external_id text,error_code text,read_at timestamptz,lease_token uuid,lease_until timestamptz,PRIMARY KEY(workspace_id,id),UNIQUE(workspace_id,event_id,user_id,channel),CHECK(state<>'delivered' OR channel='in_app' OR external_id IS NOT NULL));
+CREATE INDEX delivery_source ON deliveries(workspace_id,meeting_id);
+CREATE TABLE attempts(workspace_id uuid NOT NULL,id uuid NOT NULL,delivery_id uuid NOT NULL,state text NOT NULL CHECK(state IN('dispatching','unknown','delivered','failed')),external_id text,error_code text,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(workspace_id,id),FOREIGN KEY(workspace_id,delivery_id) REFERENCES deliveries(workspace_id,id) ON DELETE CASCADE);
+CREATE TABLE outbox(workspace_id uuid NOT NULL,id uuid NOT NULL,event jsonb NOT NULL,published_at timestamptz,lease_token uuid,lease_until timestamptz,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(workspace_id,id));
+CREATE TABLE deletion_tombstones(workspace_id uuid NOT NULL,meeting_id uuid NOT NULL,deletion_id uuid NOT NULL,source_version integer NOT NULL,PRIMARY KEY(workspace_id,meeting_id),UNIQUE(workspace_id,deletion_id));
+CREATE TABLE cleanup_attempts(workspace_id uuid NOT NULL,delivery_id uuid NOT NULL,deletion_id uuid NOT NULL,state text NOT NULL CHECK(state IN('dispatching','unknown')),external_id text,PRIMARY KEY(workspace_id,delivery_id));
+DO $$ DECLARE relation text; BEGIN FOREACH relation IN ARRAY ARRAY['preferences','commands','inbox','deliveries','attempts','outbox','deletion_tombstones','cleanup_attempts'] LOOP
+ EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',relation);
+ EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',relation);
+ EXECUTE format('CREATE POLICY tenant_scope ON %I USING(workspace_id=nullif(current_setting(''app.workspace_id'',true),'''')::uuid) WITH CHECK(workspace_id=nullif(current_setting(''app.workspace_id'',true),'''')::uuid)',relation);
+END LOOP; END $$;
+CREATE TABLE delivery_work_index(workspace_id uuid NOT NULL,delivery_id uuid PRIMARY KEY,next_at timestamptz NOT NULL DEFAULT now(),FOREIGN KEY(workspace_id,delivery_id) REFERENCES deliveries(workspace_id,id) ON DELETE CASCADE);
+CREATE TABLE event_work_index(workspace_id uuid PRIMARY KEY,next_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX delivery_work_due ON delivery_work_index(next_at,delivery_id);
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+GRANT SELECT,INSERT,UPDATE,DELETE ON preferences,commands,inbox,deliveries,attempts,outbox,delivery_work_index,event_work_index TO vs_notification_runtime;
+GRANT SELECT,INSERT ON deletion_tombstones,cleanup_attempts TO vs_notification_runtime;

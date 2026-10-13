@@ -245,6 +245,30 @@ class TransactionRepository implements WorkspaceTransaction {
       .orderBy(asc(schema.meetings.id))
       .limit(100);
   }
+  scopeMeetings(projectId?: string, customerId?: string) {
+    const context =
+      projectId || customerId
+        ? exists(
+            this.db
+              .select({ id: schema.assignments.projectId })
+              .from(schema.assignments)
+              .innerJoin(schema.projects, eq(schema.projects.id, schema.assignments.projectId))
+              .where(
+                and(
+                  eq(schema.assignments.meetingId, schema.meetings.id),
+                  projectId ? eq(schema.projects.id, projectId) : undefined,
+                  customerId ? eq(schema.projects.customerId, customerId) : undefined,
+                ),
+              ),
+          )
+        : undefined;
+    return this.db
+      .select()
+      .from(schema.meetings)
+      .where(and(this.visibleMeeting(), context))
+      .orderBy(asc(schema.meetings.id))
+      .limit(101);
+  }
   async createCustomer(record: Customer) {
     return (await this.db.insert(schema.customers).values(record).returning())[0]!;
   }

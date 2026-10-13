@@ -11,6 +11,16 @@ import {
 import type { CaptureState, DomainEvent } from "@visualsprint/contracts";
 import type { Coverage } from "../domain/capture.js";
 
+export const meetingDeletions = pgTable(
+  "meeting_deletions",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    meetingId: uuid("meeting_id").notNull(),
+    deletionId: uuid("deletion_id").notNull(),
+    sourceVersion: integer("source_version").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.meetingId] })],
+);
 export const requests = pgTable(
   "capture_requests",
   {
@@ -72,6 +82,16 @@ export const segments = pgTable(
     finalized: boolean("finalized").notNull().default(true),
   },
   (table) => [primaryKey({ columns: [table.workspaceId, table.requestId, table.id] })],
+);
+export const calendarTombstones = pgTable(
+  "calendar_capture_tombstones",
+  {
+    workspaceId: uuid("workspace_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    key: text("key").notNull(),
+    grantId: uuid("grant_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.ownerId, t.key] })],
 );
 export const commands = pgTable(
   "commands",

@@ -9,6 +9,9 @@ import {
 } from "./api.js";
 import { Form, Feedback, useData, useCommand } from "./ui.js";
 import { CapturePanel } from "./capture-panel.js";
+import { DataRightsPanel } from "./data-rights-panel.js";
+import { WorkflowPanel } from "./workflow-panel.js";
+import { IntelligencePanel } from "./intelligence-panel.js";
 
 export function MeetingPanel({
   api,
@@ -17,6 +20,7 @@ export function MeetingPanel({
   userId,
   projects,
   reload,
+  onDeleted,
 }: {
   api: Api;
   workspaceId: string;
@@ -24,6 +28,7 @@ export function MeetingPanel({
   userId: string;
   projects: Project[];
   reload: () => void;
+  onDeleted?: (jobId:string)=>void;
 }) {
   const data = useData(
     async (signal) => ({
@@ -45,6 +50,7 @@ export function MeetingPanel({
           userId={userId}
           projects={projects}
           reload={reload}
+          {...(onDeleted ? {onDeleted} : {})}
         />
       ) : null}
     </section>
@@ -58,6 +64,7 @@ function MeetingEditor({
   projects,
   members,
   reload,
+  onDeleted,
 }: {
   api: Api;
   workspaceId: string;
@@ -66,8 +73,10 @@ function MeetingEditor({
   projects: Project[];
   members: Member[];
   reload: () => void;
+  onDeleted?: (jobId:string)=>void;
 }) {
   const [meeting, setMeeting] = useState(initial);
+  const [deleted, setDeleted] = useState(false);
   const [notes, setNotes] = useState(initial.notes);
   const [projectId, setProjectId] = useState("");
   const [memberId, setMemberId] = useState("");
@@ -81,6 +90,13 @@ function MeetingEditor({
     setMeeting(value);
     reload();
   };
+  if (deleted)
+    return (
+      <p role="status">
+        Meeting access is blocked. Deletion is queued; required services must finish cleanup before
+        it is complete.
+      </p>
+    );
   return (
     <>
       <div className="row">
@@ -88,11 +104,37 @@ function MeetingEditor({
         <span className="badge">{owner ? "You own this meeting" : "Shared with you"}</span>
       </div>
       <CapturePanel
-        key={`${workspaceId}/${meeting.id}`}
+        key={`capture/${workspaceId}/${meeting.id}`}
         api={api}
         workspaceId={workspaceId}
         meeting={meeting}
         owner={owner}
+      />
+      <IntelligencePanel
+        key={`intelligence/${workspaceId}/${meeting.id}`}
+        api={api}
+        workspaceId={workspaceId}
+        scope={{ kind: "meeting", id: meeting.id }}
+      />
+      <WorkflowPanel
+        key={`workflow/${workspaceId}/${meeting.id}`}
+        api={api}
+        workspaceId={workspaceId}
+        meeting={meeting}
+        owner={owner}
+      />
+      <DataRightsPanel
+        key={`rights/${workspaceId}/${meeting.id}`}
+        api={api}
+        workspaceId={workspaceId}
+        meeting={meeting}
+        owner={owner}
+        onDeletionAccepted={(jobId) => {
+          setDeleted(true);
+          setNotes("");
+          onDeleted?.(jobId);
+          reload();
+        }}
       />
       {!owner ? (
         <>

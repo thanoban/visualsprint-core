@@ -110,6 +110,61 @@ before(async () => {
   await migrate(migrationPool, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(runtimePool);
 });
+test("intelligence scopes isolate projects/customers and sharing remains independent", async () => {
+  const customer = await service.addCustomer(owner, randomUUID(), { name: "Scope customer" });
+  const project = await service.addProject(owner, randomUUID(), {
+    name: "Scope project",
+    customerId: customer.id,
+  });
+  const other = await service.addProject(owner, randomUUID(), { name: "Other project" });
+  const meeting = await service.addMeeting(owner, randomUUID(), { title: "Scoped evidence" });
+  const separate = await service.addMeeting(owner, randomUUID(), { title: "Excluded evidence" });
+  const assigned = await service.assign(owner, meeting.id, randomUUID(), {
+    projectId: project.id,
+    confirmed: true,
+    expectedVersion: meeting.version,
+  });
+  await service.assign(owner, separate.id, randomUUID(), {
+    projectId: other.id,
+    confirmed: true,
+    expectedVersion: separate.version,
+  });
+  for (const scope of [
+    { kind: "project", id: project.id },
+    { kind: "customer", id: customer.id },
+  ]) {
+    assert.deepEqual(
+      (await service.intelligenceContext(owner, { scope })).meetings.map((m) => m.id),
+      [meeting.id],
+    );
+    await assert.rejects(service.intelligenceContext(reader, { scope }), /NOT_FOUND/);
+  }
+  await assert.rejects(
+    service.intelligenceContext(reader, { scope: { kind: "meeting", id: meeting.id } }),
+    /NOT_FOUND/,
+  );
+  await service.share(owner, meeting.id, randomUUID(), {
+    userId: reader.actorId,
+    expectedVersion: assigned.version,
+  });
+  assert.equal(
+    (await service.intelligenceContext(reader, { scope: { kind: "meeting", id: meeting.id } }))
+      .meetings[0]!.id,
+    meeting.id,
+  );
+  assert.deepEqual(
+    (await service.intelligenceContext(otherTenant, { scope: { kind: "workspace", id: null } }))
+      .meetings,
+    [],
+  );
+  await assert.rejects(
+    service.intelligenceContext(
+      { ...owner, operationGrantId: randomUUID() },
+      { scope: { kind: "workspace", id: null } },
+    ),
+    /FORBIDDEN/,
+  );
+});
 after(async () => {
   await runtimePool.end();
   await migrationPool.end();

@@ -22,6 +22,50 @@ before(async () => {
   await migrate(migrations, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(runtime);
 });
+test("notification membership is self-recipient-only, survives logout, but current revocation blocks delivery", async () => {
+  const ownerIdentity = {
+      subject: `user_${randomUUID().replaceAll("-", "")}`,
+      sessionId: randomUUID(),
+    },
+    recipientIdentity = {
+      subject: `user_${randomUUID().replaceAll("-", "")}`,
+      sessionId: randomUUID(),
+    };
+  const recipient = await account.me(recipientIdentity),
+    owner = await account.me(ownerIdentity),
+    ws = await account.createWorkspace(ownerIdentity, randomUUID(), {
+      name: "Notification authority",
+    });
+  const actor = { workspaceId: ws.id, actorId: owner.userId, sessionId: ownerIdentity.sessionId };
+  await account.changeMember(actor, randomUUID(), {
+    userId: recipient.userId,
+    active: true,
+    expectedVersion: 0,
+  });
+  const deliveryActor = {
+    workspaceId: ws.id,
+    actorId: recipient.userId,
+    sessionId: `notification:${randomUUID()}`,
+  };
+  await account.logout(recipientIdentity);
+  assert.deepEqual(
+    await account.notificationMembership(deliveryActor, { userId: recipient.userId }),
+    { active: true, verifiedEmail: null },
+  );
+  await assert.rejects(
+    () => account.notificationMembership(deliveryActor, { userId: owner.userId }),
+    /FORBIDDEN/,
+  );
+  await account.changeMember(actor, randomUUID(), {
+    userId: recipient.userId,
+    active: false,
+    expectedVersion: 1,
+  });
+  await assert.rejects(
+    account.notificationMembership(deliveryActor, { userId: recipient.userId }),
+    /FORBIDDEN/,
+  );
+});
 after(async () => {
   await runtime.end();
   await migrations.end();

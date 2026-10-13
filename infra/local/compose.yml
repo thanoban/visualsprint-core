@@ -1,5 +1,61 @@
 name: visualsprint-v3-local
 services:
+  notification-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55441:5432"]
+    volumes:
+      - notification-db:/var/lib/postgresql/data
+      - ../../services/notification/local-init.sql:/docker-entrypoint-initdb.d/001-notification.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  intelligence-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55438:5432"]
+    volumes:
+      - intelligence-db:/var/lib/postgresql/data
+      - ../../services/intelligence/local-init.sql:/docker-entrypoint-initdb.d/001-intelligence.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  reporting-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55439:5432"]
+    volumes:
+      - reporting-db:/var/lib/postgresql/data
+      - ../../services/reporting/local-init.sql:/docker-entrypoint-initdb.d/001-reporting.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  workflow-db:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55440:5432"]
+    volumes:
+      - workflow-db:/var/lib/postgresql/data
+      - ../../services/workflow/local-init.sql:/docker-entrypoint-initdb.d/001-workflow.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
   integration-db:
     image: postgres:17.6-alpine
     environment:
@@ -37,6 +93,7 @@ services:
     volumes:
       - authz-db:/var/lib/postgresql/data
       - ./authz-init.sql:/docker-entrypoint-initdb.d/001-authz.sql:ro
+      - ../../services/authz/local-application-init.sql:/docker-entrypoint-initdb.d/002-authz-application.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U local_admin -d postgres"]
       interval: 2s
@@ -111,6 +168,10 @@ services:
       timeout: 3s
       retries: 30
 volumes:
+  notification-db:
+  intelligence-db:
+  reporting-db:
+  workflow-db:
   integration-db:
   ingest-db:
   authz-db:
