@@ -44,6 +44,8 @@ function fixture() {
     creates = 0,
     lookups = 0;
   let result: ExecutionResult = { state: "confirmed", externalId: "task-1" };
+  let commitmentVersion = 1;
+  let evidenceStatus: "current" | "changed" = "current";
   let lookup: ReconciliationResult = { state: "pending" };
   const service = new WorkflowService(
     repository,
@@ -51,6 +53,11 @@ function fixture() {
       async requireSource() {
         if (!allowed) throw new AppError("FORBIDDEN", 403);
         return { version: sourceVersion, ownerId: actor.actorId };
+      },
+      async requireCommitment(_actor, commitmentId) {
+        if (!allowed) throw new AppError("FORBIDDEN", 403);
+        return { id: commitmentId, meetingId: input.source.meetingId, version: commitmentVersion,
+          humanReviewed: true, state: "open", evidenceStatus };
       },
     },
     {
@@ -93,6 +100,8 @@ function fixture() {
     set allowed(value: boolean) {
       allowed = value;
     },
+    set commitmentVersion(value: number) { commitmentVersion = value; },
+    set evidenceStatus(value: "current" | "changed") { evidenceStatus = value; },
     async approved() {
       const proposed = await service.propose(actor, randomUUID(), input);
       return service.approve(actor, proposed.id, randomUUID(), {
@@ -108,6 +117,29 @@ function fixture() {
     },
   };
 }
+test("accepted commitment revisions and changed evidence invalidate approvals before external execution", async () => {
+  const f = fixture();
+  const input = { ...f.input, source: { ...f.input.source, commitment: { id: randomUUID(), version: 1 } } };
+  const draft = await f.service.propose(f.actor, randomUUID(), input);
+  f.commitmentVersion = 2;
+  await assert.rejects(f.service.approve(f.actor, draft.id, randomUUID(), {
+    expectedVersion: draft.version, confirmed: true,
+  }), /COMMITMENT_REVISION_CHANGED/);
+  f.commitmentVersion = 1;
+  const approved = await f.service.approve(f.actor, draft.id, randomUUID(), {
+    expectedVersion: draft.version, confirmed: true,
+  });
+  const operation = await f.service.execute(f.actor, approved.id, randomUUID(), {
+    expectedVersion: approved.version,
+  });
+  f.evidenceStatus = "changed";
+  await f.service.work(f.actor.workspaceId, operation.id);
+  assert.equal(f.creates, 0);
+  const status = await f.service.status(f.actor, operation.id);
+  assert.equal(status.state, "cancelled");
+  assert.equal(status.errorCode, "COMMITMENT_REVISION_CHANGED");
+});
+
 test("signed deletion purges private approvals and payloads, preserves only execution references and fences recreation", async () => {
   const f = fixture();
   f.result = { state: "unknown" };

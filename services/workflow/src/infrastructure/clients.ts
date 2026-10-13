@@ -87,6 +87,14 @@ export class WorkspaceActions implements Authority {
     if (result.id !== meetingId) throw new AppError("DEPENDENCY_RESPONSE_UNKNOWN", 503);
     return { ownerId: result.ownerId, version: result.version };
   }
+  async requireCommitment(actor: Actor, commitmentId: string) {
+    return z.object({
+      id, meetingId: id, version: z.number().int().positive(), humanReviewed: z.literal(true),
+      state: z.enum(["open", "completed", "cancelled"]),
+      evidenceStatus: z.enum(["current", "changed", "unavailable"]),
+    }).parse(await this.client.call(actor,
+      `/internal/workspaces/${actor.workspaceId}/commitments/${id.parse(commitmentId)}/source`));
+  }
 }
 export class IntegrationActions implements Connector {
   private readonly client: SignedClient;

@@ -19,6 +19,10 @@ export const actionInput = z
           .nullable(),
       })
       .strict(),
-    source: z.object({ meetingId: id, revision: z.number().int().positive() }).strict(),
+    source: z.object({
+      meetingId: id,
+      revision: z.number().int().positive(),
+      commitment: z.object({ id, version: z.number().int().positive() }).strict().optional(),
+    }).strict(),
   })
   .strict();

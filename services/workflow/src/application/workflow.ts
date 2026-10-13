@@ -19,6 +19,14 @@ export class WorkflowService {
     if (current.ownerId !== actor.actorId) throw new AppError("FORBIDDEN", 403);
     if (current.version !== input.source.revision)
       throw new AppError("SOURCE_REVISION_CHANGED", 409);
+    if (input.source.commitment) {
+      if (!this.authority.requireCommitment) throw new AppError("COMMITMENT_AUTHORITY_UNAVAILABLE", 503);
+      const accepted = await this.authority.requireCommitment(actor, input.source.commitment.id);
+      if (accepted.id !== input.source.commitment.id || accepted.meetingId !== input.source.meetingId ||
+          accepted.version !== input.source.commitment.version || accepted.humanReviewed !== true ||
+          accepted.state !== "open" || accepted.evidenceStatus !== "current")
+        throw new AppError("COMMITMENT_REVISION_CHANGED", 409);
+    }
   }
   async propose(actor: Actor, key: string, body: unknown) {
     const input = actionInput.parse(body);

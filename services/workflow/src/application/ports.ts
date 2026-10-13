@@ -9,6 +9,11 @@ import type {
 } from "../domain/action.js";
 export interface Authority {
   requireSource(actor: Actor, meetingId: string): Promise<{ version: number; ownerId: string }>;
+  requireCommitment?(actor: Actor, commitmentId: string): Promise<{
+    id: string; meetingId: string; version: number; humanReviewed: true;
+    state: "open" | "completed" | "cancelled";
+    evidenceStatus: "current" | "changed" | "unavailable";
+  }>;
 }
 export interface Connector {
   execute(actor: Actor, intent: ExecutionIntent): Promise<ExecutionResult>;

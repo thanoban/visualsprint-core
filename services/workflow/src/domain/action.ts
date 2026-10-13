@@ -4,7 +4,7 @@ export interface ActionInput {
   provider: "jira" | "github" | "linear";
   destination: string;
   payload: { title: string; description: string; dueDate: string | null };
-  source: { meetingId: string; revision: number };
+  source: { meetingId: string; revision: number; commitment?: { id: string; version: number } | undefined };
 }
 export type State = "draft" | "approved" | "revoked";
 export type OperationState =
