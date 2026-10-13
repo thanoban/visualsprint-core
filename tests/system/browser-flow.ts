@@ -41,7 +41,10 @@ export async function browserMeetingFlow(
     await expect(page.getByRole("heading", { name: "Acme kickoff", exact: true })).toBeVisible();
     const notes = page.getByRole("textbox", { name: "Notes", exact: true });
     await notes.fill("Browser-confirmed decision: launch the customer pilot next week.");
+    const saved = page.waitForResponse(response => response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname.endsWith(`/meetings/${meetingId}`));
     await page.getByRole("button", { name: "Save notes" }).click();
+    assert.equal((await saved).status(), 200);
     await expect(notes).toHaveValue(
       "Browser-confirmed decision: launch the customer pilot next week.",
     );

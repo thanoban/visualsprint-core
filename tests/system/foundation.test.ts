@@ -19,6 +19,10 @@ import { WorkspaceService } from "../../services/workspace/src/application/works
 import { PostgresWorkspace } from "../../services/workspace/src/infrastructure/store.js";
 import { AccountMemberships } from "../../services/workspace/src/infrastructure/account-client.js";
 import { workspaceApp } from "../../services/workspace/src/http/app.js";
+import { CommitmentsService } from "../../services/workspace/src/application/commitments.js";
+import { PostgresCommitments } from "../../services/workspace/src/infrastructure/commitment-store.js";
+import { AuthorizedCommitmentEvidence } from "../../services/workspace/src/infrastructure/commitment-source.js";
+import { commitmentRoutes } from "../../services/workspace/src/http/commitment-routes.js";
 import { gatewayApp } from "../../services/gateway/src/http/app.js";
 import { authzApp } from "../../services/authz/src/app.js";
 import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
@@ -250,6 +254,20 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
         }).verify(token)
       ).actor,
   );
+  let commitmentEvidence: AuthorizedCommitmentEvidence | undefined;
+  const evidence = () => {
+    if (!commitmentEvidence) throw new Error("COMPOSITION_NOT_READY");
+    return commitmentEvidence;
+  };
+  commitmentRoutes(workspace, new CommitmentsService(new PostgresCommitments(workspaceDb), {
+    meeting: (actor, meetingId) => workspaceService.meeting(actor, meetingId),
+    readable: async (actor, scope) => (await workspaceService.intelligenceContext(actor, { scope })).meetings.map(meeting => meeting.id),
+    member: (actor, userId) => new AccountMemberships(accountUrl, workspaceKey.privateKey, "workspace-test").requireMember(actor.workspaceId, userId, actor),
+  }, {
+    validate: (...args) => evidence().validate(...args),
+    proposal: (...args) => evidence().proposal(...args),
+  }), async token => (await identity.verify(token)).actor,
+  async token => (await new ServiceIdentity("workspace", { workflow: readerPublic.workflow! }).verify(token)).actor);
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
   const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
   const integrationService = new CalendarService(
@@ -443,6 +461,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     integrationPublic,
     keys: readKeys,
   });
+  commitmentEvidence = new AuthorizedCommitmentEvidence(ingestUrl, follow.urls.intelligence, workspaceKey.privateKey, "workspace-test");
   for (const name of ["intelligence", "reporting", "workflow", "notification"] as const)
     deletionPorts[name] = new HttpDeletionParticipant(
       name,
