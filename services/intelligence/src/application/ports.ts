@@ -37,6 +37,7 @@ export type Job = {
   scope: Scope;
   threadId: string | null;
   question: string | null;
+  retrievalMode?: "lexical" | "indexed";
   status: "queued" | "running" | "complete" | "failed" | "invalidated";
   attempts: number;
   result: Result | null;

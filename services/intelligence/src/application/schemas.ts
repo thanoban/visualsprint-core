@@ -9,7 +9,12 @@ export const scope = z
   );
 export const threadInput = z.object({ title: z.string().trim().min(1).max(200), scope }).strict();
 export const summaryInput = z.object({ meetingId: id }).strict();
-export const messageInput = z.object({ text: z.string().trim().min(1).max(8000) }).strict();
+export const messageInput = z
+  .object({
+    text: z.string().trim().min(1).max(8000),
+    retrievalMode: z.enum(["lexical", "indexed"]).default("lexical"),
+  })
+  .strict();
 export const commandKey = z
   .string()
   .min(8)

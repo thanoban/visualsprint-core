@@ -41,6 +41,13 @@ export class EvidenceIndexing {
       return { ...indexView(job), status: "failed", errorCode: "SOURCE_CHANGED" };
     return indexView(job);
   }
+  async requireReady(actor: Actor, scope: Scope) {
+    await this.user(actor);
+    scopeSchema.parse(scope);
+    const snapshot = await this.sources.read(actor, scope);
+    if (!(await this.indexes.latest(actor, scope, fingerprint(snapshot))))
+      throw new AppError("INDEX_NOT_READY", 409);
+  }
   async work(workspaceId: string, jobId: string) {
     const job = await this.indexes.claim(workspaceId, jobId);
     if (!job) return;
@@ -166,6 +173,7 @@ export class EvidenceIndexing {
 export function indexView(job: import("./index-ports.js").IndexJob) {
   return {
     id: job.id,
+    scope: job.scope,
     status: job.status,
     cursor: job.cursor,
     totalChunks: job.totalChunks,

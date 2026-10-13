@@ -143,7 +143,9 @@ class Scoped implements RepositoryTransaction {
       return null;
     }
     const leaseToken = randomUUID();
-    const leaseUntil = new Date(Date.now() + 300_000);
+    // Indexed answers have one additional bounded embedding/retrieval phase.
+    // Keep its total phase budget within the lease without weakening fencing.
+    const leaseUntil = new Date(Date.now() + (old.retrievalMode === "indexed" ? 600_000 : 300_000));
     const row = (
       await this.db
         .update(schema.jobs)

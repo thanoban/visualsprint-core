@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { z } from "zod";
 import { id } from "@visualsprint/contracts";
-import { Api, errorMessage } from "./api.js";
+import { Api, ApiError, errorMessage } from "./api.js";
 import { Feedback, Form, useCommand, useData } from "./ui.js";
+import { ScopedIndexPanel, type IndexReadiness } from "./scoped-index-panel.js";
 
 const scopeSchema = z.object({
   kind: z.enum(["meeting", "project", "customer", "workspace"]),
@@ -29,6 +30,7 @@ const jobSchema = z.object({
   result: result.nullable(),
   errorCode: z.string().nullable(),
   createdAt: z.string(),
+  retrievalMode: z.enum(["lexical", "indexed"]).optional(),
 });
 type Job = z.infer<typeof jobSchema>;
 const threadSchema = z.object({
@@ -46,6 +48,12 @@ function Output({ job, workspaceId }: { job: Job; workspaceId: string }) {
       aria-label={job.kind === "answer" ? "Saved chat answer" : "Meeting summary"}
     >
       {job.question ? <h4>{job.question}</h4> : null}
+      {job.kind === "answer" ? (
+        <p>
+          Retrieval: {job.retrievalMode ?? "lexical"}. Citations remain subject to current access
+          and revision checks.
+        </p>
+      ) : null}
       <p role="status">
         {job.status.replaceAll("_", " ")}
         {job.errorCode ? ` — ${job.errorCode}` : ""}
@@ -104,16 +112,33 @@ export function IntelligencePanel({
     [title, setTitle] = useState(""),
     [question, setQuestion] = useState(""),
     [revision, setRevision] = useState(0),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [retrievalMode, setRetrievalMode] = useState<"lexical" | "indexed">("lexical"),
+    [indexState, setIndexState] = useState<IndexReadiness>();
+  const indexReadiness = useCallback((state: IndexReadiness) => setIndexState(state), []);
+  const indexReady =
+    indexState?.ready === true &&
+    indexState.scope.kind === selectedScope.kind &&
+    indexState.scope.id === selectedScope.id;
+  const indexedQueryBytes = new TextEncoder().encode(question).byteLength;
   const create = useCommand(),
     send = useCommand(),
     summary = useCommand();
   const base = `${api.scope(workspaceId)}/intelligence`;
   useEffect(() => {
+    if (
+      send.error instanceof ApiError &&
+      ["INDEX_NOT_READY", "SOURCE_CHANGED", "RETRIEVAL_DISABLED"].includes(send.error.code)
+    )
+      setIndexState((current) => (current ? { ...current, ready: false } : current));
+  }, [send.error]);
+  useEffect(() => {
     setScope(scope);
     setThreadId("");
     setError("");
     setQuestion("");
+    setRetrievalMode("lexical");
+    setIndexState(undefined);
   }, [workspaceId, scope.kind, scope.id]);
   const threads = useData(
     (signal) => api.request(`${base}/chats`, z.array(threadSchema), { signal }),
@@ -168,6 +193,8 @@ export function IntelligencePanel({
                 setScope(value.scope);
                 setThreadId("");
                 setQuestion("");
+                setRetrievalMode("lexical");
+                setIndexState(undefined);
               }
             }}
           >
@@ -180,6 +207,12 @@ export function IntelligencePanel({
         </label>
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
+      <ScopedIndexPanel
+        api={api}
+        workspaceId={workspaceId}
+        scope={selectedScope}
+        onReadiness={indexReadiness}
+      />
       {selectedScope.kind === "meeting" && selectedScope.id ? (
         <>
           <Form
@@ -266,37 +299,90 @@ export function IntelligencePanel({
           {history.value?.messages.map((job) => (
             <Output key={job.id} job={job} workspaceId={workspaceId} />
           ))}
+          <label>
+            Answer retrieval
+            <select
+              aria-label="Answer retrieval"
+              value={retrievalMode}
+              disabled={send.busy}
+              onChange={(event) => setRetrievalMode(event.target.value as "lexical" | "indexed")}
+            >
+              <option value="lexical">Lexical evidence lookup (default)</option>
+              <option value="indexed">Indexed evidence lookup (requires ready scoped index)</option>
+            </select>
+          </label>
+          {retrievalMode === "indexed" ? (
+            <p>
+              Indexed questions use the configured query-embedding provider and model quota. This is
+              an explicit choice; no lexical fallback will occur if the index is stale or
+              unavailable.
+            </p>
+          ) : null}
           <Form
             title="Ask your meeting evidence"
             button="Ask"
             command={send}
-            disabled={history.loading || Boolean(history.error) || active}
-            submit={() =>
+            disabled={
+              history.loading ||
+              Boolean(history.error) ||
+              active ||
+              (retrievalMode === "indexed" && !indexReady)
+            }
+            submit={() => {
+              if (retrievalMode === "indexed" && indexedQueryBytes > 6000) {
+                setError(
+                  "Indexed questions must fit within 6,000 UTF-8 bytes; shorten the question before sending.",
+                );
+                return;
+              }
+              setError("");
               void send.run(
-                { workspaceId, threadId, text: question },
+                { workspaceId, threadId, text: question, retrievalMode },
                 (key) =>
                   api.request(`${base}/chats/${threadId}/messages`, jobSchema, {
                     method: "POST",
                     key,
-                    body: { text: question },
+                    body: {
+                      text: question,
+                      ...(retrievalMode === "indexed" ? { retrievalMode } : {}),
+                    },
                   }),
                 () => {
                   setQuestion("");
                   setRevision((value) => value + 1);
                 },
-              )
-            }
+              );
+            }}
           >
             <label>
               Question
               <textarea
                 required
-                maxLength={8000}
+                maxLength={retrievalMode === "indexed" ? 6000 : 8000}
                 value={question}
-                onChange={(event) => setQuestion(event.target.value)}
+                onChange={(event) => {
+                  setQuestion(event.target.value);
+                  setError("");
+                }}
               />
             </label>
+            {retrievalMode === "indexed" ? (
+              <p>UTF-8 query size: {indexedQueryBytes}/6000 bytes.</p>
+            ) : null}
           </Form>
+          {send.error instanceof ApiError &&
+          ["INDEX_NOT_READY", "SOURCE_CHANGED"].includes(send.error.code) ? (
+            <p role="alert">
+              The scoped index is absent or no longer matches current evidence. Refresh or rebuild
+              it before another indexed question; no answer was switched to lexical retrieval.
+            </p>
+          ) : null}
+          {send.error instanceof ApiError && send.error.code === "RETRIEVAL_DISABLED" ? (
+            <p role="alert">
+              Indexed retrieval is disabled by the administrator. Choose lexical retrieval
+              explicitly if you want to use it; no fallback answer was requested.
+            </p>
+          ) : null}
         </>
       ) : null}
       <button

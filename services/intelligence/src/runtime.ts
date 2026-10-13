@@ -23,6 +23,7 @@ import {
 import { EvidenceIndexing } from "./application/indexing.js";
 import { AzureEmbeddings } from "./infrastructure/azure-embeddings.js";
 import { PostgresModelDispatch } from "./infrastructure/model-dispatch.js";
+import { IndexedChatEvidence } from "./application/indexed-chat.js";
 export async function runtime() {
   const features = intelligenceFeatureConfig.parse(process.env);
   const config = z
@@ -171,6 +172,7 @@ export async function runtime() {
       sources,
       model,
       config.AZURE_OPENAI_ENDPOINT ? admission : undefined,
+      indexing ? new IndexedChatEvidence(indexing) : undefined,
     ),
     features,
     preparation,

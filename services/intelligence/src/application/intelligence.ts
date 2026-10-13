@@ -12,6 +12,7 @@ import type { Job, Model, Repository, Sources, Thread } from "./ports.js";
 import { commandKey, messageInput, modelClaims, summaryInput, threadInput } from "./schemas.js";
 import type { ModelUsageAdmission } from "./preparation-jobs.js";
 import { admittedGeneration, modelOperationId } from "./model-usage.js";
+import { IndexedChatEvidence } from "./indexed-chat.js";
 
 export class IntelligenceService {
   constructor(
@@ -19,6 +20,7 @@ export class IntelligenceService {
     private readonly sources: Sources,
     private readonly model: Model,
     private readonly admission?: ModelUsageAdmission,
+    private readonly indexedChat?: IndexedChatEvidence,
   ) {}
   private async user(actor: Actor) {
     if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
@@ -57,7 +59,13 @@ export class IntelligenceService {
   private enqueue(
     actor: Actor,
     key: string,
-    input: { kind: Job["kind"]; scope: Scope; threadId: string | null; question: string | null },
+    input: {
+      kind: Job["kind"];
+      scope: Scope;
+      threadId: string | null;
+      question: string | null;
+      retrievalMode?: "indexed";
+    },
   ) {
     return this.repository.scoped(actor.workspaceId, (tx) =>
       tx.command(actor.actorId, key, input, async () =>
@@ -95,12 +103,19 @@ export class IntelligenceService {
     const input = messageInput.parse(body);
     const thread = await this.requireThread(actor, threadId);
     await this.sources.read(actor, thread.scope);
+    if (input.retrievalMode === "indexed") {
+      if (!this.indexedChat) throw new AppError("RETRIEVAL_DISABLED", 503);
+      if (Buffer.byteLength(input.text, "utf8") > 6000) throw new AppError("INVALID_QUERY", 400);
+      // Readiness does not call an embedding/model port or create a paid intent.
+      await this.indexedChat.requireReady(actor, thread.scope);
+    }
     return jobView(
       await this.enqueue(actor, key, {
         kind: "answer",
         scope: thread.scope,
         threadId: thread.id,
         question: input.text,
+        ...(input.retrievalMode === "indexed" ? { retrievalMode: "indexed" as const } : {}),
       }),
     );
   }
@@ -164,13 +179,24 @@ export class IntelligenceService {
       await this.user(actor);
       const snapshot = await this.sources.read(actor, job.scope);
       const hash = fingerprint(snapshot);
-      const evidence = selectEvidence(snapshot, job.question);
       if (
         !(await this.repository.scoped(workspaceId, (tx) =>
           tx.pinSources(job.id, job.leaseToken!, snapshot.versions),
         ))
       )
         return;
+      let evidence: typeof snapshot.evidence;
+      if (job.retrievalMode === "indexed") {
+        if (!this.indexedChat) throw new AppError("RETRIEVAL_DISABLED", 503);
+        if (job.kind !== "answer" || !job.question) throw new AppError("INVALID_INDEXED_JOB", 409);
+        evidence = await this.indexedChat.select(actor, job.scope, job.question, job.id, snapshot);
+        if (
+          !(await this.repository.scoped(workspaceId, (tx) =>
+            tx.pinSources(job.id, job.leaseToken!, snapshot.versions),
+          ))
+        )
+          throw new AppError("LEASE_LOST", 409);
+      } else evidence = selectEvidence(snapshot, job.question);
       const generated = evidence.length
         ? modelClaims.parse(
             await (this.admission
@@ -183,8 +209,20 @@ export class IntelligenceService {
                   this.sources,
                   this.admission,
                   async () => {
+                    if (
+                      !(await this.repository.scoped(workspaceId, (tx) =>
+                        tx.pinSources(job.id, job.leaseToken!, snapshot.versions),
+                      ))
+                    )
+                      throw new AppError("LEASE_LOST", 409);
                     if (fingerprint(await this.sources.read(actor, job.scope)) !== hash)
                       throw new AppError("SOURCE_CHANGED", 409);
+                    if (
+                      !(await this.repository.scoped(workspaceId, (tx) =>
+                        tx.pinSources(job.id, job.leaseToken!, snapshot.versions),
+                      ))
+                    )
+                      throw new AppError("LEASE_LOST", 409);
                   },
                 )
               : this.model.generate({ purpose: job.kind, question: job.question, evidence })),
@@ -235,6 +273,8 @@ export function jobView(job: Job) {
     kind: job.kind,
     threadId: job.threadId,
     question: job.question,
+    scope: job.scope,
+    retrievalMode: job.retrievalMode ?? "lexical",
     status: job.status,
     result: job.result,
     errorCode: job.errorCode,

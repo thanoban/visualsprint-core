@@ -35,9 +35,32 @@ do not require vector. Do not reuse the original Alpine data volume in Debian/gl
 Local evidence: 22 fast tests, eight original-DB PG/HTTP cases, 12 isolated vector/preparation
 PG/HTTP cases, TypeScript and native builds. Native route/cleanup composition is included; real
 Azure/model/retention/latency/cost and production restore qualification remain deployment gates.
-Public chat remains extractive lexical retrieval in this checkpoint. Optional indexed chat,
-multi-turn context/pagination and explicit automatic-capture processing consent are next increments;
-the separate semantic verifier is still inactive.
+Public chat remains extractive. Optional indexed chat is now connected as described below;
+multi-turn context/pagination and explicit automatic-capture processing consent are next increments.
+The separate semantic verifier is still inactive.
+
+## Explicit indexed chat
+
+An active retrieval adapter can serve POST `/chats/{threadId}/messages` with
+`{text,retrievalMode:'indexed'}`. Omitting the field preserves the existing lexical default.
+The mode is durable in the owning `0005_retrieval_mode.sql` migration and returned with each job.
+Index request/status responses include `scope`, so a ready index from one project cannot label
+another selected project ready. Readiness requires the private owner's exact current authorized
+source fingerprint; no model or embedding call is made by the request preflight. A disabled adapter
+returns `RETRIEVAL_DISABLED` (503); absent, incomplete or obsolete indexes return `INDEX_NOT_READY`
+(409). There is no silent lexical fallback. Indexed queries are bounded to 6000 UTF-8 bytes.
+
+The interactive worker pins source references before retrieval, checks current index/source
+revisions, deduplicates chunk citations into authoritative segments, and separately reserves
+retrieval embeddings and chat generation. Indexed answers receive a bounded 600-second lease
+because their extra embedding/source-validation phase cannot fit the original 300-second lease;
+ordinary jobs remain unchanged. Lease/source checks before model dispatch prevent a stale worker
+from starting a paid request. Final publication and later reads still reauthorize and verify source
+fingerprints. This adds semantic retrieval, not semantically verified paraphrase generation.
+
+Local indexed checkpoint: 25 fast tests, eight original PostgreSQL tests, and 17 isolated vector/
+preparation/chat tests passed, including five real database cases for the connected indexed path.
+Controlled embeddings/models are used; real Azure quality, cost and archive latency remain gates.
 
 ## Ownership and runtime
 
@@ -82,11 +105,11 @@ not confirmed facts, inferred owners/dates or executable actions. No generated m
 recordings, screenshots or desktop capture exist in this service.
 
 Summaries accept at most 180,000 characters of text; larger summaries explicitly fail pending a
-durable chunked summarization slice. Interactive chat ranks English query terms over authorized
-sources and sends at most 100 segments/60,000 characters. This is bounded lexical retrieval, not yet
-qualified semantic retrieval. PostgreSQL FTS index rows are persisted, but vector embeddings,
-index-driven retrieval, independent semantic claim verification, multi-turn model context,
-accepted-proposal synchronization and next-meeting agenda generation are next slices.
+durable chunked summarization slice. Default interactive chat ranks English query terms over
+authorized sources and sends at most 100 segments/60,000 characters. Explicit indexed mode uses
+qualified local pgvector/FTS retrieval with current authorized source revisions. Independent
+semantic claim verification, multi-turn model context and archive pagination remain next slices;
+they are not implied by vector search.
 
 Jobs store original user sessions. Before generation, before publication, and before returning saved
 answers, current authority and exact source fingerprints are rechecked. Logout/revocation fail

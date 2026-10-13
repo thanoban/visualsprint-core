@@ -88,8 +88,10 @@ Provider ambiguity/reservation replay fails closed rather than causing another p
    first, bounded, and does not claim low-latency100-meeting interactive performance.
 4. Owning vector/preparation purge now runs before deletion acknowledgement. Qualify backup restore
    and reapply deletion tombstones before any restored index serves.
-5. Use indexes in chat retrieval, persist/reauthorize multi-turn context, and deliver archive
-   pagination. The existing chat API still uses its extractive lexical path.
+5. Explicit indexed chat is now connected behind the active retrieval feature, with durable mode,
+   current ready-index preflight, source/lease fencing and separate purpose budgets. Lexical remains
+   the default and there is no fallback from failed indexed mode. Persist/reauthorize multi-turn
+   context and deliver archive pagination in the next increment.
 6. Preparation now persists queued intent/leases before generation and uses signed reviewed
    Workspace facts, both accepted decisions/commitments and durable model admission. Qualify its
    web/gateway composition; real draft usefulness still needs founder pilots and model evaluation.

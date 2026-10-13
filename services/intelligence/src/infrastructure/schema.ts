@@ -25,6 +25,10 @@ export const jobs = pgTable(
     scope: jsonb("scope").$type<Scope>().notNull(),
     threadId: uuid("thread_id"),
     question: text("question"),
+    retrievalMode: text("retrieval_mode")
+      .$type<"lexical" | "indexed">()
+      .notNull()
+      .default("lexical"),
     status: text("status")
       .$type<"queued" | "running" | "complete" | "failed" | "invalidated">()
       .notNull(),

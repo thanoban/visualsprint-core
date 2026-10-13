@@ -68,3 +68,16 @@ All three coding agents reported account usage-limit failures during the next in
 Indexed chat/native UI and incremental calendar/push changes remain saved, unpublished and
 not fully reviewed. Resume their owning tests and composition before staging them. Do not
 claim the release complete or retry paid/uncertain operations to work around this interruption.
+
+## Resumed indexed-chat qualification
+
+Agents resumed after the interruption. Indexed chat now has explicit persisted retrieval mode,
+current scoped-index readiness, no silent fallback, a 6,000-byte query bound and citation validation
+against current authoritative segments. Indexed jobs use a bounded longer lease and recheck it
+before paid chat dispatch; stale leases record not_started rather than issuing the request.
+Intelligence passed 25 fast, eight ordinary database and 17 isolated vector/preparation/indexed
+database checks plus typecheck/build. Web passed six unit checks, all 23 browser cases and build.
+These are controlled-provider results; semantic model quality and live deployment are not proved.
+
+Gateway calendar forwarding has three focused tests and typecheck passing. Integration calendar
+change-feed/push work is still under final owning review; do not mix it into indexed-chat publication.
