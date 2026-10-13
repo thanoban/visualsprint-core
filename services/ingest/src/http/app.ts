@@ -10,6 +10,7 @@ export function ingestApp(
   service: CaptureService,
   authenticate: (token: string) => Promise<Actor>,
   signatures: RecallSignatures,
+  authenticateCalendar?: (token: string) => Promise<Actor>,
 ) {
   const app = Fastify({
     bodyLimit: 1_000_000,
@@ -24,6 +25,18 @@ export function ingestApp(
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "ingest" }));
+  app.post("/internal/workspaces/:workspaceId/calendar-captures", async (request, reply) => {
+    if (!authenticateCalendar) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+    const actor = await authenticateCalendar(bearer(request.headers.authorization));
+    if (
+      !actor.operationGrantId ||
+      id.parse((request.params as { workspaceId: string }).workspaceId) !== actor.workspaceId
+    )
+      throw new AppError("FORBIDDEN", 403);
+    const key = request.headers["idempotency-key"];
+    if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+    return reply.code(202).send(await service.request(actor, key, request.body));
+  });
   app.register(
     async (routes) => {
       routes.removeContentTypeParser("application/json");

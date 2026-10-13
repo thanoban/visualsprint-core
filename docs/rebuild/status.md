@@ -252,3 +252,18 @@ and ten builds. The composition uses genuine signed Account grant validation aft
 and real PostgreSQL/OpenFGA; provider responses remain controlled. A browser lease race
 was fixed by disabling read/edit controls until calendar loading finishes. Scheduled bot
 dispatch and the remaining F3–F6 deliverables are still unfinished.
+
+### Deferred capture dispatch (F3 scheduling prerequisite)
+
+Ingest persists an optional join window without holding future live capacity. Due work
+reconciles usage and current authority before dispatch. Future cancellation wakes cleanup
+immediately, and routing updates are transactionally fenced against stale reschedules.
+Revocation after admission blocks first provider creation and releases capacity. A separate
+signed Integration endpoint requires a scoped operation principal; public routes reject it.
+The meeting UI schedules explicit captures and distinguishes queued time from a confirmed join.
+See [behavior and remaining wiring](scheduled-capture.md).
+
+Local verification: 53 fast tests, 42 database/runtime/composition tests, six browser tests
+and ten builds. Prior background-sync checkpoint `dbe8db5` passed GitHub Actions. Calendar
+occurrence-to-capture orchestration, remaining F4–F6 features and live qualification are not
+finished; no paid/live capture or Azure resource was used.

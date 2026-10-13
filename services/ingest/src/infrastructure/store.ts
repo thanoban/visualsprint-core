@@ -80,7 +80,12 @@ class CaptureTx implements CaptureTransaction {
     });
     return record;
   }
-  async insert(input: { actor: Actor; context: CaptureContext; maxSeconds: number }) {
+  async insert(input: {
+    actor: Actor;
+    context: CaptureContext;
+    maxSeconds: number;
+    dispatchNotBefore?: Date;
+  }) {
     await this.db.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.workspaceId + ":meeting:" + input.context.meetingId},0))`,
     );
@@ -109,6 +114,7 @@ class CaptureTx implements CaptureTransaction {
           meetingVersion: input.context.version,
           joinUrl: input.context.joinUrl,
           maxSeconds: input.maxSeconds,
+          dispatchNotBefore: input.dispatchNotBefore ?? new Date(),
           attemptId: randomUUID(),
         })
         .returning()
@@ -117,7 +123,7 @@ class CaptureTx implements CaptureTransaction {
       .insert(schema.directory)
       .values({ workspaceId: this.workspaceId, attemptId: record.attemptId, requestId: record.id });
     await this.db.execute(
-      sql`INSERT INTO capture_work_index(request_id,workspace_id) VALUES(${record.id},${this.workspaceId})`,
+      sql`INSERT INTO capture_work_index(request_id,workspace_id,next_at) VALUES(${record.id},${this.workspaceId},GREATEST(now(),${record.dispatchNotBefore}))`,
     );
     return record;
   }
@@ -141,7 +147,8 @@ class CaptureTx implements CaptureTransaction {
     // raced a scheduler removal. Enqueue in the same owning transaction.
     if (record.quotaState === "held" || record.quotaState === "pending")
       await this.db.execute(
-        sql`INSERT INTO capture_work_index(request_id,workspace_id) VALUES(${requestId},${this.workspaceId}) ON CONFLICT DO NOTHING`,
+        sql`INSERT INTO capture_work_index(request_id,workspace_id,next_at) VALUES(${requestId},${this.workspaceId},CASE WHEN ${record.state}='scheduled' THEN GREATEST(now(),${record.dispatchNotBefore}) ELSE now() END)
+        ON CONFLICT(request_id) DO UPDATE SET next_at=excluded.next_at`,
       );
     return record;
   }
@@ -286,20 +293,27 @@ export class PostgresCapture implements CaptureRepository {
     return count;
   }
   async reschedule(workspaceId: string, requestId: string, seconds = 5) {
-    const record = await this.scoped(workspaceId, (tx) => tx.load(requestId));
-    if (
-      !record ||
-      (["complete", "partial", "failed", "cancelled"].includes(record.state) &&
-        ["released", "settled"].includes(record.quotaState))
-    ) {
-      await this.db.execute(
-        sql`DELETE FROM capture_work_index WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
-      );
-    } else {
-      await this.db.execute(
-        sql`UPDATE capture_work_index SET next_at=now()+${seconds}*interval '1 second' WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
-      );
-    }
+    id.parse(workspaceId);
+    id.parse(requestId);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400)
+      throw new Error("INVALID_RETRY_DELAY");
+    await this.db.transaction(async (db) => {
+      await db.execute(sql`SELECT set_config('app.workspace_id',${workspaceId},true)`);
+      const record = await new CaptureTx(db, workspaceId).load(requestId);
+      if (
+        !record ||
+        (["complete", "partial", "failed", "cancelled"].includes(record.state) &&
+          ["released", "settled"].includes(record.quotaState))
+      ) {
+        await db.execute(
+          sql`DELETE FROM capture_work_index WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
+        );
+      } else {
+        await db.execute(
+          sql`UPDATE capture_work_index SET next_at=GREATEST(now()+${seconds}*interval '1 second',CASE WHEN ${record.state}='scheduled' THEN ${record.dispatchNotBefore} ELSE now() END) WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
+        );
+      }
+    });
   }
   scoped<T>(workspaceId: string, work: (tx: CaptureTransaction) => Promise<T>) {
     id.parse(workspaceId);

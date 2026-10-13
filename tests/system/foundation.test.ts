@@ -8,6 +8,7 @@ import {
   databasePool,
   migrate,
   ServiceIdentity,
+  serviceToken,
   WorkOSVerifier,
 } from "@visualsprint/platform";
 // Only composition tests import several service entry points. Runtime services never do.
@@ -239,6 +240,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     captureService,
     async (token) => (await ingestIdentity.verify(token)).actor,
     new RecallSignatures([`whsec_${webhookKey.toString("base64")}`]),
+    async (token) =>
+      (await new ServiceIdentity("ingest", { integration: [integrationPublic] }).verify(token))
+        .actor,
   );
   const ingestUrl = await ingest.listen({ host: "127.0.0.1", port: 0 });
   const gateway = gatewayApp(
@@ -646,6 +650,50 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     assert.equal(
       (await authorities.capture(approved, backgroundMeeting.id)).meetingId,
       backgroundMeeting.id,
+    );
+    const proof = await serviceToken({
+      caller: "integration",
+      audience: "ingest",
+      actor: approved,
+      privateKey: integrationKey.privateKey,
+      keyId: "integration-test",
+    });
+    const scheduled = await ingest.inject({
+      method: "POST",
+      url: `/internal/workspaces/${workspaceId}/calendar-captures`,
+      headers: { authorization: `Bearer ${proof}`, "idempotency-key": randomUUID() },
+      payload: {
+        meetingId: backgroundMeeting.id,
+        expectedMeetingVersion: backgroundMeeting.version,
+        maxDurationSeconds: 120,
+        startsAt: new Date(Date.now() + 3600000).toISOString(),
+      },
+    });
+    assert.equal(scheduled.statusCode, 202, scheduled.body);
+    const scheduledId = String(scheduled.json().id);
+    const scheduledRecord = (await captureRepository.scoped(workspaceId, (tx) =>
+      tx.load(scheduledId),
+    ))!;
+    assert.equal(scheduledRecord.quotaState, "pending");
+    assert.equal(scheduledRecord.operationGrantId, approved.operationGrantId);
+    const ordinaryActor = { actorId: approved.actorId, workspaceId, sessionId: "normal-session" };
+    const ordinaryProof = await serviceToken({
+      caller: "integration",
+      audience: "ingest",
+      actor: ordinaryActor,
+      privateKey: integrationKey.privateKey,
+      keyId: "integration-test",
+    });
+    assert.equal(
+      (
+        await ingest.inject({
+          method: "POST",
+          url: `/internal/workspaces/${workspaceId}/calendar-captures`,
+          headers: { authorization: `Bearer ${ordinaryProof}`, "idempotency-key": randomUUID() },
+          payload: {},
+        })
+      ).statusCode,
+      403,
     );
     await assert.rejects(
       authorities.capture(approved, String(meeting.data.id)),

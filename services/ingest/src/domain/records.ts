@@ -39,6 +39,7 @@ export type Capture = {
   attemptId: string;
   providerId: string | null;
   dispatchAt: Date | null;
+  dispatchNotBefore: Date;
   departedAt: Date | null;
   providerDone: boolean;
   lastStatusAt: Date | null;

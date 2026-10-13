@@ -35,7 +35,12 @@ export interface CaptureTransaction {
     fingerprint: string,
     create: () => Promise<Capture>,
   ): Promise<Capture>;
-  insert(input: { actor: Actor; context: CaptureContext; maxSeconds: number }): Promise<Capture>;
+  insert(input: {
+    actor: Actor;
+    context: CaptureContext;
+    maxSeconds: number;
+    dispatchNotBefore?: Date;
+  }): Promise<Capture>;
   update(
     requestId: string,
     changes: Partial<

@@ -11,6 +11,7 @@ const capture = z.object({
   errorCode: z.string().nullable(),
   version: z.number(),
   stopRequested: z.boolean(),
+  dispatchNotBefore: z.string().datetime().optional(),
 });
 const transcript = z.object({
   totalSegments: z.number().int(),
@@ -39,6 +40,7 @@ export function CapturePanel({
   const [text, setText] = useState<z.infer<typeof transcript>>();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
+  const [startsAt, setStartsAt] = useState("");
   const start = useCommand(),
     stop = useCommand();
   const path = api.scope(workspaceId);
@@ -104,24 +106,42 @@ export function CapturePanel({
       ) : (
         <p>No capture requested.</p>
       )}
+      {latest?.state === "scheduled" && latest.dispatchNotBefore ? (
+        <p>
+          Join window opens: {new Date(latest.dispatchNotBefore).toLocaleString()}. Capacity is
+          checked when due; this is not a confirmed meeting join.
+        </p>
+      ) : null}
       {owner && meeting.joinUrl && !active ? (
         <Form
           title="Capture this meeting"
-          button="Start capture"
+          button={startsAt ? "Schedule capture" : "Start capture"}
           command={start}
           submit={() =>
             void start.run(
-              { meetingId: meeting.id, version: meeting.version },
+              { meetingId: meeting.id, version: meeting.version, startsAt },
               (key) =>
                 api.request(`${path}/captures`, capture, {
                   method: "POST",
                   key,
-                  body: { meetingId: meeting.id, expectedMeetingVersion: meeting.version },
+                  body: {
+                    meetingId: meeting.id,
+                    expectedMeetingVersion: meeting.version,
+                    ...(startsAt ? { startsAt: new Date(startsAt).toISOString() } : {}),
+                  },
                 }),
               () => setRevision((value) => value + 1),
             )
           }
         >
+          <label>
+            Optional start time (your device timezone)
+            <input
+              type="datetime-local"
+              value={startsAt}
+              onChange={(event) => setStartsAt(event.target.value)}
+            />
+          </label>
           <p>
             Maximum four hours. Notify participants and obtain the required permission before
             starting.

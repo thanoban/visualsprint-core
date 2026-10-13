@@ -40,6 +40,9 @@ export const requests = pgTable(
     attemptId: uuid("attempt_id").notNull(),
     providerId: uuid("provider_id"),
     dispatchAt: timestamp("dispatch_at", { withTimezone: true }),
+    dispatchNotBefore: timestamp("dispatch_not_before", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     departedAt: timestamp("departed_at", { withTimezone: true }),
     providerDone: boolean("provider_done").notNull().default(false),
     lastStatusAt: timestamp("last_status_at", { withTimezone: true }),

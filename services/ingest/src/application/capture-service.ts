@@ -19,6 +19,7 @@ const captureInput = z
     meetingId: id,
     expectedMeetingVersion: z.number().int().positive(),
     maxDurationSeconds: z.number().int().min(1).max(14400).default(14400),
+    startsAt: z.string().datetime().optional(),
   })
   .strict();
 export function captureView(record: Capture) {
@@ -36,6 +37,7 @@ export function captureView(record: Capture) {
     stopRequested: record.stopRequested,
     createdAt: record.createdAt,
     maxDurationSeconds: record.maxSeconds,
+    dispatchNotBefore: record.dispatchNotBefore,
   };
 }
 const actorFor = (record: Capture): Actor => ({
@@ -56,17 +58,31 @@ export class CaptureService {
   async request(actor: Actor, key: string, body: unknown) {
     commandKey.parse(key);
     const input = captureInput.parse(body);
+    const startsAt = input.startsAt ? new Date(input.startsAt) : null;
+    const dispatchNotBefore = startsAt ? new Date(startsAt.getTime() - 60000) : this.now();
     const context = await this.meetings.capture(actor, input.meetingId);
     parseMeetingLink(context.joinUrl);
     const fingerprint = createHash("sha256").update(JSON.stringify(input)).digest("hex");
     const record = await this.repository.scoped(actor.workspaceId, (tx) =>
       tx.command(actor, key, fingerprint, async () => {
+        if (
+          startsAt &&
+          (startsAt.getTime() < this.now().getTime() - 300000 ||
+            startsAt.getTime() > this.now().getTime() + 14 * 86400000)
+        )
+          throw new AppError("INVALID_CAPTURE_TIME", 400);
         if (context.version !== input.expectedMeetingVersion)
           throw new AppError("VERSION_CONFLICT", 409);
-        return tx.insert({ actor, context, maxSeconds: input.maxDurationSeconds });
+        return tx.insert({
+          actor,
+          context,
+          maxSeconds: input.maxDurationSeconds,
+          dispatchNotBefore,
+        });
       }),
     );
     if (record.ready || terminal.has(record.state)) return captureView(record);
+    if (this.now() < record.dispatchNotBefore) return captureView(record);
     let reservation: Awaited<ReturnType<UsageAuthority["reserve"]>>;
     try {
       reservation = await this.usage.reserve(actor, record.id, record.maxSeconds);
@@ -257,7 +273,30 @@ export class CaptureService {
   }
   async work(workspaceId: string, requestId: string) {
     const pending = await this.repository.scoped(workspaceId, (tx) => tx.load(requestId));
+    if (pending?.state === "scheduled" && this.now() < pending.dispatchNotBefore) return;
     if (pending?.quotaState === "pending") await this.recoverAdmission(pending);
+    if (pending?.state === "scheduled") {
+      try {
+        const context = await this.meetings.capture(actorFor(pending), pending.meetingId);
+        if (context.ownerId !== pending.ownerId || context.joinUrl !== pending.joinUrl)
+          throw new AppError("MEETING_CHANGED", 409);
+      } catch (error) {
+        if (!(error instanceof AppError) || ![400, 401, 403, 404, 409].includes(error.status))
+          throw error;
+        await this.repository.scoped(workspaceId, async (tx) => {
+          const current = await tx.load(requestId);
+          if (current?.state === "scheduled" && !current.dispatchAt) {
+            const closed = await tx.update(requestId, {
+              state: "cancelled",
+              stopRequested: true,
+              errorCode: error.code,
+              providerDone: true,
+            });
+            await tx.emit(closed, "capture.state.changed.v1");
+          }
+        });
+      }
+    }
     const token = randomUUID();
     const now = this.now();
     const claim = await this.repository.scoped(workspaceId, async (tx) => {

@@ -18,7 +18,7 @@ const meeting = {
   blocked: false,
   createdAt: "2026-10-12T00:00:00Z",
 };
-async function fixture(page: Page, captureEnabled = false) {
+async function fixture(page: Page, captureEnabled = false, futureMode = false) {
   let version = 1;
   const displayed = {
     ...meeting,
@@ -35,6 +35,7 @@ async function fixture(page: Page, captureEnabled = false) {
         errorCode: string | null;
         version: number;
         stopRequested: boolean;
+        dispatchNotBefore?: string;
       }
     | undefined;
   const writes: { path: string; body: Record<string, unknown>; key: string | undefined }[] = [];
@@ -61,21 +62,37 @@ async function fixture(page: Page, captureEnabled = false) {
       });
     if (path.endsWith("/captures") && request.method() === "POST") {
       expect(request.headers()["idempotency-key"]).toBeTruthy();
-      expect(request.postDataJSON()).toEqual({ meetingId, expectedMeetingVersion: version });
+      expect(request.postDataJSON()).toEqual({
+        meetingId,
+        expectedMeetingVersion: version,
+        ...(futureMode ? { startsAt: expect.any(String) } : {}),
+      });
       currentCapture = {
         id: captureId,
-        state: "waiting_for_admission",
-        ready: true,
+        state: futureMode ? "scheduled" : "waiting_for_admission",
+        ready: !futureMode,
         coverage: "unknown",
         transcriptHealth: "unknown",
         errorCode: null,
         version: 1,
         stopRequested: false,
+        ...(futureMode
+          ? {
+              dispatchNotBefore: new Date(
+                Date.parse(request.postDataJSON().startsAt) - 60000,
+              ).toISOString(),
+            }
+          : {}),
       };
       return route.fulfill({ status: 202, json: currentCapture });
     }
     if (path.endsWith(`/captures/${captureId}/stop`)) {
-      currentCapture = { ...currentCapture!, state: "stopping", stopRequested: true, version: 2 };
+      currentCapture = {
+        ...currentCapture!,
+        state: futureMode ? "cancelled" : "stopping",
+        stopRequested: true,
+        version: 2,
+      };
       return route.fulfill({ json: currentCapture });
     }
     if (path === "/api/v3/me")
@@ -173,6 +190,19 @@ test("switching workspaces clears previous project and meeting context", async (
   await expect(page.getByRole("heading", { name: "Second workspace" })).toBeVisible();
   await expect(page.getByText("Acme renewal")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "No meetings here yet" })).toBeVisible();
+});
+test("scheduled capture shows an unconfirmed join window and permits cancellation before dispatch", async ({
+  page,
+}) => {
+  await fixture(page, true, true);
+  await page.goto(`/w/${workspaceId}?meetingId=${meetingId}`);
+  await page.getByLabel("Optional start time (your device timezone)").fill("2026-10-13T10:00");
+  await page.getByRole("button", { name: "Schedule capture", exact: true }).click();
+  const panel = page.getByRole("region", { name: "Meeting capture" });
+  await expect(panel).toContainText("Join window opens");
+  await expect(panel).toContainText("not a confirmed meeting join");
+  await page.getByRole("button", { name: "Stop capture", exact: true }).click();
+  await expect(panel.getByRole("status")).toContainText("cancelled");
 });
 test("backend outages keep the session and clear inaccessible data", async ({ page }) => {
   await fixture(page);

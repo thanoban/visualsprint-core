@@ -263,9 +263,63 @@ function fixture(kind: "accepted" | "unknown" | "capacity" = "accepted", loseRes
       allowed = false;
     },
     counters: () => ({ creates, leaves, releases, settlements }),
+    reserved: () => held,
     now: () => now,
   };
 }
+test("future capture persists without reserving live capacity and dispatches only when due", async () => {
+  const f = fixture(),
+    startsAt = new Date(f.now().getTime() + 3600000).toISOString();
+  const input = {
+    meetingId: f.meetingId,
+    expectedMeetingVersion: 1,
+    maxDurationSeconds: 120,
+    startsAt,
+  };
+  const requested = await f.service.request(f.actor, "scheduled-capture-key", input);
+  assert.equal(requested.ready, false);
+  assert.equal(f.reserved(), false);
+  await f.service.work(f.actor.workspaceId, requested.id);
+  assert.equal(f.counters().creates, 0);
+  assert.equal(f.reserved(), false);
+  f.advance(3540000);
+  await f.service.work(f.actor.workspaceId, requested.id);
+  assert.equal(f.counters().creates, 1);
+  assert.equal(f.reserved(), true);
+  f.advance(600000);
+  assert.equal((await f.service.request(f.actor, "scheduled-capture-key", input)).id, requested.id);
+});
+test("future cancellation cleans routing without reserving quota or dispatching", async () => {
+  const f = fixture();
+  const requested = await f.service.request(f.actor, "scheduled-stop-key", {
+    meetingId: f.meetingId,
+    expectedMeetingVersion: 1,
+    maxDurationSeconds: 120,
+    startsAt: new Date(f.now().getTime() + 3600000).toISOString(),
+  });
+  await f.service.stop(f.actor, requested.id);
+  await f.service.work(f.actor.workspaceId, requested.id);
+  await repository.reschedule(f.actor.workspaceId, requested.id);
+  assert.equal(f.reserved(), false);
+  assert.equal(f.counters().creates, 0);
+  assert.equal(
+    (await pool.query("SELECT 1 FROM capture_work_index WHERE request_id=$1", [requested.id]))
+      .rowCount,
+    0,
+  );
+});
+test("authority revoked after quota admission blocks first dispatch and releases held capacity", async () => {
+  const f = fixture();
+  const requested = await f.request();
+  f.revoke();
+  await f.service.work(f.actor.workspaceId, requested.id);
+  assert.equal(f.counters().creates, 0);
+  assert.equal(f.counters().releases, 1);
+  assert.equal(
+    (await repository.scoped(f.actor.workspaceId, (tx) => tx.load(requested.id)))!.state,
+    "cancelled",
+  );
+});
 test("durable intent, tenant isolation and uncertain dispatch never duplicate creation", async () => {
   const f = fixture("unknown");
   const first = await f.request();

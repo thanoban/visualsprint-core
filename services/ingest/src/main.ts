@@ -15,6 +15,7 @@ const config = z
     SERVICE_PRIVATE_JWK: z.string().min(1),
     SERVICE_KEY_ID: z.string().min(1),
     GATEWAY_PUBLIC_JWKS: z.string().min(1),
+    INTEGRATION_PUBLIC_JWKS: z.string().optional(),
     RECALL_API_KEY: z.string().min(1),
     RECALL_REGION: z.enum(["us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1"]),
     RECALL_WEBHOOK_URL: z.string().url(),
@@ -35,6 +36,12 @@ const authorities = new Authorities(
 const identity = new ServiceIdentity("ingest", {
   gateway: JSON.parse(config.GATEWAY_PUBLIC_JWKS).keys,
 });
+const calendarIdentity = new ServiceIdentity(
+  "ingest",
+  config.INTEGRATION_PUBLIC_JWKS
+    ? { integration: JSON.parse(config.INTEGRATION_PUBLIC_JWKS).keys }
+    : {},
+);
 const service = new CaptureService(
   new PostgresCapture(pool),
   authorities,
@@ -46,6 +53,7 @@ const app = ingestApp(
   service,
   async (token) => (await identity.verify(token)).actor,
   new RecallSignatures(JSON.parse(config.RECALL_WEBHOOK_SECRETS)),
+  async (token) => (await calendarIdentity.verify(token)).actor,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)
