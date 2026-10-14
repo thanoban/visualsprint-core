@@ -13,6 +13,10 @@ import { AuthorizedCommitmentEvidence } from "./infrastructure/commitment-source
 import { commitmentRoutes } from "./http/commitment-routes.js";
 import { WorkspacePreparationContext } from "./application/preparation-context.js";
 import { preparationContextRoutes } from "./http/preparation-context-routes.js";
+import { CaptureProcessingContext } from "./application/capture-processing-context.js";
+import { PostgresProcessingMeetings } from "./infrastructure/processing-meetings.js";
+import { AccountCaptureProcessing } from "./infrastructure/account-processing-client.js";
+import { captureProcessingContextRoutes } from "./http/capture-processing-context-routes.js";
 
 const config = z
   .object({
@@ -182,6 +186,24 @@ preparationContextRoutes(
           ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
           : {},
       ).verify(token)
+    ).actor,
+);
+captureProcessingContextRoutes(
+  app,
+  new CaptureProcessingContext(
+    new PostgresProcessingMeetings(pool),
+    new AccountCaptureProcessing(config.ACCOUNT_INTERNAL_URL, privateKey, config.SERVICE_KEY_ID),
+  ),
+  async (token) =>
+    (
+      await new ServiceIdentity("workspace", {
+        ...(config.INGEST_PUBLIC_JWKS
+          ? { ingest: JSON.parse(config.INGEST_PUBLIC_JWKS).keys }
+          : {}),
+        ...(config.INTELLIGENCE_PUBLIC_JWKS
+          ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+          : {}),
+      }).verify(token)
     ).actor,
 );
 for (const signal of ["SIGTERM", "SIGINT"] as const)

@@ -7,6 +7,9 @@ import { PostgresCapture } from "./infrastructure/store.js";
 import { RecallProvider } from "./infrastructure/recall.js";
 import { RecallSignatures } from "./infrastructure/webhook-signature.js";
 import { ingestApp } from "./http/app.js";
+import { CaptureProcessingService } from "./application/capture-processing.js";
+import { PostgresCaptureProcessing } from "./infrastructure/capture-processing-store.js";
+import { CaptureProcessingAuthorities } from "./infrastructure/capture-processing-authority.js";
 const config = z
   .object({
     INGEST_DATABASE_URL: z.string().min(1),
@@ -19,6 +22,8 @@ const config = z
     INTELLIGENCE_PUBLIC_JWKS: z.string().optional(),
     REPORTING_PUBLIC_JWKS: z.string().optional(),
     WORKSPACE_PUBLIC_JWKS: z.string().optional(),
+    ACCOUNT_PUBLIC_JWKS: z.string().optional(),
+    CAPTURE_PROCESSING_ENABLED: z.enum(["true", "false"]).default("false"),
     RECALL_API_KEY: z.string().min(1),
     RECALL_REGION: z.enum(["us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1"]),
     RECALL_WEBHOOK_URL: z.string().url(),
@@ -54,12 +59,53 @@ const calendarIdentity = new ServiceIdentity(
     ? { integration: JSON.parse(config.INTEGRATION_PUBLIC_JWKS).keys }
     : {},
 );
+const processingService = new CaptureProcessingService(
+  new PostgresCaptureProcessing(pool),
+  new CaptureProcessingAuthorities(
+    { account: config.ACCOUNT_INTERNAL_URL, workspace: config.WORKSPACE_INTERNAL_URL },
+    privateKey,
+    config.SERVICE_KEY_ID,
+  ),
+);
+const processing =
+  config.CAPTURE_PROCESSING_ENABLED === "true"
+    ? {
+        service: processingService,
+        authenticateOwner: async (token: string) =>
+          (
+            await new ServiceIdentity(
+              "ingest",
+              config.ACCOUNT_PUBLIC_JWKS
+                ? { account: JSON.parse(config.ACCOUNT_PUBLIC_JWKS).keys }
+                : {},
+            ).verify(token)
+          ).actor,
+        authenticateEvidence: async (token: string) =>
+          (
+            await new ServiceIdentity(
+              "ingest",
+              config.INTELLIGENCE_PUBLIC_JWKS
+                ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+                : {},
+            ).verify(token)
+          ).actor,
+      }
+    : undefined;
 const service = new CaptureService(
   new PostgresCapture(pool),
   authorities,
   authorities,
   new RecallProvider(config.RECALL_API_KEY, config.RECALL_REGION),
   config.RECALL_WEBHOOK_URL,
+  undefined,
+  {
+    enabled: config.CAPTURE_PROCESSING_ENABLED === "true",
+    prepare: async (actor, id) => {
+      if (config.CAPTURE_PROCESSING_ENABLED === "true") await processingService.prepare(actor, id);
+    },
+    deleteMeeting: (ws, meeting, id, version) =>
+      processingService.deleteMeeting(ws, meeting, id, version),
+  },
 );
 const app = ingestApp(
   service,
@@ -76,6 +122,7 @@ const app = ingestApp(
           : {},
       ).verify(token)
     ).actor,
+  processing,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

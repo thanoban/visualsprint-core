@@ -20,6 +20,10 @@ const captureInput = z
     expectedMeetingVersion: z.number().int().positive(),
     maxDurationSeconds: z.number().int().min(1).max(14400).default(14400),
     startsAt: z.string().datetime().optional(),
+    processing: z
+      .object({ consent: z.literal(true), policyVersion: z.literal("english-text-v1") })
+      .strict()
+      .optional(),
   })
   .strict();
 export function captureView(record: Capture) {
@@ -54,10 +58,28 @@ export class CaptureService {
     private readonly provider: ManagedCaptureProvider,
     private readonly webhookUrl: string,
     private readonly now: () => Date = () => new Date(),
+    private readonly processing?: {
+      enabled?: boolean;
+      prepare(actor: Actor, captureId: string): Promise<void>;
+      deleteMeeting(
+        workspaceId: string,
+        meetingId: string,
+        deletionId: string,
+        sourceVersion: number,
+      ): Promise<void>;
+    },
   ) {}
   async request(actor: Actor, key: string, body: unknown) {
     commandKey.parse(key);
     const input = captureInput.parse(body);
+    if (
+      input.processing &&
+      (actor.operationGrantId || !this.processing || this.processing.enabled === false)
+    )
+      throw new AppError(
+        actor.operationGrantId ? "FORBIDDEN" : "CAPTURE_PROCESSING_NOT_CONFIGURED",
+        actor.operationGrantId ? 403 : 503,
+      );
     const startsAt = input.startsAt ? new Date(input.startsAt) : null;
     const dispatchNotBefore = startsAt ? new Date(startsAt.getTime() - 60000) : this.now();
     const context = await this.meetings.capture(actor, input.meetingId);
@@ -78,10 +100,18 @@ export class CaptureService {
           context,
           maxSeconds: input.maxDurationSeconds,
           dispatchNotBefore,
+          ...(input.processing ? { processing: true } : {}),
         });
       }),
     );
     if (record.ready || terminal.has(record.state)) return captureView(record);
+    if (this.processing) await this.processing.prepare(actor, record.id);
+    if (
+      !(await this.repository.scoped(actor.workspaceId, (tx) =>
+        tx.processingDispatchAllowed(record.id),
+      ))
+    )
+      return captureView(record);
     if (this.now() < record.dispatchNotBefore) return captureView(record);
     let reservation: Awaited<ReturnType<UsageAuthority["reserve"]>>;
     try {
@@ -149,6 +179,12 @@ export class CaptureService {
       .parse(body);
     const complete = await this.repository.scoped(id.parse(workspaceId), (tx) =>
       tx.deleteMeeting(input.meetingId, id.parse(deletionId), input.sourceVersion),
+    );
+    await this.processing?.deleteMeeting(
+      workspaceId,
+      input.meetingId,
+      deletionId,
+      input.sourceVersion,
     );
     return {
       deletionId,
@@ -366,6 +402,15 @@ export class CaptureService {
   async work(workspaceId: string, requestId: string) {
     const pending = await this.repository.scoped(workspaceId, (tx) => tx.load(requestId));
     if (pending?.state === "scheduled" && this.now() < pending.dispatchNotBefore) return;
+    if (pending?.state === "scheduled" && !pending.stopRequested) {
+      if (this.processing) await this.processing.prepare(actorFor(pending), pending.id);
+      if (
+        !(await this.repository.scoped(workspaceId, (tx) =>
+          tx.processingDispatchAllowed(pending.id),
+        ))
+      )
+        return;
+    }
     if (pending?.quotaState === "pending") await this.recoverAdmission(pending);
     if (pending?.state === "scheduled") {
       try {
@@ -394,6 +439,8 @@ export class CaptureService {
     const claim = await this.repository.scoped(workspaceId, async (tx) => {
       const record = await tx.load(requestId);
       if (!record || (record.leaseUntil && record.leaseUntil > now)) return null;
+      if (record.state === "scheduled" && !(await tx.processingDispatchAllowed(record.id)))
+        return null;
       if (!record.ready && !terminal.has(record.state)) return null;
       const first = record.state === "scheduled" && record.ready;
       const updated = await tx.update(requestId, {

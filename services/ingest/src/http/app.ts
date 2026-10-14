@@ -6,6 +6,7 @@ import { AppError, bearer, installErrorHandler, type Actor } from "@visualsprint
 import type { CaptureService } from "../application/capture-service.js";
 import { RecallSignatures } from "../infrastructure/webhook-signature.js";
 import { providerEvent } from "../infrastructure/provider-events.js";
+import type { CaptureProcessingService } from "../application/capture-processing.js";
 
 export function ingestApp(
   service: CaptureService,
@@ -14,6 +15,11 @@ export function ingestApp(
   authenticateCalendar?: (token: string) => Promise<Actor>,
   authenticateRead?: (token: string) => Promise<Actor>,
   authenticateDeletion?: (token: string) => Promise<Actor>,
+  processing?: {
+    service: CaptureProcessingService;
+    authenticateOwner: (token: string) => Promise<Actor>;
+    authenticateEvidence: (token: string) => Promise<Actor>;
+  },
 ) {
   const app = Fastify({
     bodyLimit: 1_000_000,
@@ -21,6 +27,26 @@ export function ingestApp(
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "ingest" }));
+  app.post(
+    "/internal/workspaces/:workspaceId/captures/:captureId/processing-owner-context",
+    async (request) => {
+      if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+      const actor = await processing.authenticateOwner(bearer(request.headers.authorization)),
+        params = request.params as { workspaceId: string; captureId: string };
+      if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
+      return processing.service.ownerContext(actor, id.parse(params.captureId));
+    },
+  );
+  app.post(
+    "/internal/workspaces/:workspaceId/captures/:captureId/processing-evidence",
+    async (request) => {
+      if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+      const actor = await processing.authenticateEvidence(bearer(request.headers.authorization)),
+        params = request.params as { workspaceId: string; captureId: string };
+      if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
+      return processing.service.evidence(actor, id.parse(params.captureId), request.body);
+    },
+  );
   app.post("/internal/workspaces/:workspaceId/evidence-batch", async (request) => {
     if (!authenticateDeletion) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
     const actor = await authenticateDeletion(bearer(request.headers.authorization));
@@ -111,9 +137,44 @@ export function ingestApp(
         if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
         return reply.code(202).send(await service.request(actor(request), key, request.body));
       });
-      routes.get("/captures/:requestId", (request) =>
-        service.status(actor(request), requestId(request.params)),
-      );
+      routes.get("/captures/:requestId", async (request) => {
+        const result = await service.status(actor(request), requestId(request.params));
+        return {
+          ...result,
+          processing:
+            processing && result.ownerId === actor(request).actorId
+              ? await processing.service.status(actor(request), result.id)
+              : null,
+        };
+      });
+      routes.post("/captures/:requestId/processing-consent", async (request, reply) => {
+        if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+        await processing.service.consent(
+          actor(request),
+          requestId(request.params),
+          key,
+          request.body,
+        );
+        return reply
+          .code(202)
+          .send(await processing.service.status(actor(request), requestId(request.params)));
+      });
+      routes.post("/captures/:requestId/processing-consent/withdraw", async (request, reply) => {
+        if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+        await processing.service.withdraw(
+          actor(request),
+          requestId(request.params),
+          key,
+          request.body,
+        );
+        return reply
+          .code(202)
+          .send(await processing.service.status(actor(request), requestId(request.params)));
+      });
       routes.post("/captures/:requestId/stop", (request) =>
         service.stop(actor(request), requestId(request.params)),
       );

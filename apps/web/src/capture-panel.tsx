@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Api, errorMessage, type Meeting } from "./api.js";
 import { Form, useCommand } from "./ui.js";
+import {
+  CaptureProcessingControls,
+  captureProcessingSchema,
+} from "./capture-processing-controls.js";
 const capture = z.object({
   id: z.string().uuid(),
   state: z.string(),
@@ -12,6 +16,7 @@ const capture = z.object({
   version: z.number(),
   stopRequested: z.boolean(),
   dispatchNotBefore: z.string().datetime().optional(),
+  processing: captureProcessingSchema.nullable().optional(),
 });
 const transcript = z.object({
   totalSegments: z.number().int(),
@@ -41,6 +46,8 @@ export function CapturePanel({
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [startsAt, setStartsAt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [processingConsent, setProcessingConsent] = useState(false);
   const start = useCommand(),
     stop = useCommand();
   const path = api.scope(workspaceId);
@@ -50,6 +57,7 @@ export function CapturePanel({
     setCaptures([]);
     setText(undefined);
     setError("");
+    setLoading(true);
     const poll = async () => {
       try {
         const values = await api.request(
@@ -57,22 +65,28 @@ export function CapturePanel({
           z.array(capture),
           { signal: abort.signal },
         );
-        const latest = values.at(-1);
+        const listed = values.at(-1);
+        const latest = listed
+          ? await api.request(`${path}/captures/${listed.id}`, capture, { signal: abort.signal })
+          : undefined;
+        if (latest && latest.id !== listed?.id) throw new Error("Capture status target changed.");
         const content = latest
           ? await api.request(`${path}/captures/${latest.id}/transcript`, transcript, {
               signal: abort.signal,
             })
           : undefined;
         if (!abort.signal.aborted) {
-          setCaptures(values);
+          setCaptures(latest ? [...values.slice(0, -1), latest] : values);
           setText(content);
           setError("");
+          setLoading(false);
         }
       } catch (reason) {
         if (!abort.signal.aborted) {
           setCaptures([]);
           setText(undefined);
           setError(errorMessage(reason));
+          setLoading(false);
         }
       } finally {
         if (!abort.signal.aborted)
@@ -88,6 +102,7 @@ export function CapturePanel({
     };
   }, [api, path, meeting.id, revision]);
   const latest = captures.at(-1);
+  useEffect(() => setProcessingConsent(false), [workspaceId, meeting.id, latest?.id]);
   const active = latest && !terminal.has(latest.state);
   return (
     <section aria-label="Meeting capture">
@@ -103,23 +118,25 @@ export function CapturePanel({
           Transcript coverage: {latest.coverage.replaceAll("_", " ")}.
           {latest.errorCode ? ` Reason: ${latest.errorCode}.` : ""}
         </p>
-      ) : (
+      ) : loading ? (
+        <p>Loading current capture status…</p>
+      ) : !error ? (
         <p>No capture requested.</p>
-      )}
+      ) : null}
       {latest?.state === "scheduled" && latest.dispatchNotBefore ? (
         <p>
           Join window opens: {new Date(latest.dispatchNotBefore).toLocaleString()}. Capacity is
           checked when due; this is not a confirmed meeting join.
         </p>
       ) : null}
-      {owner && meeting.joinUrl && !active ? (
+      {owner && meeting.joinUrl && !loading && !error && !active ? (
         <Form
           title="Capture this meeting"
           button={startsAt ? "Schedule capture" : "Start capture"}
           command={start}
           submit={() =>
             void start.run(
-              { meetingId: meeting.id, version: meeting.version, startsAt },
+              { meetingId: meeting.id, version: meeting.version, startsAt, processingConsent },
               (key) =>
                 api.request(`${path}/captures`, capture, {
                   method: "POST",
@@ -128,9 +145,15 @@ export function CapturePanel({
                     meetingId: meeting.id,
                     expectedMeetingVersion: meeting.version,
                     ...(startsAt ? { startsAt: new Date(startsAt).toISOString() } : {}),
+                    ...(processingConsent
+                      ? { processing: { consent: true, policyVersion: "english-text-v1" } }
+                      : {}),
                   },
                 }),
-              () => setRevision((value) => value + 1),
+              () => {
+                setProcessingConsent(false);
+                setRevision((value) => value + 1);
+              },
             )
           }
         >
@@ -142,11 +165,35 @@ export function CapturePanel({
               onChange={(event) => setStartsAt(event.target.value)}
             />
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={processingConsent}
+              disabled={start.busy}
+              onChange={(event) => setProcessingConsent(event.target.checked)}
+            />
+            I explicitly authorize automatic English transcript processing for this new capture
+            using the configured AI budget.
+          </label>
+          <p>
+            Optional and separate from capture or calendar consent. Setup may block dispatch;
+            processing consent is not a completed summary or authorization for external actions.
+          </p>
           <p>
             Maximum four hours. Notify participants and obtain the required permission before
             starting.
           </p>
         </Form>
+      ) : null}
+      {latest ? (
+        <CaptureProcessingControls
+          api={api}
+          workspaceId={workspaceId}
+          captureId={latest.id}
+          owner={owner}
+          processing={latest.processing}
+          onChanged={() => setRevision((value) => value + 1)}
+        />
       ) : null}
       {owner && active ? (
         <Form

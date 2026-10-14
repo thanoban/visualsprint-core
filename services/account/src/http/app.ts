@@ -12,11 +12,13 @@ import {
 } from "@visualsprint/platform";
 import type { AccountService } from "../application/account.js";
 import type { ModelUsageService } from "../application/model-usage.js";
+import type { CaptureConsentService } from "../application/capture-consent.js";
 export function accountApp(
   service: AccountService,
   verifyUser: (token: string) => Promise<Identity>,
   serviceIdentity: ServiceIdentity,
   modelUsage?: ModelUsageService,
+  captureConsents?: CaptureConsentService,
 ) {
   const app = Fastify({
     bodyLimit: 16_000,
@@ -58,6 +60,20 @@ export function accountApp(
         if (workspaceId !== hop.actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, hop.actor);
         callers.set(request, hop.caller);
+        if (request.routeOptions.url?.includes("/capture-processing/")) {
+          const path = request.routeOptions.url;
+          const allowed = path.endsWith("/withdrawal-cleanup")
+            ? ["ingest"]
+            : path.endsWith("/authorize")
+              ? ["workspace", "ingest", "intelligence"]
+              : path.includes("/deletions/")
+                ? ["ingest"]
+                : path.endsWith("/consents") && request.method === "POST"
+                  ? ["ingest"]
+                  : ["gateway"];
+          if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
+          return;
+        }
         if (request.routeOptions.url?.includes("/model-usage/")) {
           if (hop.caller !== "intelligence" || hop.actor.operationGrantId)
             throw new AppError("FORBIDDEN", 403);
@@ -105,6 +121,41 @@ export function accountApp(
         if (!allowed.includes(hop.caller)) throw new AppError("FORBIDDEN", 403);
       });
       const actor = (request: object) => actors.get(request)!;
+      const consentService = () => {
+        if (!captureConsents) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+        return captureConsents;
+      };
+      routes.post("/capture-processing/consents", (request) => {
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+        return consentService().create(actor(request), key, request.body);
+      });
+      routes.get("/capture-processing/consents", (request) =>
+        consentService().list(actor(request), (request.query as { captureId?: string }).captureId),
+      );
+      routes.post("/capture-processing/consents/:consentId/revoke", (request) => {
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
+        return consentService().revoke(
+          actor(request),
+          key,
+          id.parse((request.params as { consentId: string }).consentId),
+          request.body,
+        );
+      });
+      routes.post("/capture-processing/authorize", (request) =>
+        consentService().authorize(actor(request), request.body),
+      );
+      routes.post("/capture-processing/withdrawal-cleanup", (request) =>
+        consentService().withdrawalCleanup(actor(request), request.body),
+      );
+      routes.post("/capture-processing/deletions/:deletionId", (request) =>
+        consentService().cleanup(
+          actor(request).workspaceId,
+          id.parse((request.params as { deletionId: string }).deletionId),
+          request.body,
+        ),
+      );
       routes.post("/model-usage/reservations", (request) => {
         if (!modelUsage) throw new AppError("MODEL_USAGE_UNAVAILABLE", 503);
         return modelUsage.reserve(actor(request), request.body);

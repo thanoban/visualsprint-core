@@ -27,6 +27,7 @@ export interface UsageAuthority {
   settle(actor: Actor, requestId: string, seconds: number): Promise<void>;
 }
 export interface CaptureTransaction {
+  processingDispatchAllowed(requestId: string): Promise<boolean>;
   deleteMeeting(meetingId: string, deletionId: string, sourceVersion: number): Promise<boolean>;
   calendarCommand(actor: Actor, key: string, cancel: boolean): Promise<Capture | undefined>;
   load(requestId: string): Promise<Capture | undefined>;
@@ -42,6 +43,7 @@ export interface CaptureTransaction {
     context: CaptureContext;
     maxSeconds: number;
     dispatchNotBefore?: Date;
+    processing?: boolean;
   }): Promise<Capture>;
   update(
     requestId: string,

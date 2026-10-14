@@ -178,6 +178,7 @@ class CaptureTx implements CaptureTransaction {
     context: CaptureContext;
     maxSeconds: number;
     dispatchNotBefore?: Date;
+    processing?: boolean;
   }) {
     await this.db.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.workspaceId + ":meeting:" + input.context.meetingId},0))`,
@@ -216,6 +217,10 @@ class CaptureTx implements CaptureTransaction {
         })
         .returning()
     )[0]!;
+    if (input.processing)
+      await this.db.execute(
+        sql`INSERT INTO capture_processing_intents(workspace_id,capture_id,meeting_id,owner_id,policy_version,state) VALUES(${this.workspaceId},${record.id},${record.meetingId},${record.ownerId},'english-text-v1','consent_pending')`,
+      );
     await this.db
       .insert(schema.directory)
       .values({ workspaceId: this.workspaceId, attemptId: record.attemptId, requestId: record.id });
@@ -223,6 +228,12 @@ class CaptureTx implements CaptureTransaction {
       sql`INSERT INTO capture_work_index(request_id,workspace_id,next_at) VALUES(${record.id},${this.workspaceId},GREATEST(now(),${record.dispatchNotBefore}))`,
     );
     return record;
+  }
+  async processingDispatchAllowed(requestId: string) {
+    const result = await this.db.execute(
+      sql`SELECT state FROM capture_processing_intents WHERE workspace_id=${this.workspaceId} AND capture_id=${id.parse(requestId)}`,
+    );
+    return !result.rows[0] || ["ready", "revoked"].includes(String(result.rows[0].state));
   }
   async update(requestId: string, changes: Parameters<CaptureTransaction["update"]>[1]) {
     const record = (

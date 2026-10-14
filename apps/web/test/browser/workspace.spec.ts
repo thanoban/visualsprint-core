@@ -46,6 +46,8 @@ async function fixture(page: Page, captureEnabled = false, futureMode = false) {
     const path = url.pathname;
     if (path.endsWith(`/meetings/${meetingId}/captures`) && request.method() === "GET")
       return route.fulfill({ json: currentCapture ? [currentCapture] : [] });
+    if (path.endsWith(`/captures/${captureId}`) && request.method() === "GET")
+      return route.fulfill({ json: { ...currentCapture, processing: null } });
     if (path.endsWith(`/captures/${captureId}/transcript`))
       return route.fulfill({
         json: {
@@ -137,16 +139,23 @@ async function fixture(page: Page, captureEnabled = false, futureMode = false) {
   });
   return writes;
 }
-test("deletion tracking stays available without reopening the blocked meeting", async ({ page }) => {
+test("deletion tracking stays available without reopening the blocked meeting", async ({
+  page,
+}) => {
   await fixture(page);
   const deletionId = "99999999-9999-4999-8999-999999999999";
   let complete = false;
-  await page.route(`**/deletions/${deletionId}`, (route) => route.fulfill({
-    json: {
-      id: deletionId, meetingId, state: complete ? "complete" : "pending",
-      required: ["ingest", "authz"], completed: complete ? ["ingest", "authz"] : ["authz"],
-    },
-  }));
+  await page.route(`**/deletions/${deletionId}`, (route) =>
+    route.fulfill({
+      json: {
+        id: deletionId,
+        meetingId,
+        state: complete ? "complete" : "pending",
+        required: ["ingest", "authz"],
+        completed: complete ? ["ingest", "authz"] : ["authz"],
+      },
+    }),
+  );
   await page.goto(`/w/${workspaceId}?deletionId=${deletionId}`);
   const panel = page.getByRole("region", { name: "Deletion status" });
   await expect(panel).toContainText("1/2 services acknowledged");
@@ -194,15 +203,21 @@ test("capture UI distinguishes admission, transcript coverage and unconfirmed st
   await page.goto(`/w/${workspaceId}?meetingId=${meetingId}`);
   await page.getByRole("button", { name: "Start capture", exact: true }).click();
   const panel = page.getByRole("region", { name: "Meeting capture" });
-  await expect(panel.getByRole("status")).toContainText("waiting for admission");
-  await expect(panel.getByRole("status")).toContainText("coverage: unknown");
+  await expect(panel.getByRole("status").filter({ hasText: /^Status:/ })).toContainText(
+    "waiting for admission",
+  );
+  await expect(panel.getByRole("status").filter({ hasText: /^Status:/ })).toContainText(
+    "coverage: unknown",
+  );
   await expect(panel).toContainText("<script>window.captureLeak = true</script>");
   expect(
     await page.evaluate(() => (window as unknown as Record<string, unknown>).captureLeak),
   ).toBeUndefined();
   await page.getByRole("button", { name: "Stop capture", exact: true }).click();
-  await expect(panel.getByRole("status")).toContainText("stopping");
-  await expect(panel.getByRole("status")).not.toContainText("complete");
+  await expect(panel.getByRole("status").filter({ hasText: /^Status:/ })).toContainText("stopping");
+  await expect(panel.getByRole("status").filter({ hasText: /^Status:/ })).not.toContainText(
+    "complete",
+  );
 });
 test("switching workspaces clears previous project and meeting context", async ({ page }) => {
   await fixture(page);
@@ -224,7 +239,9 @@ test("scheduled capture shows an unconfirmed join window and permits cancellatio
   await expect(panel).toContainText("Join window opens");
   await expect(panel).toContainText("not a confirmed meeting join");
   await page.getByRole("button", { name: "Stop capture", exact: true }).click();
-  await expect(panel.getByRole("status")).toContainText("cancelled");
+  await expect(panel.getByRole("status").filter({ hasText: /^Status:/ })).toContainText(
+    "cancelled",
+  );
 });
 test("backend outages keep the session and clear inaccessible data", async ({ page }) => {
   await fixture(page);

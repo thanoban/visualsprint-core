@@ -6,6 +6,9 @@ import { CaptureService } from "./application/capture-service.js";
 import { Authorities } from "./infrastructure/authorities.js";
 import { PostgresCapture } from "./infrastructure/store.js";
 import { RecallProvider } from "./infrastructure/recall.js";
+import { CaptureProcessingService } from "./application/capture-processing.js";
+import { PostgresCaptureProcessing } from "./infrastructure/capture-processing-store.js";
+import { CaptureProcessingAuthorities } from "./infrastructure/capture-processing-authority.js";
 const config = z
   .object({
     INGEST_DATABASE_URL: z.string().min(1),
@@ -16,6 +19,7 @@ const config = z
     RECALL_API_KEY: z.string().min(1),
     RECALL_REGION: z.enum(["us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1"]),
     RECALL_WEBHOOK_URL: z.string().url(),
+    CAPTURE_PROCESSING_ENABLED: z.enum(["true", "false"]).default("false"),
   })
   .parse(process.env);
 const key = await importJWK(JSON.parse(config.SERVICE_PRIVATE_JWK), "EdDSA");
@@ -29,12 +33,29 @@ const authorities = new Authorities(
   key,
   config.SERVICE_KEY_ID,
 );
+const processingService = new CaptureProcessingService(
+  new PostgresCaptureProcessing(pool),
+  new CaptureProcessingAuthorities(
+    { account: config.ACCOUNT_INTERNAL_URL, workspace: config.WORKSPACE_INTERNAL_URL },
+    key,
+    config.SERVICE_KEY_ID,
+  ),
+);
 const service = new CaptureService(
   repository,
   authorities,
   authorities,
   new RecallProvider(config.RECALL_API_KEY, config.RECALL_REGION),
   config.RECALL_WEBHOOK_URL,
+  undefined,
+  {
+    enabled: config.CAPTURE_PROCESSING_ENABLED === "true",
+    prepare: async (actor, id) => {
+      if (config.CAPTURE_PROCESSING_ENABLED === "true") await processingService.prepare(actor, id);
+    },
+    deleteMeeting: (ws, meeting, id, version) =>
+      processingService.deleteMeeting(ws, meeting, id, version),
+  },
 );
 const abort = new AbortController();
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => abort.abort());
