@@ -11,10 +11,12 @@
     "build": "tsc --outDir dist && node ../../scripts/build-service.mjs",
     "start": "node dist/main.mjs",
     "migrate": "node dist/migrate.mjs",
-    "worker": "node dist/worker.mjs"
+    "worker": "node dist/worker.mjs",
+    "events": "node dist/events.mjs"
   },
   "dependencies": {
     "@visualsprint/contracts": "workspace:*",
+    "@visualsprint/messaging": "workspace:*",
     "@visualsprint/platform": "workspace:*",
     "@azure/identity": "4.13.3",
     "drizzle-orm": "0.45.4",

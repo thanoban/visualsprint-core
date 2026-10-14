@@ -263,6 +263,9 @@ importers:
       '@visualsprint/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@visualsprint/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
       '@visualsprint/platform':
         specifier: workspace:*
         version: link:../../packages/platform
