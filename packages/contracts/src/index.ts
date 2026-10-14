@@ -72,6 +72,7 @@ export const eventTypes = [
   "capture.state.changed.v1",
   "transcript.revision.changed.v1",
   "transcript.finalized.v1",
+  "capture.processing.ready.v1",
   "summary.ready.v1",
   "proposal.confirmed.v1",
   "action.approved.v1",
@@ -111,6 +112,7 @@ export const eventEnvelope = z
               "action",
               "deletion",
               "notification",
+              "processing_consent",
             ]),
             id,
             revision: z.number().int().nonnegative().optional(),
@@ -119,7 +121,24 @@ export const eventEnvelope = z
       )
       .max(20),
   })
-  .strict();
+  .strict()
+  .superRefine((event, context) => {
+    if (event.type !== "capture.processing.ready.v1") return;
+    const captures = event.references.filter((ref) => ref.kind === "capture");
+    const meetings = event.references.filter((ref) => ref.kind === "meeting");
+    const consents = event.references.filter((ref) => ref.kind === "processing_consent");
+    if (
+      !event.actorId ||
+      captures.length !== 1 ||
+      meetings.length !== 1 ||
+      consents.length !== 1 ||
+      captures[0]?.id !== event.aggregateId ||
+      captures[0]?.revision !== event.aggregateVersion ||
+      !consents[0]?.revision ||
+      consents[0].revision < 1
+    )
+      context.addIssue({ code: "custom", message: "Invalid capture processing references" });
+  });
 export type DomainEvent = z.infer<typeof eventEnvelope>;
 
 export const confirmedAssignment = z

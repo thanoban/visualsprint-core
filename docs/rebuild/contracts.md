@@ -78,6 +78,24 @@ derived output. Recheck before publication. Prompt content is data and never too
 Initial model qualification: Azure GPT-4.1 mini and text-embedding-3-small, 1536 dimensions.
 Deployment names/versions/geography are configured and validated; no fallback to an unapproved vendor.
 
+### Explicit capture-processing authorization
+
+Automatic extraction requires an explicit owner consent, separate from recording/capture consent.
+The additive `capture.processing.ready.v1` event carries references only: one capture with its
+stable transcript revision, one meeting, and one processing consent with its positive version.
+The capture reference matches the aggregate ID and version, and the actor is the consenting owner.
+Operational status or usage-settlement updates do not establish a new transcript revision.
+
+An event is a work notification, not permission. The consumer must revalidate the current narrow
+consent, membership, meeting deletion barrier and transcript revision before reading evidence,
+calling a model or publishing output. A processing grant does not authorize ordinary chat,
+project sources or broader workspace reads. Capture stop and processing withdrawal are different
+commands; withdrawal must fence unknown or delayed consent creation. Accepted human facts remain
+separate from generated drafts.
+
+The event contract is implemented; producer/consumer activation and signed end-to-end processing
+remain qualification gates. Existing `transcript.finalized.v1` consumers retain their old semantics.
+
 Workflow stores approval bound to actor, workspace, destination, canonical payload hash and source
 revision. Integration executes only that approval. Changed payloads require new approval.
 Provider ambiguity enters reconciliation, not retry. Returned task status informs the next agenda;
