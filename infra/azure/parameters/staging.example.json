@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "prefix": { "value": "vsdemo" },
+    "stage": { "value": "staging" },
+    "location": { "value": "eastus2" },
+    "cellId": { "value": "cell-1" },
+    "registryName": { "value": "replacewithregistry" },
+    "registryResourceGroup": { "value": "replacewithregistrygroup" },
+    "accountAdministratorPassword": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replacewithgroup/providers/Microsoft.KeyVault/vaults/replacewithprovisioningvault"
+        },
+        "secretName": "account-provisioner-password"
+      }
+    },
+    "cellAdministratorPassword": {
+      "reference": {
+        "keyVault": {
+          "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/replacewithgroup/providers/Microsoft.KeyVault/vaults/replacewithprovisioningvault"
+        },
+        "secretName": "cell-provisioner-password"
+      }
+    },
+    "activateRuntime": { "value": false },
+    "activateMigrationJobs": { "value": false },
+    "activateBootstrapJobs": { "value": false },
+    "activateEdge": { "value": false },
+    "enablePreparationWorker": { "value": false },
+    "enableIndexingWorker": { "value": false },
+    "enableIntelligenceEvents": { "value": false },
+    "runtimeConfig": { "value": {} },
+    "migrationConfig": { "value": {} },
+    "bootstrapConfig": { "value": {} }
+  }
+}

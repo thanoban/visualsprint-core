@@ -8,6 +8,8 @@ on:
         "services/**",
         "tests/**",
         "infra/local/**",
+        "infra/azure/**",
+        "infra/containers/**",
         "scripts/**",
         "package.json",
         "pnpm-lock.yaml",
@@ -25,6 +27,8 @@ on:
         "services/**",
         "tests/**",
         "infra/local/**",
+        "infra/azure/**",
+        "infra/containers/**",
         "scripts/**",
         "package.json",
         "pnpm-lock.yaml",
@@ -37,6 +41,29 @@ on:
 permissions:
   contents: read
 jobs:
+  azure-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Acquire checksum-pinned offline Bicep compiler
+        shell: bash
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/Azure/bicep/releases/download/v0.48.1/bicep-linux-x64 --output "$RUNNER_TEMP/bicep"
+          printf '%s  %s\n' 'b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e' "$RUNNER_TEMP/bicep" | sha256sum --check --strict
+          chmod u+x "$RUNNER_TEMP/bicep"
+      - name: Compile and validate Azure source without cloud credentials
+        run: node infra/azure/validate.mjs
+        env:
+          BICEP_BIN: ${{ runner.temp }}/bicep
+      - name: Acquire local PostgreSQL qualification fixture
+        run: docker pull postgres:17.6-alpine
+      - name: Qualify private database role bootstrap without Azure access
+        run: node --test infra/azure/test/bootstrap.test.mjs
+        env:
+          AZURE_BOOTSTRAP_TEST_ENABLED: "true"
   verify:
     runs-on: ubuntu-latest
     steps:
