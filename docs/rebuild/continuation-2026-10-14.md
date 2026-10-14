@@ -98,3 +98,20 @@ consent, subscriptions, capture and complete signed composition remain release q
 
 Automatic-processing grant/evidence/consent UI work is in progress and unpublished. Withdrawal
 must fence unknown/late grant creation; AI withdrawal and capture stop are separate commands.
+
+## Frontend packaging and latest interruption
+
+Indexed chat `aa33121` and calendar/push `ee716e0` passed GitHub Actions. Root added a separate
+non-root static web image with default-deny build context and public-only build configuration.
+Web/gateway local image builds and two container smoke tests passed. The web server rejects
+private/traversal paths and API routing; Front Door must send APIs/webhooks to the gateway.
+No live browser authentication or Azure deployment is claimed.
+
+All three agents hit the account usage limit again while working on automatic processing and Azure.
+Their Account/Ingest/Workspace/UI consent changes and Azure modules are preserved, unpublished and
+incomplete. Resume owning tests and signed composition before any publication. The new shared
+processing-event contract is also uncommitted until the related work is reviewed together.
+
+Tooling note: the infrastructure agent acquired the official Bicep CLI in the per-user Azure CLI
+tool directory (no elevation or cloud authentication); later compiler use is intended to be local
+compile only. Azure source modules are not yet compiled/qualified as a complete release topology.

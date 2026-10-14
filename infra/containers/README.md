@@ -35,3 +35,25 @@ non-root execution/source exclusion/dependency resolution, starts the actual API
 health. It stops only its own temporary container. It does not use identity/model providers.
 Gateway build and this smoke test passed locally. Each other service image, worker/migration
 command and deployment configuration still requires its own qualification before release.
+
+## Frontend image
+
+```powershell
+docker build -f infra/containers/web.Dockerfile --build-arg VITE_WORKOS_CLIENT_ID=client_packaging_fixture --build-arg VITE_WORKOS_API_HOSTNAME=auth.invalid -t visualsprint-v3-web:local .
+node --test tests/container/packaging.test.mjs
+```
+
+These are deliberately invalid public authentication fixtures for smoke tests, not production
+credentials. Real release builds require the public WorkOS client ID and configured auth hostname.
+Never put API/model/service secrets into VITE variables or build arguments. Frontend configuration
+is baked into this artifact; differing environment configs require distinct builds/digests.
+
+The frontend image includes static dist output and a small non-root Node static server, not backend
+code, node_modules or environment files. SPA navigation uses index.html; missing assets, dotfiles
+and decoded traversal attempts are rejected. Responses omit URL/query logging. Private API and
+provider callback routes are not proxied by this server: Front Door must route /api/* and /webhooks/*
+to the gateway, with web assets/navigation routed to this separate frontend origin.
+
+Web and gateway container smoke tests passed locally, including HTML/assets/health, private-path
+rejection and non-root execution. Real browser authentication, Front Door routing, release image
+scanning, deployment recovery and provider behavior remain separate qualification gates.
