@@ -1,6 +1,41 @@
 import { z } from "zod";
 import { id } from "@visualsprint/contracts";
-export const actionSource = z.object({ meetingId: id, revision: z.number().int().positive() });
+export const actionSource = z
+  .object({
+    meetingId: id,
+    revision: z.number().int().positive(),
+    commitment: z.object({ id, version: z.number().int().positive() }).strict().optional(),
+  })
+  .strict();
+export const acceptedActionCommitment = z.object({
+  id,
+  meetingId: id,
+  kind: z.literal("commitment"),
+  version: z.number().int().positive(),
+  title: z.string().max(250),
+  text: z.string().max(12000),
+  dueDate: z.string().nullable(),
+  state: z.enum(["open", "completed", "cancelled"]),
+  humanReviewed: z.literal(true),
+  evidenceStatus: z.enum(["current", "changed", "unavailable"]),
+  sourcePartial: z.boolean(),
+});
+export const actionConnection = z.object({
+  id,
+  provider: z.enum(["jira", "github", "linear"]),
+  destination: z.string(),
+  status: z.enum(["configured", "disconnected"]),
+  version: z.number().int().positive(),
+});
+export const externalTaskStatus = z
+  .object({
+    operationId: id,
+    externalId: z.string().min(1).max(200),
+    state: z.string().max(80),
+    status: z.string().max(200),
+    updatedAt: z.string().max(100),
+  })
+  .strict();
 export const actionDraft = z.object({
   connectionId: id,
   provider: z.enum(["jira", "github", "linear"]),
@@ -12,7 +47,10 @@ export const actionDraft = z.object({
   payload: z.object({
     title: z.string().min(1).max(250),
     description: z.string().max(12000),
-    dueDate: z.string().nullable(),
+    dueDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .nullable(),
   }),
   source: actionSource,
 });

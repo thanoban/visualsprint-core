@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Api, errorMessage, type Meeting } from "./api.js";
 import { Feedback, Form, useCommand, useData } from "./ui.js";
+import { CommitmentActionDraft } from "./commitment-action-draft.js";
+import { ExternalTaskStatus } from "./external-task-status.js";
 import {
   actionDraft,
   reviewedAction,
   workflowOperation,
   operationMessage,
+  acceptedActionCommitment,
 } from "./workflow-model.js";
 export function WorkflowPanel({
   api,
@@ -21,15 +24,39 @@ export function WorkflowPanel({
 }) {
   const [revision, setRevision] = useState(0);
   const path = api.scope(workspaceId);
-  const actions = useData(
-    (signal) =>
-      owner
-        ? api.request(`${path}/actions?meetingId=${meeting.id}`, z.array(reviewedAction), {
-            signal,
-          })
-        : Promise.resolve([]),
-    [api, workspaceId, meeting.id, owner, revision],
-  );
+  const [actions, setActions] = useState<{
+    value?: z.infer<typeof reviewedAction>[];
+    error?: unknown;
+    loading: boolean;
+  }>({ loading: true });
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    setActions({ loading: true });
+    if (!owner) {
+      setActions({ value: [], loading: false });
+      return () => abort.abort();
+    }
+    async function poll() {
+      try {
+        const value = await api.request(
+          `${path}/actions?meetingId=${meeting.id}`,
+          z.array(reviewedAction).max(100),
+          { signal: abort.signal },
+        );
+        if (!abort.signal.aborted) setActions({ value, loading: false });
+      } catch (error) {
+        if (!abort.signal.aborted) setActions({ error, loading: false });
+      } finally {
+        if (!abort.signal.aborted) timer = setTimeout(() => void poll(), 5000);
+      }
+    }
+    void poll();
+    return () => {
+      abort.abort();
+      clearTimeout(timer);
+    };
+  }, [api, path, meeting.id, owner, revision]);
   if (!owner) return null;
   return (
     <section aria-label="Approved meeting actions" className="panel">
@@ -40,12 +67,26 @@ export function WorkflowPanel({
         exists.
       </p>
       <Feedback data={actions} />
-      <Draft
-        api={api}
-        path={path}
-        meeting={meeting}
-        changed={() => setRevision((value) => value + 1)}
-      />
+      <button type="button" onClick={() => setRevision((value) => value + 1)}>
+        Refresh reviewed actions
+      </button>
+      {actions.value ? (
+        <>
+          <CommitmentActionDraft
+            key={`${workspaceId}:${meeting.id}:${meeting.version}`}
+            api={api}
+            path={path}
+            meeting={meeting}
+            changed={() => setRevision((value) => value + 1)}
+          />
+          <Draft
+            api={api}
+            path={path}
+            meeting={meeting}
+            changed={() => setRevision((value) => value + 1)}
+          />
+        </>
+      ) : null}
       {actions.value
         ?.filter((action) => action.input.source.meetingId === meeting.id)
         .map((action) => (
@@ -181,6 +222,30 @@ function Review({
   const [operation, setOperation] = useState<z.infer<typeof workflowOperation>>();
   const [loadingOperation, setLoadingOperation] = useState(true);
   const [error, setError] = useState("");
+  const linked = action.input.source.commitment;
+  const [sourceRevision, setSourceRevision] = useState(0);
+  const source = useData(
+    (signal) =>
+      linked
+        ? api.request(`${path}/commitments/${linked.id}`, acceptedActionCommitment, { signal })
+        : Promise.resolve(null),
+    [api, path, linked?.id, linked?.version, sourceRevision],
+  );
+  useEffect(() => {
+    if (!linked) return;
+    const timer = setInterval(() => setSourceRevision((value) => value + 1), 5000);
+    return () => clearInterval(timer);
+  }, [linked?.id]);
+  const sourceBlocked =
+    !!linked &&
+    (source.loading ||
+      !!source.error ||
+      !source.value ||
+      source.value.id !== linked.id ||
+      source.value.meetingId !== meeting.id ||
+      source.value.version !== linked.version ||
+      source.value.state !== "open" ||
+      source.value.evidenceStatus !== "current");
   const stale = action.input.source.revision !== meeting.version;
   useEffect(() => {
     const abort = new AbortController();
@@ -214,6 +279,8 @@ function Review({
         const latest = await api.request(`${path}/operations/${operation.id}`, workflowOperation, {
           signal: abort.signal,
         });
+        if (latest.id !== operation.id || latest.actionId !== action.id)
+          throw new Error("Operation target changed.");
         if (!abort.signal.aborted) {
           setOperation(latest);
           setError("");
@@ -240,9 +307,22 @@ function Review({
         destination {action.input.destination}; connection {action.input.connectionId}.
       </p>
       <pre style={{ whiteSpace: "pre-wrap" }}>{action.input.payload.description}</pre>
+      <p>Exact due date: {action.input.payload.dueDate ?? "none"}.</p>
       <p>
         Source revision {action.input.source.revision}; approval fingerprint {action.payloadHash}.
       </p>
+      {linked ? (
+        <p>
+          Accepted commitment {linked.id}, revision {linked.version}. Human status and external task
+          status are separate.
+        </p>
+      ) : null}
+      {sourceBlocked ? (
+        <p role="alert">
+          The accepted source is loading, unavailable, changed or no longer open. Refresh and review
+          it before any approval or execution; no replacement task is created automatically.
+        </p>
+      ) : null}
       {stale ? (
         <p role="alert">
           The meeting changed. This draft needs review against the current revision before
@@ -255,7 +335,7 @@ function Review({
             <input
               type="checkbox"
               checked={confirmed}
-              disabled={stale || approve.busy}
+              disabled={stale || sourceBlocked || approve.busy}
               onChange={(event) => setConfirmed(event.target.checked)}
             />
             I approve this exact destination and task text.
@@ -264,7 +344,7 @@ function Review({
             title="Approve exact payload"
             button="Approve reviewed task"
             command={approve}
-            disabled={stale || !confirmed}
+            disabled={stale || sourceBlocked || !confirmed}
             submit={() =>
               void approve.run(
                 { id: action.id, expectedVersion: action.version, confirmed: true },
@@ -287,7 +367,9 @@ function Review({
             title="Execute approved task"
             button="Queue external task creation"
             command={execute}
-            disabled={stale || loadingOperation || Boolean(operation)}
+            disabled={
+              stale || sourceBlocked || loadingOperation || Boolean(operation) || Boolean(error)
+            }
             submit={() =>
               void execute.run(
                 { id: action.id, expectedVersion: action.version },
@@ -332,6 +414,9 @@ function Review({
           {operation.externalId ? `Reference: ${operation.externalId}` : ""}{" "}
           {operation.errorCode ? `Code: ${operation.errorCode}` : ""}
         </p>
+      ) : null}
+      {operation?.state === "confirmed" && operation.externalId ? (
+        <ExternalTaskStatus api={api} path={path} operation={operation} />
       ) : null}
       {error ? <p role="alert">{error}</p> : null}
     </article>
