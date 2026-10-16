@@ -31,15 +31,15 @@ flags default off and Account seeds a zero budget. The old standalone
 
 ## Operator setup
 
-| Process | Required opt-in / configuration |
-| --- | --- |
-| Account API | `CAPTURE_PROCESSING_ENABLED=true`, `CAPTURE_MODEL_ADMISSION_ENABLED=true`, pinned Ingest/Intelligence service trust and the owning database migrations. Follow [the dedicated budget procedure](../account/CAPTURE_MODEL_ADMISSION.md); its initial budget is zero. |
-| Ingest API and capture worker | `CAPTURE_PROCESSING_ENABLED=true`, Account's pinned callback key and existing service signing key/Account/Workspace origins. Ordinary capture stays separate from AI consent. |
-| Ingest publication process | `events.mjs`, `INGEST_EVENT_WORKER_KIND=processing`, both `CAPTURE_PROCESSING_ENABLED=true` and `CAPTURE_EXTRACTION_PUBLISH_ENABLED=true`; owning Ingest DSN, Ingest signing key and Account/Workspace origins. It does not need a Recall or model credential. |
-| Ingest ordinary events publisher | Separate default `events.mjs` process with `INGEST_EVENT_WORKER_KIND=publisher`; normal managed-identity sender access to `vs-ingest`. |
-| Intelligence API | `INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED=true`, `INTELLIGENCE_MODEL_ADMISSION_ENABLED=true`, owning migration `0007`, configured Azure text deployment/managed identity, Account/Workspace/Ingest origins and pinned Ingest key for the dedicated signed event endpoint. |
-| Intelligence events process | Same extraction/runtime settings, `SERVICE_BUS_NAMESPACE` and receiver access to `vs-ingest/capture-extraction-v1`; optional `INTELLIGENCE_CAPTURE_SUBSCRIPTION` defaults to that subscription. Existing `vs-intelligence` outbox publication remains unchanged. |
-| Intelligence extraction worker | Separate `worker.mjs` process, same runtime settings and `INTELLIGENCE_WORKER_KIND=extraction`. Interactive chat retains its own worker/model quota purpose. |
+| Process                          | Required opt-in / configuration                                                                                                                                                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Account API                      | `CAPTURE_PROCESSING_ENABLED=true`, `CAPTURE_MODEL_ADMISSION_ENABLED=true`, pinned Ingest/Intelligence service trust and the owning database migrations. Follow [the dedicated budget procedure](../account/CAPTURE_MODEL_ADMISSION.md); its initial budget is zero.      |
+| Ingest API and capture worker    | `CAPTURE_PROCESSING_ENABLED=true`, Account's pinned callback key and existing service signing key/Account/Workspace origins. Ordinary capture stays separate from AI consent.                                                                                            |
+| Ingest publication process       | `events.mjs`, `INGEST_EVENT_WORKER_KIND=processing`, both `CAPTURE_PROCESSING_ENABLED=true` and `CAPTURE_EXTRACTION_PUBLISH_ENABLED=true`; owning Ingest DSN, Ingest signing key and Account/Workspace origins. It does not need a Recall or model credential.           |
+| Ingest ordinary events publisher | Separate default `events.mjs` process with `INGEST_EVENT_WORKER_KIND=publisher`; normal managed-identity sender access to `vs-ingest`.                                                                                                                                   |
+| Intelligence API                 | `INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED=true`, `INTELLIGENCE_MODEL_ADMISSION_ENABLED=true`, owning migration `0007`, configured Azure text deployment/managed identity, Account/Workspace/Ingest origins and pinned Ingest key for the dedicated signed event endpoint. |
+| Intelligence events process      | Same extraction/runtime settings, `SERVICE_BUS_NAMESPACE` and receiver access to `vs-ingest/capture-extraction-v1`; optional `INTELLIGENCE_CAPTURE_SUBSCRIPTION` defaults to that subscription. Existing `vs-intelligence` outbox publication remains unchanged.         |
+| Intelligence extraction worker   | Separate `worker.mjs` process, same runtime settings and `INTELLIGENCE_WORKER_KIND=extraction`. Interactive chat retains its own worker/model quota purpose.                                                                                                             |
 
 Provision the broker subscription and least-privilege managed identities through reviewed
 infrastructure. Configure keys/DSNs in the secret manager, not browser variables or source.
@@ -80,8 +80,10 @@ release gate. Account estimates are not represented as measured provider billing
 Owning tests use real PostgreSQL plus controlled provider/model/HTTP transports; no paid
 meeting or model calls are made. They cover tenant and owner isolation, duplicate events,
 publication races, corrections, withdrawal, deletion, source changes, unknown outcomes and
-one-shot dispatch. Separate native composition must exercise the exact Account readiness
-callback and dedicated model reservation as well as broker delivery.
+one-shot dispatch. The signed local foundation composition exercises the exact Account readiness
+callback, dedicated model reservation, metadata producer/outbox, signed receiver, private draft
+retrieval, duplicate-generation deduplication and withdrawal. Its broker hop and model are controlled;
+actual Service Bus delivery/recovery and Azure model calls still require staging qualification.
 
 Live WorkOS/Recall/Meet/Zoom/Teams, Azure identity/model availability/quota, Service Bus
 delivery/recovery, production restoration and founder benchmarks remain external gates.

@@ -1,5 +1,30 @@
 # Implementation status
 
+## Current consolidated checkpoint — 2026-10-16
+
+The sections below are historical implementation records, not the current remaining-feature
+inventory. The active rebuild is `codex/zedex-web-rebuild`, in the separate managed worktree;
+the legacy application remains preserved. Read
+[the current continuation checkpoint](continuation-2026-10-16.md) before starting another slice.
+
+Published through `f7460ae`: separate service databases and signed delegation; private customer/
+project meetings and accepted records; durable calendar synchronization and capture orchestration;
+managed text-only capture; explicit scoped processing consent; saved chats and optional indexed
+retrieval/preparation; exact-payload approved-action backends and linked review UI; notifications, complete reviewed-record exports and
+coordinated deletion; native metadata publishers; separate non-root web/service images; and Azure
+infrastructure source with offline qualification. Owner-reviewed agenda persistence/UI, logout-safe
+consent withdrawal and the gated automatic capture-extraction consumer are now implemented.
+GitHub Actions run `38839508546` passed both verification jobs for `f7460ae`, including
+browser, Docker integration, profile and isolated accepted-record checks.
+
+These are implementation/controlled-test results, not a production-readiness claim. In particular,
+automatic extraction passed native signed local composition but still requires live broker/model and deployment qualification. Native Blob/PubSub
+adapters, live identity/providers/models, Azure deployment, restore/rollback and capacity/pilot
+qualification remain explicit gates. Draft preparation is not an owner-approved agenda.
+
+The continuation file records the latest checks, corrective work and remaining gaps. No paid Azure resources or live meeting/model
+calls have been made by these rebuild slices.
+
 Date: 2026-10-12. Branch: codex/zedex-web-rebuild.
 
 ## Implemented in the first foundation slice
