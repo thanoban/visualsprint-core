@@ -58,11 +58,16 @@ async function fixture() {
       ? (JSON.parse(String(init.body)) as Record<string, unknown>)
       : undefined;
     requests.push({ path: url.pathname, body });
-    if (url.pathname.endsWith("manage-context")) {
+    if (url.pathname === `/api/v3/workspaces/${proof.workspaceId}/meetings/${proof.meetingId}`) {
       assert.equal(init?.method, "GET");
       assert.equal(init?.body, undefined);
       assert.equal(hop.actor.operationGrantId, undefined);
-      return Response.json({ meetingId: proof.meetingId, ownerId: proof.ownerId });
+      return Response.json({
+        id: proof.meetingId,
+        ownerId: proof.ownerId,
+        title: "Only owner metadata is parsed",
+        notes: "Owner authorized text",
+      });
     }
     assert.equal(init?.method, "POST");
     assert.equal(hop.actor.operationGrantId, proof.consentId);
@@ -151,6 +156,33 @@ test("dedicated capture client signs exact narrow proofs, drains bounded pages a
   await evidence.owner(
     { actorId: f.proof.ownerId, workspaceId: f.proof.workspaceId, sessionId: "current-user" },
     f.proof.meetingId,
+  );
+  await assert.rejects(
+    evidence.owner(
+      { actorId: randomUUID(), workspaceId: f.proof.workspaceId, sessionId: "other-member" },
+      f.proof.meetingId,
+    ),
+    /FORBIDDEN/,
+  );
+  await assert.rejects(
+    evidence.owner(
+      {
+        actorId: f.proof.ownerId,
+        workspaceId: f.proof.workspaceId,
+        sessionId: `operation:${f.proof.consentId}`,
+        operationGrantId: f.proof.consentId,
+      },
+      f.proof.meetingId,
+    ),
+    /FORBIDDEN/,
+  );
+  await assert.rejects(
+    f.client.request(
+      { actorId: f.proof.ownerId, workspaceId: f.proof.workspaceId, sessionId: "owner" },
+      "workspace",
+      `/api/v3/workspaces/${f.proof.workspaceId}/projects`,
+    ),
+    /PROCESSING_SCOPE_MISMATCH/,
   );
   f.malformed = true;
   await assert.rejects(evidence.read(f.proof), /INVALID_PROCESSING_EVIDENCE/);

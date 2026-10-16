@@ -32,7 +32,14 @@ export class CaptureProcessingClient {
     path: string,
     body?: unknown,
   ) {
-    if (!path.startsWith(`/internal/workspaces/${id.parse(actor.workspaceId)}/`))
+    const workspaceId = id.parse(actor.workspaceId);
+    const ownerRead =
+      audience === "workspace" &&
+      body === undefined &&
+      !actor.operationGrantId &&
+      !actor.sessionId.startsWith("operation:") &&
+      new RegExp(`^/api/v3/workspaces/${workspaceId}/meetings/[0-9a-f-]{36}$`, "i").test(path);
+    if (!path.startsWith(`/internal/workspaces/${workspaceId}/`) && !ownerRead)
       throw new AppError("PROCESSING_SCOPE_MISMATCH", 403);
     const token = await serviceToken({
       caller: "intelligence",
@@ -164,16 +171,15 @@ export class AuthorizedCaptureExtractionEvidence implements CaptureExtractionEvi
     if (actor.operationGrantId || actor.sessionId.startsWith("operation:"))
       throw new AppError("FORBIDDEN", 403);
     const owner = z
-      .object({ meetingId: id, ownerId: id })
-      .strict()
+      .object({ id, ownerId: id })
       .parse(
         await this.client.request(
           actor,
           "workspace",
-          `/internal/workspaces/${id.parse(actor.workspaceId)}/meetings/${id.parse(meetingId)}/manage-context`,
+          `/api/v3/workspaces/${id.parse(actor.workspaceId)}/meetings/${id.parse(meetingId)}`,
         ),
       );
-    if (owner.meetingId !== meetingId || owner.ownerId !== actor.actorId)
+    if (owner.id !== meetingId || owner.ownerId !== actor.actorId)
       throw new AppError("FORBIDDEN", 403);
   }
   async read(proof: FinalizedCaptureProof): Promise<Snapshot> {
