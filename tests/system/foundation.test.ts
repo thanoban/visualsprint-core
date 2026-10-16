@@ -30,13 +30,35 @@ import { PostgresModelUsage } from "../../services/account/src/infrastructure/mo
 import { CaptureConsentService } from "../../services/account/src/application/capture-consent.js";
 import { PostgresCaptureConsents } from "../../services/account/src/infrastructure/capture-consent-store.js";
 import { IngestCaptureOwnerContext } from "../../services/account/src/infrastructure/capture-owner-context.js";
+import { CaptureModelUsageService } from "../../services/account/src/application/capture-model-usage.js";
+import { PostgresCaptureModelUsage } from "../../services/account/src/infrastructure/capture-model-store.js";
+import { IngestCaptureModelReadiness } from "../../services/account/src/infrastructure/capture-model-readiness.js";
 import { CaptureProcessingService } from "../../services/ingest/src/application/capture-processing.js";
 import { PostgresCaptureProcessing } from "../../services/ingest/src/infrastructure/capture-processing-store.js";
 import { CaptureProcessingAuthorities } from "../../services/ingest/src/infrastructure/capture-processing-authority.js";
+import { CaptureProcessingPublisher } from "../../services/ingest/src/application/capture-processing-publication.js";
+import { PostgresCapturePublications } from "../../services/ingest/src/infrastructure/capture-processing-publication-store.js";
+import { DurableCaptureExtraction } from "../../services/intelligence/src/application/capture-extraction.js";
+import { PostgresCaptureExtractions } from "../../services/intelligence/src/infrastructure/capture-extraction-store.js";
+import {
+  CaptureProcessingClient,
+  AuthorizedCaptureExtractionEvidence,
+  CaptureModelAdmission,
+} from "../../services/intelligence/src/infrastructure/capture-processing-client.js";
+import { PostgresModelDispatch } from "../../services/intelligence/src/infrastructure/model-dispatch.js";
+import { AuthorizedSources } from "../../services/intelligence/src/infrastructure/sources.js";
+import { intelligenceApp } from "../../services/intelligence/src/http/app.js";
 import { CaptureProcessingContext } from "../../services/workspace/src/application/capture-processing-context.js";
 import { PostgresProcessingMeetings } from "../../services/workspace/src/infrastructure/processing-meetings.js";
 import { AccountCaptureProcessing } from "../../services/workspace/src/infrastructure/account-processing-client.js";
 import { captureProcessingContextRoutes } from "../../services/workspace/src/http/capture-processing-context-routes.js";
+import { AgendasService } from "../../services/workspace/src/application/agendas.js";
+import { PostgresAgendas } from "../../services/workspace/src/infrastructure/agenda-store.js";
+import { WorkspaceExportContext } from "../../services/workspace/src/application/export-context.js";
+import {
+  agendaRoutes,
+  exportContextRoutes,
+} from "../../services/workspace/src/http/agenda-routes.js";
 import { gatewayApp } from "../../services/gateway/src/http/app.js";
 import { authzApp } from "../../services/authz/src/app.js";
 import { OpenFgaPolicy } from "../../services/authz/src/policy.js";
@@ -183,6 +205,18 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     }),
     new ModelUsageService(new PostgresModelUsage(accountDb)),
     processingConsents,
+    new CaptureModelUsageService(
+      new PostgresCaptureModelUsage(accountDb),
+      {
+        assertReady: (actor, input) =>
+          new IngestCaptureModelReadiness(
+            ingestUrl,
+            accountKey.privateKey,
+            "account-test",
+          ).assertReady(actor, input),
+      },
+      true,
+    ),
   );
   const accountUrl = await account.listen({ host: "127.0.0.1", port: 0 });
   const identity = new ServiceIdentity("workspace", { gateway: [gatewayPublic] });
@@ -336,6 +370,19 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
           intelligence: readerPublic.intelligence!,
         }).verify(token)
       ).actor,
+  );
+  const agendaStore = new PostgresAgendas(workspaceDb);
+  agendaRoutes(
+    workspace,
+    new AgendasService(agendaStore, workspaceService),
+    async (token) => (await identity.verify(token)).actor,
+  );
+  exportContextRoutes(
+    workspace,
+    new WorkspaceExportContext(workspaceService, agendaStore, commitments),
+    async (token) =>
+      (await new ServiceIdentity("workspace", { reporting: readerPublic.reporting! }).verify(token))
+        .actor,
   );
   const workspaceUrl = await workspace.listen({ host: "127.0.0.1", port: 0 });
   const calendarIdentity = new ServiceIdentity("integration", { gateway: [gatewayPublic] });
@@ -504,6 +551,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     {
       enabled: true,
       prepare: (actor, id) => processingService.prepare(actor, id),
+      reconcileWithdrawal: (actor, id) => processingService.reconcileWithdrawal(actor, id),
       deleteMeeting: (ws, meeting, id, version) =>
         processingService.deleteMeeting(ws, meeting, id, version),
     },
@@ -538,6 +586,9 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
           )
         ).actor,
     },
+    async (token) =>
+      (await new ServiceIdentity("ingest", { reporting: readerPublic.reporting! }).verify(token))
+        .actor,
   );
   ingestUrl = await ingest.listen({ host: "127.0.0.1", port: 0 });
   deletionPorts.ingest = new HttpDeletionParticipant(
@@ -556,6 +607,71 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     integrationPublic,
     keys: readKeys,
   });
+  // Same owning Intelligence database/runtime, with only model responses controlled.
+  // The model admission, grant readiness, evidence and user API hops are native signed HTTP.
+  const extractionDb = databasePool(
+    "postgres://vs_intelligence_runtime:local-runtime-only@127.0.0.1:55438/intelligence",
+    3,
+  );
+  const extractionJobs = new PostgresCaptureExtractions(extractionDb);
+  const captureClient = new CaptureProcessingClient(
+    { account: accountUrl, workspace: workspaceUrl, ingest: ingestUrl },
+    readKeys.intelligence.privateKey,
+    "intelligence-test",
+  );
+  let extractionModelCalls = 0;
+  const extractionService = new DurableCaptureExtraction(
+    extractionJobs,
+    new AuthorizedCaptureExtractionEvidence(captureClient),
+    {
+      async generate({ evidence }) {
+        extractionModelCalls++;
+        return {
+          claims: evidence
+            .slice(0, 1)
+            .map((row) => ({
+              kind: "discussion",
+              text: row.text,
+              citation: {
+                meetingId: row.meetingId,
+                captureId: row.captureId,
+                segmentId: row.segmentId,
+                revision: row.revision,
+              },
+            })),
+          unsupported: evidence.length === 0,
+        };
+      },
+    },
+    new CaptureModelAdmission(captureClient, new PostgresModelDispatch(extractionDb)),
+    new AuthorizedSources(
+      { account: accountUrl, workspace: workspaceUrl, ingest: ingestUrl },
+      readKeys.intelligence.privateKey,
+      "intelligence-test",
+    ),
+  );
+  const extractionApi = intelligenceApp(
+    follow.intelligence,
+    async (token) =>
+      (await new ServiceIdentity("intelligence", { gateway: [gatewayPublic] }).verify(token)).actor,
+    async (token) =>
+      (await new ServiceIdentity("intelligence", { workspace: [workspacePublic] }).verify(token))
+        .actor,
+    async (token) =>
+      (
+        await new ServiceIdentity("intelligence", {
+          gateway: [gatewayPublic],
+          workspace: [workspacePublic],
+        }).verify(token)
+      ).actor,
+    {
+      extraction: extractionService,
+      authenticateCaptureEvent: async (token) =>
+        (await new ServiceIdentity("intelligence", { ingest: [ingestPublic] }).verify(token)).actor,
+      purgeDerived: (workspaceId, meetingId) => extractionJobs.purgeMeeting(workspaceId, meetingId),
+    },
+  );
+  const extractionUrl = await extractionApi.listen({ host: "127.0.0.1", port: 0 });
   commitmentEvidence = new AuthorizedCommitmentEvidence(
     ingestUrl,
     follow.urls.intelligence,
@@ -565,7 +681,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   for (const name of ["intelligence", "reporting", "workflow", "notification"] as const)
     deletionPorts[name] = new HttpDeletionParticipant(
       name,
-      follow.urls[name],
+      name === "intelligence" ? extractionUrl : follow.urls[name],
       workspaceKey.privateKey,
       "workspace-test",
     );
@@ -578,6 +694,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
           ingest: ingestUrl,
           integration: integrationUrl,
           ...follow.urls,
+          intelligence: extractionUrl,
         },
       },
       privateKey: gatewayKey.privateKey,
@@ -599,7 +716,7 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
   const ownerHeaders = { authorization: `Bearer ${ownerToken}`, "idempotency-key": randomUUID() };
   const memberHeaders = { authorization: `Bearer ${memberToken}` };
   const invoke = async (
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     url: string,
     headers: Record<string, string>,
     payload?: unknown,
@@ -631,6 +748,27 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     assert.equal(created.status, 200);
     const workspaceId = String(created.data.id);
     const base = `/api/v3/workspaces/${workspaceId}`;
+    // Explicit local test operator policy. Production starts at zero and is never
+    // modified by service runtime or by this fixture against a remote environment.
+    const budgetOperator = await accountMigration.connect();
+    try {
+      await budgetOperator.query("BEGIN");
+      await budgetOperator.query("SELECT set_config('app.workspace_id',$1,true)", [workspaceId]);
+      await budgetOperator.query(
+        "INSERT INTO model_entitlements(workspace_id,purpose) VALUES($1,'capture_extraction') ON CONFLICT DO NOTHING",
+        [workspaceId],
+      );
+      await budgetOperator.query(
+        "UPDATE model_entitlements SET max_concurrent=2,monthly_input_tokens=100000,monthly_output_tokens=12000 WHERE workspace_id=$1 AND purpose='capture_extraction'",
+        [workspaceId],
+      );
+      await budgetOperator.query("COMMIT");
+    } catch (error) {
+      await budgetOperator.query("ROLLBACK");
+      throw error;
+    } finally {
+      budgetOperator.release();
+    }
     const calendarStart = await invoke(
       "POST",
       `${base}/connections/calendar/oauth/start`,
@@ -955,6 +1093,81 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(scopedEvidence.status, 200, await scopedEvidence.clone().text());
     assert.equal((await scopedEvidence.json()).segments[0].text, "Approved");
+    const publicationStore = new PostgresCapturePublications(ingestDb);
+    const publication = new CaptureProcessingPublisher(publicationStore, processingService);
+    await publication.work(workspaceId, String(capture.data.id));
+    let processingEvent: unknown;
+    await captureRepository.publish(workspaceId, {
+      async publish(event) {
+        if (event.type === "capture.processing.ready.v1") processingEvent = event;
+      },
+    });
+    assert.ok(processingEvent, "Finalized opted-in capture must commit a processing-ready event");
+    // Local transport stands in only for the broker; the receiver and every
+    // downstream authority/admission/evidence request verify native service signatures.
+    const ingressToken = await serviceToken({
+      caller: "ingest",
+      audience: "intelligence",
+      actor: {
+        actorId: String(capture.data.ownerId),
+        workspaceId,
+        sessionId: "ingest-capture-event",
+      },
+      privateKey: ingestKey.privateKey,
+      keyId: "ingest-test",
+    });
+    const deliverProcessing = async (event: unknown) => {
+      const response = await fetch(
+        `${extractionUrl}/internal/workspaces/${workspaceId}/capture-processing/events`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${ingressToken}`, "content-type": "application/json" },
+          body: JSON.stringify(event),
+        },
+      );
+      const data = (await response.json()) as { id: string | null; rejected?: boolean };
+      assert.equal(response.status, 202, JSON.stringify(data));
+      return data;
+    };
+    const automatic = await deliverProcessing(processingEvent);
+    assert.ok(automatic.id);
+    await extractionService.work(workspaceId, automatic.id);
+    const automaticDraft = await invoke(
+      "GET",
+      `${base}/intelligence/capture-extractions/${automatic.id}`,
+      ownerHeaders,
+    );
+    assert.equal(automaticDraft.status, 200, JSON.stringify(automaticDraft.data));
+    assert.equal(automaticDraft.data.status, "complete", JSON.stringify(automaticDraft.data));
+    assert.equal(
+      (automaticDraft.data.result as { claims: { text: string }[]; partial: boolean }).claims[0]!
+        .text,
+      "Approved",
+    );
+    assert.equal((automaticDraft.data.result as { partial: boolean }).partial, true);
+    assert.equal(extractionModelCalls, 1);
+    assert.equal(
+      (
+        await invoke(
+          "GET",
+          `${base}/intelligence/capture-extractions/${automatic.id}`,
+          memberHeaders,
+        )
+      ).status,
+      403,
+    );
+    const replay = await deliverProcessing(processingEvent);
+    assert.equal(replay.id, automatic.id);
+    await extractionService.work(workspaceId, replay.id!);
+    assert.equal(extractionModelCalls, 1);
+    // A fresh envelope for the same generation also maps to the original job.
+    const duplicateGeneration = await deliverProcessing({
+      ...(processingEvent as Record<string, unknown>),
+      eventId: randomUUID(),
+    });
+    assert.equal(duplicateGeneration.id, automatic.id);
+    await extractionService.work(workspaceId, automatic.id);
+    assert.equal(extractionModelCalls, 1);
     const withdrawal = await invoke(
       "POST",
       `${base}/captures/${capture.data.id}/processing-consent/withdraw`,
@@ -963,6 +1176,15 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(withdrawal.status, 202, JSON.stringify(withdrawal.data));
     assert.equal(withdrawal.data.state, "revoked");
+    const afterWithdrawal = await deliverProcessing({
+      ...(processingEvent as Record<string, unknown>),
+      eventId: randomUUID(),
+    });
+    assert.equal(afterWithdrawal.id, null);
+    assert.equal(afterWithdrawal.rejected, true);
+    assert.equal(extractionModelCalls, 1);
+    const newCandidate = await publicationStore.candidate(workspaceId, String(capture.data.id));
+    assert.equal(newCandidate, null);
     assert.equal(
       (await captureRepository.scoped(workspaceId, (tx) => tx.load(String(capture.data.id))))!
         .stopRequested,
@@ -1038,6 +1260,66 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
     );
     assert.equal(download.status, 200, JSON.stringify(download.data));
     assert.ok(JSON.stringify(download.data).includes("Approved"));
+    assert.equal(download.data.schemaVersion, 2);
+    const agendaMeeting = await invoke(
+      "POST",
+      `${base}/meetings`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { title: "Owner-reviewed agenda export" },
+    );
+    assert.equal(agendaMeeting.status, 201, JSON.stringify(agendaMeeting.data));
+    const agendaPath = `${base}/meetings/${agendaMeeting.data.id}/agendas`;
+    const reviewedAgenda = await invoke(
+      "POST",
+      agendaPath,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      {
+        title: "Confirm next steps",
+        body: "Review requirements before committing a date.",
+        confirmed: true,
+        expectedMeetingVersion: 1,
+      },
+    );
+    assert.equal(reviewedAgenda.status, 201, JSON.stringify(reviewedAgenda.data));
+    const agendaExport = await invoke(
+      "POST",
+      `${base}/exports`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      { meetingId: agendaMeeting.data.id, format: "json" },
+    );
+    assert.equal(agendaExport.status, 202, JSON.stringify(agendaExport.data));
+    await follow.reporting.work(workspaceId, String(agendaExport.data.id));
+    const agendaDownload = await invoke(
+      "GET",
+      `${base}/exports/${agendaExport.data.id}/download`,
+      ownerHeaders,
+    );
+    assert.equal(agendaDownload.status, 200, JSON.stringify(agendaDownload.data));
+    assert.equal(agendaDownload.data.schemaVersion, 2);
+    assert.ok(
+      JSON.stringify(agendaDownload.data).includes("Review requirements before committing a date."),
+    );
+    assert.equal((await invoke("GET", agendaPath, memberHeaders)).status, 403);
+    const revisedAgenda = await invoke(
+      "PATCH",
+      `${agendaPath}/${reviewedAgenda.data.id}`,
+      { ...ownerHeaders, "idempotency-key": randomUUID() },
+      {
+        title: "Confirm corrected next steps",
+        body: "Do not reuse the old exported agenda.",
+        confirmed: true,
+        expectedMeetingVersion: 2,
+        expectedVersion: 1,
+      },
+    );
+    assert.equal(revisedAgenda.status, 200, JSON.stringify(revisedAgenda.data));
+    const staleAgendaDownload = await invoke(
+      "GET",
+      `${base}/exports/${agendaExport.data.id}/download`,
+      ownerHeaders,
+    );
+    assert.equal(staleAgendaDownload.status, 409, JSON.stringify(staleAgendaDownload.data));
+    assert.equal(staleAgendaDownload.data.code, "EXPORT_SOURCE_CHANGED");
     const connector = await invoke(
       "POST",
       `${base}/action-connections`,
@@ -1349,6 +1631,8 @@ test("gateway, separate Account/Workspace databases and signed services enforce 
       401,
     );
   } finally {
+    await extractionApi.close();
+    await extractionDb.end();
     await follow.close();
     await gateway.close();
     await integration.close();

@@ -12,6 +12,7 @@
     "boundaries": "node scripts/check-boundaries.mjs",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:offline": "tsx --test tests/system/offline-*.test.ts",
     "build": "turbo run build",
     "test:integration": "pnpm -r --if-present run test:integration && tsx --test tests/system/*.test.ts"
   },

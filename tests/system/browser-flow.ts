@@ -81,7 +81,7 @@ export async function browserMeetingFlow(
     await expect(calendars.getByRole("status").filter({ hasText: /^google:/ })).toContainText(
       "disconnected",
     );
-    assert.equal(await page.getByRole("alert").count(), 0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
   } finally {
     await browser.close();
     await server.close();

@@ -76,6 +76,8 @@ jobs:
           version: "11.1.3"
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Check cross-service contracts without Docker or providers
+        run: pnpm test:offline
       - run: pnpm build
       - run: pnpm --filter @visualsprint/web exec playwright install --with-deps chromium
       - run: pnpm --filter @visualsprint/web test:browser
