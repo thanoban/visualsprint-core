@@ -50,6 +50,7 @@ const service = new CaptureService(
   undefined,
   {
     enabled: config.CAPTURE_PROCESSING_ENABLED === "true",
+    reconcileWithdrawal: (actor, id) => processingService.reconcileWithdrawal(actor, id),
     prepare: async (actor, id) => {
       if (config.CAPTURE_PROCESSING_ENABLED === "true") await processingService.prepare(actor, id);
     },

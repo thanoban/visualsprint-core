@@ -144,6 +144,10 @@ export class CaptureProcessingService {
     private readonly repository: ProcessingRepository,
     private readonly authority: ProcessingAuthority,
   ) {}
+  async reconcileWithdrawal(actor: Actor, captureId: string) {
+    const intent = await this.repository.intent(actor.workspaceId, captureId);
+    if (intent?.state === "withdraw_requested") await this.reconcile(actor, captureId);
+  }
   async prepare(actor: Actor, captureId: string) {
     const intent = await this.repository.intent(actor.workspaceId, captureId);
     if (!intent) return;
@@ -357,6 +361,35 @@ export class CaptureProcessingService {
       transcriptRevision: input.transcriptRevision,
       coverage: after.capture.coverage,
       ...page,
+    };
+  }
+  async readyContext(actor: Actor, captureId: string, body: unknown) {
+    const input = z
+      .object({ proof: processingBinding, transcriptRevision: z.number().int().positive() })
+      .strict()
+      .parse(body);
+    if (input.proof.captureId !== id.parse(captureId))
+      throw new AppError("PROCESSING_SCOPE_MISMATCH", 403);
+    const before = await this.permitted(actor, input.proof);
+    const after = await this.permitted(actor, input.proof);
+    if (
+      before.capture.transcriptRevision !== input.transcriptRevision ||
+      after.capture.transcriptRevision !== input.transcriptRevision ||
+      before.capture.coverage !== after.capture.coverage ||
+      before.workspace.meetingVersion !== after.workspace.meetingVersion
+    )
+      throw new AppError("PROCESSING_REVISION_CHANGED", 409);
+    return {
+      workspaceId: actor.workspaceId,
+      captureId,
+      meetingId: input.proof.meetingId,
+      ownerId: actor.actorId,
+      consentId: input.proof.consentId,
+      consentVersion: input.proof.expectedVersion,
+      policyVersion: input.proof.policyVersion,
+      transcriptRevision: input.transcriptRevision,
+      state: after.capture.state as "complete" | "partial",
+      ready: true as const,
     };
   }
 }

@@ -16,10 +16,12 @@ export function ingestApp(
   authenticateRead?: (token: string) => Promise<Actor>,
   authenticateDeletion?: (token: string) => Promise<Actor>,
   processing?: {
+    enabled?: boolean;
     service: CaptureProcessingService;
     authenticateOwner: (token: string) => Promise<Actor>;
     authenticateEvidence: (token: string) => Promise<Actor>;
   },
+  authenticateExporter?: (token: string) => Promise<Actor>,
 ) {
   const app = Fastify({
     bodyLimit: 1_000_000,
@@ -27,10 +29,21 @@ export function ingestApp(
   });
   installErrorHandler(app);
   app.get("/health", async () => ({ status: "ok", service: "ingest" }));
+  app.get(
+    "/internal/workspaces/:workspaceId/meetings/:meetingId/export-captures",
+    async (request) => {
+      if (!authenticateExporter) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
+      const actor = await authenticateExporter(bearer(request.headers.authorization));
+      const params = request.params as { workspaceId: string; meetingId: string };
+      if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
+      return service.exportCaptures(actor, id.parse(params.meetingId));
+    },
+  );
   app.post(
     "/internal/workspaces/:workspaceId/captures/:captureId/processing-owner-context",
     async (request) => {
-      if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+      if (!processing || processing.enabled === false)
+        throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
       const actor = await processing.authenticateOwner(bearer(request.headers.authorization)),
         params = request.params as { workspaceId: string; captureId: string };
       if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
@@ -40,11 +53,23 @@ export function ingestApp(
   app.post(
     "/internal/workspaces/:workspaceId/captures/:captureId/processing-evidence",
     async (request) => {
-      if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+      if (!processing || processing.enabled === false)
+        throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
       const actor = await processing.authenticateEvidence(bearer(request.headers.authorization)),
         params = request.params as { workspaceId: string; captureId: string };
       if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
       return processing.service.evidence(actor, id.parse(params.captureId), request.body);
+    },
+  );
+  app.post(
+    "/internal/workspaces/:workspaceId/captures/:captureId/processing-ready-context",
+    async (request) => {
+      if (!processing || processing.enabled === false)
+        throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+      const actor = await processing.authenticateOwner(bearer(request.headers.authorization));
+      const params = request.params as { workspaceId: string; captureId: string };
+      if (id.parse(params.workspaceId) !== actor.workspaceId) throw new AppError("FORBIDDEN", 403);
+      return processing.service.readyContext(actor, id.parse(params.captureId), request.body);
     },
   );
   app.post("/internal/workspaces/:workspaceId/evidence-batch", async (request) => {
@@ -148,7 +173,8 @@ export function ingestApp(
         };
       });
       routes.post("/captures/:requestId/processing-consent", async (request, reply) => {
-        if (!processing) throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+        if (!processing || processing.enabled === false)
+          throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
         const key = request.headers["idempotency-key"];
         if (typeof key !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
         await processing.service.consent(

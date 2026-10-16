@@ -258,9 +258,12 @@ async function nativeFixture() {
     reservations = 0,
     creates = 0,
     cleanupFails = false,
-    cleanupCalls = 0;
+    cleanupCalls = 0,
+    withdrawalFails = false,
+    ownerLoggedOut = false;
   const authority: ProcessingAuthority = {
     async owner(candidate, target) {
+      if (ownerLoggedOut) throw new AppError("FORBIDDEN", 403);
       if (candidate.actorId !== actor.actorId || target !== meetingId)
         throw new AppError("FORBIDDEN", 403);
     },
@@ -286,6 +289,7 @@ async function nativeFixture() {
       throw new AppError("NOT_CONFIGURED_TEST", 503);
     },
     async withdraw(_actor, intent) {
+      if (withdrawalFails) throw new AppError("PROCESSING_AUTHORITY_UNAVAILABLE", 503);
       return {
         captureId: intent.captureId,
         meetingId,
@@ -389,8 +393,237 @@ async function nativeFixture() {
     set cleanupFails(value: boolean) {
       cleanupFails = value;
     },
+    set withdrawalFails(value: boolean) {
+      withdrawalFails = value;
+    },
+    set ownerLoggedOut(value: boolean) {
+      ownerLoggedOut = value;
+    },
   };
 }
+
+test("withdrawal routing survives terminal capture, logout and disabling new processing until cleanup confirms", async () => {
+  const f = await nativeFixture();
+  f.unavailable = false;
+  try {
+    const request = await f.capture.request(f.actor, randomUUID(), {
+      meetingId: f.meetingId,
+      expectedMeetingVersion: 1,
+      maxDurationSeconds: 120,
+      processing: { consent: true, policyVersion: "english-text-v1" },
+    });
+    await captures.scoped(f.actor.workspaceId, (tx) =>
+      tx.update(request.id, {
+        state: "complete",
+        quotaState: "settled",
+        providerDone: true,
+      }),
+    );
+    await captures.reschedule(f.actor.workspaceId, request.id);
+    assert.equal(
+      (await pool.query("SELECT 1 FROM capture_work_index WHERE request_id=$1", [request.id]))
+        .rowCount,
+      0,
+    );
+    f.withdrawalFails = true;
+    const intent = (await repository.intent(f.actor.workspaceId, request.id))!;
+    assert.equal(
+      (
+        await f.processing.withdraw(f.actor, request.id, randomUUID(), {
+          expectedIntentVersion: intent.intentVersion,
+        })
+      ).state,
+      "withdraw_requested",
+    );
+    assert.equal(
+      (await pool.query("SELECT 1 FROM capture_work_index WHERE request_id=$1", [request.id]))
+        .rowCount,
+      1,
+    );
+    await captures.reschedule(f.actor.workspaceId, request.id);
+    assert.equal(
+      (await pool.query("SELECT 1 FROM capture_work_index WHERE request_id=$1", [request.id]))
+        .rowCount,
+      1,
+    );
+    f.ownerLoggedOut = true;
+    const disabled = new CaptureService(
+      captures,
+      {
+        async capture() {
+          throw new AppError("FORBIDDEN", 403);
+        },
+        async read() {
+          throw new AppError("FORBIDDEN", 403);
+        },
+        async manage() {
+          throw new AppError("FORBIDDEN", 403);
+        },
+      },
+      {
+        async reserve() {
+          throw new Error("no new quota");
+        },
+        async lookup() {
+          throw new Error("no quota lookup");
+        },
+        async release() {},
+        async settle() {},
+      },
+      {
+        async create() {
+          throw new Error("no new bot");
+        },
+        async findAttempt() {
+          return { kind: "unknown" };
+        },
+        async inspect() {
+          return null;
+        },
+        async leave() {
+          return "accepted";
+        },
+      },
+      "https://fixture.example/webhooks",
+      undefined,
+      {
+        enabled: false,
+        async prepare() {},
+        reconcileWithdrawal: (actor, id) => f.processing.reconcileWithdrawal(actor, id),
+        deleteMeeting: (ws, meeting, id, version) =>
+          f.processing.deleteMeeting(ws, meeting, id, version),
+      },
+    );
+    await disabled.work(f.actor.workspaceId, request.id);
+    assert.equal(
+      (await repository.intent(f.actor.workspaceId, request.id))!.state,
+      "withdraw_requested",
+    );
+    f.withdrawalFails = false;
+    await disabled.work(f.actor.workspaceId, request.id);
+    assert.equal((await repository.intent(f.actor.workspaceId, request.id))!.state, "revoked");
+    await captures.reschedule(f.actor.workspaceId, request.id);
+    assert.equal(
+      (await pool.query("SELECT 1 FROM capture_work_index WHERE request_id=$1", [request.id]))
+        .rowCount,
+      0,
+    );
+    assert.equal(f.creates, 0);
+  } finally {
+    await f.app.close();
+  }
+});
+test("withdrawal retries during active capture and before a future join without normal login or bot dispatch", async () => {
+  for (const stage of ["capturing", "scheduled"] as const) {
+    const f = await nativeFixture();
+    f.unavailable = false;
+    try {
+      const request = await f.capture.request(f.actor, randomUUID(), {
+        meetingId: f.meetingId,
+        expectedMeetingVersion: 1,
+        maxDurationSeconds: 120,
+        processing: { consent: true, policyVersion: "english-text-v1" },
+      });
+      const future = new Date(Date.now() + 3_600_000);
+      await captures.scoped(f.actor.workspaceId, (tx) =>
+        tx.update(request.id, {
+          state: stage,
+          ...(stage === "scheduled" ? { dispatchNotBefore: future } : {}),
+        }),
+      );
+      f.withdrawalFails = true;
+      await f.processing.withdraw(f.actor, request.id, randomUUID(), { expectedIntentVersion: 1 });
+      await captures.reschedule(f.actor.workspaceId, request.id);
+      const route = (
+        await pool.query("SELECT next_at FROM capture_work_index WHERE request_id=$1", [request.id])
+      ).rows[0];
+      assert.ok(route.next_at < future);
+      f.ownerLoggedOut = true;
+      await f.capture.work(f.actor.workspaceId, request.id);
+      assert.equal(
+        (await repository.intent(f.actor.workspaceId, request.id))!.state,
+        "withdraw_requested",
+      );
+      f.withdrawalFails = false;
+      await f.capture.work(f.actor.workspaceId, request.id);
+      assert.equal((await repository.intent(f.actor.workspaceId, request.id))!.state, "revoked");
+      assert.equal(f.creates, 0);
+      assert.equal(
+        (await captures.scoped(f.actor.workspaceId, (tx) => tx.load(request.id)))!.stopRequested,
+        false,
+      );
+    } finally {
+      await f.app.close();
+    }
+  }
+});
+
+test("disabled native processing still exposes owner status and withdrawal, while creation and evidence fail closed", async () => {
+  const f = await nativeFixture();
+  f.unavailable = false;
+  const request = await f.capture.request(f.actor, randomUUID(), {
+    meetingId: f.meetingId,
+    expectedMeetingVersion: 1,
+    maxDurationSeconds: 120,
+    processing: { consent: true, policyVersion: "english-text-v1" },
+  });
+  const app = ingestApp(
+    f.capture,
+    async () => f.actor,
+    new RecallSignatures(["whsec_" + Buffer.alloc(32, 1).toString("base64")]),
+    undefined,
+    undefined,
+    undefined,
+    {
+      enabled: false,
+      service: f.processing,
+      async authenticateOwner() {
+        throw new Error("disabled ownership callback");
+      },
+      async authenticateEvidence() {
+        throw new Error("disabled evidence read");
+      },
+    },
+  );
+  const path = `/api/v3/workspaces/${f.actor.workspaceId}/captures/${request.id}`;
+  try {
+    const status = await app.inject({
+      method: "GET",
+      url: path,
+      headers: { authorization: "Bearer owner" },
+    });
+    assert.equal(status.statusCode, 200);
+    assert.equal(status.json().processing.state, "ready");
+    const creation = await app.inject({
+      method: "POST",
+      url: `${path}/processing-consent`,
+      headers: { authorization: "Bearer owner", "idempotency-key": randomUUID() },
+      payload: { consent: true, policyVersion: "english-text-v1" },
+    });
+    assert.equal(creation.statusCode, 503);
+    for (const route of ["processing-owner-context", "processing-evidence"]) {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/internal/workspaces/${f.actor.workspaceId}/captures/${request.id}/${route}`,
+        headers: { authorization: "Bearer internal" },
+        payload: {},
+      });
+      assert.equal(denied.statusCode, 503);
+    }
+    const withdrawn = await app.inject({
+      method: "POST",
+      url: `${path}/processing-consent/withdraw`,
+      headers: { authorization: "Bearer owner", "idempotency-key": randomUUID() },
+      payload: { expectedIntentVersion: 1 },
+    });
+    assert.equal(withdrawn.statusCode, 202);
+    assert.equal(withdrawn.json().state, "revoked");
+  } finally {
+    await app.close();
+    await f.app.close();
+  }
+});
+
 test("inline opt-in commits intent before grant, blocks quota/dispatch on failure and withdrawal permits capture-only", async () => {
   const f = await nativeFixture();
   try {

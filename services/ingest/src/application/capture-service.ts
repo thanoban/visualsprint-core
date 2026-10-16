@@ -61,6 +61,7 @@ export class CaptureService {
     private readonly processing?: {
       enabled?: boolean;
       prepare(actor: Actor, captureId: string): Promise<void>;
+      reconcileWithdrawal?(actor: Actor, captureId: string): Promise<void>;
       deleteMeeting(
         workspaceId: string,
         meetingId: string,
@@ -256,6 +257,18 @@ export class CaptureService {
       captureView,
     );
   }
+  async exportCaptures(actor: Actor, meetingId: string) {
+    if (actor.operationGrantId || actor.sessionId.startsWith("operation:"))
+      throw new AppError("FORBIDDEN", 403);
+    id.parse(meetingId);
+    await this.meetings.read(actor, meetingId);
+    const captures = await this.repository.scoped(actor.workspaceId, (tx) =>
+      tx.exportCaptures(meetingId),
+    );
+    await this.meetings.read(actor, meetingId);
+    if (captures.length > 100) throw new AppError("CAPTURE_EXPORT_SCOPE_TOO_LARGE", 409);
+    return { meetingId, complete: true as const, captures };
+  }
   async stop(actor: Actor, requestId: string) {
     const record = await this.repository.scoped(actor.workspaceId, (tx) =>
       tx.load(id.parse(requestId)),
@@ -401,6 +414,9 @@ export class CaptureService {
   }
   async work(workspaceId: string, requestId: string) {
     const pending = await this.repository.scoped(workspaceId, (tx) => tx.load(requestId));
+    // Cleanup has its own narrow authority: it must not depend on capture state,
+    // the owner's current login, or enabling new AI processing.
+    if (pending) await this.processing?.reconcileWithdrawal?.(actorFor(pending), pending.id);
     if (pending?.state === "scheduled" && this.now() < pending.dispatchNotBefore) return;
     if (pending?.state === "scheduled" && !pending.stopRequested) {
       if (this.processing) await this.processing.prepare(actorFor(pending), pending.id);

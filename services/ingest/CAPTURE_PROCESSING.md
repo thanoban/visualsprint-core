@@ -1,7 +1,8 @@
 # Capture processing authority foundation
 
-This is the durable explicit-consent prerequisite, not an automatic AI extraction release.
-The `capture.processing.ready.v1` producer and finalized-content consumer remain disabled.
+This is the durable explicit-consent foundation, not a live AI extraction release.
+The `capture.processing.ready.v1` producer and finalized-content consumer are implemented
+behind separate default-disabled flags. See [the complete gated process/setup chain](../intelligence/CAPTURE_EXTRACTION.md).
 No live Recall/model call is part of the local qualification.
 
 ## Request and runtime configuration
@@ -38,6 +39,12 @@ capture-only consent may continue recording text. The existing stop command rema
 separate durable command. Deletion first installs Ingest's local barrier, then revokes
 Account grants and marks intents revoked before acknowledging the Ingest participant.
 Cleanup remains installed when new processing creation is disabled.
+Owner status and withdrawal HTTP controls also remain installed in that mode;
+only new consent creation, owner-creation callbacks and processing evidence are gated off.
+Unknown withdrawals wake the existing metadata-only capture work index, including already
+completed captures. Routing is retained until Account confirms revocation; cleanup runs
+before scheduled join timers and in active/terminal states, after logout and with new
+processing creation disabled. A terminal capture's settled quota cannot erase this work.
 
 ## Narrow evidence access
 
@@ -64,7 +71,7 @@ An exact signed transport regression verifies Workspace owner metadata uses body
 Existing Ingest regression tests still cover capture-only scheduling, ambiguous dispatch,
 late transcript drain, stop/finalization, quotas and deleted-meeting rejection.
 
-Production still requires real identity/key deployment, broker qualification, finalized
-processing consumer and separate model admission, full-duration Meet/Zoom/Teams tests,
+Production still requires real identity/key deployment, broker qualification, native
+processing/admission composition, full-duration Meet/Zoom/Teams tests,
 retention-policy verification and Azure operational qualification. A consent-ready state
 is never advertised as live capture or generated-content proof.

@@ -48,6 +48,29 @@ class CaptureTx implements CaptureTransaction {
       .orderBy(asc(schema.requests.createdAt))
       .limit(100);
   }
+  async exportCaptures(meetingId: string) {
+    id.parse(meetingId);
+    const deleted = await this.db.execute(
+      sql`SELECT 1 FROM meeting_deletions WHERE workspace_id=${this.workspaceId} AND meeting_id=${meetingId}`,
+    );
+    if (deleted.rows.length) throw new AppError("SOURCE_DELETED", 409);
+    return this.db
+      .select({
+        id: schema.requests.id,
+        version: schema.requests.version,
+        state: schema.requests.state,
+        coverage: schema.requests.coverage,
+      })
+      .from(schema.requests)
+      .where(
+        and(
+          eq(schema.requests.workspaceId, this.workspaceId),
+          eq(schema.requests.meetingId, meetingId),
+        ),
+      )
+      .orderBy(asc(schema.requests.createdAt), asc(schema.requests.id))
+      .limit(101);
+  }
   async command(actor: Actor, key: string, fingerprint: string, create: () => Promise<Capture>) {
     await this.db.execute(
       sql`SELECT pg_advisory_xact_lock(hashtextextended(${[this.workspaceId, actor.actorId, key].join(":")},0))`,
@@ -431,17 +454,24 @@ export class PostgresCapture implements CaptureRepository {
     await this.db.transaction(async (db) => {
       await db.execute(sql`SELECT set_config('app.workspace_id',${workspaceId},true)`);
       const record = await new CaptureTx(db, workspaceId).load(requestId);
+      // Serialize with withdrawal's intent lock before touching its routing row.
+      // A completed/settled capture still needs source-free grant cleanup.
+      const processing = await db.execute(
+        sql`SELECT state FROM capture_processing_intents WHERE workspace_id=${workspaceId} AND capture_id=${requestId} FOR UPDATE`,
+      );
+      const withdrawalPending = processing.rows[0]?.state === "withdraw_requested";
       if (
         !record ||
         (["complete", "partial", "failed", "cancelled"].includes(record.state) &&
-          ["released", "settled"].includes(record.quotaState))
+          ["released", "settled"].includes(record.quotaState) &&
+          !withdrawalPending)
       ) {
         await db.execute(
           sql`DELETE FROM capture_work_index WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
         );
       } else {
         await db.execute(
-          sql`UPDATE capture_work_index SET next_at=GREATEST(now()+${seconds}*interval '1 second',CASE WHEN ${record.state}='scheduled' THEN ${record.dispatchNotBefore} ELSE now() END) WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
+          sql`UPDATE capture_work_index SET next_at=GREATEST(now()+${seconds}*interval '1 second',CASE WHEN ${record.state}='scheduled' AND NOT ${withdrawalPending} THEN ${record.dispatchNotBefore} ELSE now() END) WHERE request_id=${requestId} AND workspace_id=${workspaceId}`,
         );
       }
     });

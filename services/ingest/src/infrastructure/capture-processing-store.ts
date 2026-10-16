@@ -195,6 +195,12 @@ export class PostgresCaptureProcessing implements ProcessingRepository {
           [actor.workspaceId, actor.actorId, key, command.hash, captureId],
         );
       }
+      if (result.state === "withdraw_requested")
+        await db.query(
+          `INSERT INTO capture_work_index(request_id,workspace_id,next_at) VALUES($1,$2,now())
+           ON CONFLICT(request_id) DO UPDATE SET next_at=LEAST(capture_work_index.next_at,now())`,
+          [captureId, actor.workspaceId],
+        );
       return intentView(result);
     });
   }

@@ -67,30 +67,26 @@ const processingService = new CaptureProcessingService(
     config.SERVICE_KEY_ID,
   ),
 );
-const processing =
-  config.CAPTURE_PROCESSING_ENABLED === "true"
-    ? {
-        service: processingService,
-        authenticateOwner: async (token: string) =>
-          (
-            await new ServiceIdentity(
-              "ingest",
-              config.ACCOUNT_PUBLIC_JWKS
-                ? { account: JSON.parse(config.ACCOUNT_PUBLIC_JWKS).keys }
-                : {},
-            ).verify(token)
-          ).actor,
-        authenticateEvidence: async (token: string) =>
-          (
-            await new ServiceIdentity(
-              "ingest",
-              config.INTELLIGENCE_PUBLIC_JWKS
-                ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
-                : {},
-            ).verify(token)
-          ).actor,
-      }
-    : undefined;
+const processing = {
+  enabled: config.CAPTURE_PROCESSING_ENABLED === "true",
+  service: processingService,
+  authenticateOwner: async (token: string) =>
+    (
+      await new ServiceIdentity(
+        "ingest",
+        config.ACCOUNT_PUBLIC_JWKS ? { account: JSON.parse(config.ACCOUNT_PUBLIC_JWKS).keys } : {},
+      ).verify(token)
+    ).actor,
+  authenticateEvidence: async (token: string) =>
+    (
+      await new ServiceIdentity(
+        "ingest",
+        config.INTELLIGENCE_PUBLIC_JWKS
+          ? { intelligence: JSON.parse(config.INTELLIGENCE_PUBLIC_JWKS).keys }
+          : {},
+      ).verify(token)
+    ).actor,
+};
 const service = new CaptureService(
   new PostgresCapture(pool),
   authorities,
@@ -100,6 +96,7 @@ const service = new CaptureService(
   undefined,
   {
     enabled: config.CAPTURE_PROCESSING_ENABLED === "true",
+    reconcileWithdrawal: (actor, id) => processingService.reconcileWithdrawal(actor, id),
     prepare: async (actor, id) => {
       if (config.CAPTURE_PROCESSING_ENABLED === "true") await processingService.prepare(actor, id);
     },
@@ -123,6 +120,15 @@ const app = ingestApp(
       ).verify(token)
     ).actor,
   processing,
+  async (token) =>
+    (
+      await new ServiceIdentity(
+        "ingest",
+        config.REPORTING_PUBLIC_JWKS
+          ? { reporting: JSON.parse(config.REPORTING_PUBLIC_JWKS).keys }
+          : {},
+      ).verify(token)
+    ).actor,
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

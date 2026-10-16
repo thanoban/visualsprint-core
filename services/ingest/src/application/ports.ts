@@ -32,6 +32,9 @@ export interface CaptureTransaction {
   calendarCommand(actor: Actor, key: string, cancel: boolean): Promise<Capture | undefined>;
   load(requestId: string): Promise<Capture | undefined>;
   list(meetingId: string): Promise<Capture[]>;
+  exportCaptures(
+    meetingId: string,
+  ): Promise<Pick<Capture, "id" | "version" | "state" | "coverage">[]>;
   command(
     actor: Actor,
     key: string,
