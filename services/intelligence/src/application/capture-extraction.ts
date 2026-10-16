@@ -7,6 +7,7 @@ import type { Model, Sources } from "./ports.js";
 import { modelClaims } from "./schemas.js";
 import { modelOperationId } from "./model-usage.js";
 import {
+  ExtractionLimitError,
   extractionChunks,
   extractionInput,
   extractionInputBound,
@@ -253,7 +254,10 @@ export class DurableCaptureExtraction {
         throw new AppError("EXTRACTION_OUTPUT_TOO_LARGE", 409);
       await this.jobs.complete(job, result);
     } catch (error) {
-      const code = error instanceof AppError ? error.code : "EXTRACTION_VALIDATION_FAILED";
+      const code =
+        error instanceof AppError || error instanceof ExtractionLimitError
+          ? error.code
+          : "EXTRACTION_VALIDATION_FAILED";
       // Admission/dispatch ambiguity is never retried as another paid model call.
       await this.jobs.fail(
         job,

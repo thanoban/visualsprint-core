@@ -1,5 +1,10 @@
-import { AppError } from "@visualsprint/platform";
 import type { Evidence, Claim } from "./evidence.js";
+
+export class ExtractionLimitError extends Error {
+  constructor(public readonly code: string) {
+    super(code);
+  }
+}
 
 // UTF-8 bytes are a conservative token ceiling. Leave room for adapter prompts.
 export const extractionInput = (evidence: Evidence[]) => ({
@@ -16,7 +21,7 @@ export function extractionChunks(evidence: Evidence[]): Evidence[][] {
     evidence.length > 10_000 ||
     evidence.reduce((sum, row) => sum + Buffer.byteLength(row.text, "utf8"), 0) > 2_000_000
   )
-    throw new AppError("PROCESSING_EVIDENCE_TOO_LARGE", 409);
+    throw new ExtractionLimitError("PROCESSING_EVIDENCE_TOO_LARGE");
   const chunks: Evidence[][] = [];
   let pending: Evidence[] = [],
     size = extractionInputBound([]);
@@ -36,7 +41,7 @@ export function extractionChunks(evidence: Evidence[]): Evidence[][] {
     } else {
       flush();
       if (extractionInputBound([{ ...row, text: "" }]) > 70_000)
-        throw new AppError("MODEL_INPUT_TOO_LARGE", 409);
+        throw new ExtractionLimitError("MODEL_INPUT_TOO_LARGE");
       let text = "",
         bytes = 0;
       for (const character of row.text) {
@@ -50,16 +55,16 @@ export function extractionChunks(evidence: Evidence[]): Evidence[][] {
         bytes += count;
       }
       if (text) chunks.push([{ ...row, text }]);
-      if (!text && row.text.length === 0) throw new AppError("MODEL_INPUT_TOO_LARGE", 409);
+      if (!text && row.text.length === 0) throw new ExtractionLimitError("MODEL_INPUT_TOO_LARGE");
     }
-    if (chunks.length > maximumChunks) throw new AppError("EXTRACTION_CHUNK_LIMIT", 409);
+    if (chunks.length > maximumChunks) throw new ExtractionLimitError("EXTRACTION_CHUNK_LIMIT");
   }
   flush();
   if (
     chunks.length > maximumChunks ||
     chunks.some((chunk) => extractionInputBound(chunk) > maximumInput)
   )
-    throw new AppError("EXTRACTION_CHUNK_LIMIT", 409);
+    throw new ExtractionLimitError("EXTRACTION_CHUNK_LIMIT");
   return chunks;
 }
 export function mergeExtractionClaims(outputs: { claims: Claim[]; unsupported: boolean }[]) {
@@ -74,7 +79,7 @@ export function mergeExtractionClaims(outputs: { claims: Claim[]; unsupported: b
       }
     }
   if (Buffer.byteLength(JSON.stringify(claims), "utf8") > 3_000_000)
-    throw new AppError("EXTRACTION_OUTPUT_TOO_LARGE", 409);
+    throw new ExtractionLimitError("EXTRACTION_OUTPUT_TOO_LARGE");
   // A chunk's inability to support an answer is not silently erased by others.
   return { claims, unsupported: !outputs.length || outputs.some((output) => output.unsupported) };
 }
