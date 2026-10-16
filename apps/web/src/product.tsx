@@ -56,7 +56,10 @@ function Frame() {
           <button
             className="secondary"
             disabled={logout.busy}
-            onClick={() => void logout.run("logout", () => api.logout(), signOut)}
+            onClick={() => {
+              window.dispatchEvent(new Event("visualsprint-session-ending"));
+              void logout.run("logout", () => api.logout(), signOut);
+            }}
           >
             Sign out
           </button>
@@ -121,7 +124,9 @@ const workspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/w/$workspaceId",
   validateSearch: (input: Record<string, unknown>) =>
-    z.object({ projectId: id.optional(), meetingId: id.optional(),deletionId:id.optional() }).parse(input),
+    z
+      .object({ projectId: id.optional(), meetingId: id.optional(), deletionId: id.optional() })
+      .parse(input),
   component: WorkspacePage,
 });
 function WorkspacePage() {
@@ -134,8 +139,8 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
   const [showCalendars, setShowCalendars] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const { api } = rootRoute.useRouteContext();
-  const { projectId, meetingId,deletionId } = workspaceRoute.useSearch();
-  const navigate=workspaceRoute.useNavigate();
+  const { projectId, meetingId, deletionId } = workspaceRoute.useSearch();
+  const navigate = workspaceRoute.useNavigate();
   const [refresh, setRefresh] = useState(0);
   const data = useData(
     async (signal) => {
@@ -180,7 +185,14 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
           {showNotifications ? (
             <NotificationPanel key={workspaceId} api={api} workspaceId={workspaceId} />
           ) : null}
-          {deletionId?<DeletionStatus key={`${workspaceId}/${deletionId}`} api={api} workspaceId={workspaceId} deletionId={deletionId}/>:null}
+          {deletionId ? (
+            <DeletionStatus
+              key={`${workspaceId}/${deletionId}`}
+              api={api}
+              workspaceId={workspaceId}
+              deletionId={deletionId}
+            />
+          ) : null}
           <IntelligencePanel
             key={`${workspaceId}/${projectId ?? "workspace"}`}
             api={api}
@@ -273,7 +285,13 @@ function WorkspacePanel({ workspaceId }: { workspaceId: string }) {
               userId={value.userId}
               projects={value.projects}
               reload={reload}
-              onDeleted={jobId=>{void navigate({to:"/w/$workspaceId",params:{workspaceId},search:{...(projectId?{projectId}:{}),deletionId:jobId}});}}
+              onDeleted={(jobId) => {
+                void navigate({
+                  to: "/w/$workspaceId",
+                  params: { workspaceId },
+                  search: { ...(projectId ? { projectId } : {}), deletionId: jobId },
+                });
+              }}
             />
           ) : null}
         </>

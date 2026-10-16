@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Api } from "./api.js";
 import { Feedback, Form, useCommand, useData } from "./ui.js";
+import { NotificationLive } from "./notification-live.js";
 const preferences = z.object({
   workspaceId: z.string().uuid(),
   userId: z.string().uuid(),
@@ -25,10 +26,11 @@ const page = z.object({ items: z.array(notification), nextCursor: z.string().uui
 export function NotificationPanel({ api, workspaceId }: { api: Api; workspaceId: string }) {
   const path = api.scope(workspaceId);
   const [revision, setRevision] = useState(0);
+  const [preferencesRevision, setPreferencesRevision] = useState(0);
   const [after, setAfter] = useState<string>();
   const settings = useData(
     (signal) => api.request(`${path}/notification-preferences`, preferences, { signal }),
-    [api, workspaceId, revision],
+    [api, workspaceId, preferencesRevision],
   );
   const items = useData(
     (signal) =>
@@ -36,6 +38,16 @@ export function NotificationPanel({ api, workspaceId }: { api: Api; workspaceId:
     [api, workspaceId, revision, after],
   );
   const changed = () => setRevision((value) => value + 1);
+  const refreshAll = () => {
+    changed();
+    setPreferencesRevision((value) => value + 1);
+  };
+  useEffect(() => {
+    // A hint is optional, never the source of permission or notification content.
+    if (items.loading || items.error) return;
+    const timer = setTimeout(changed, 30000);
+    return () => clearTimeout(timer);
+  }, [items.loading, items.error, workspaceId, revision, after]);
   return (
     <section className="panel" aria-label="Workspace notifications">
       <h2>Updates and notification preferences</h2>
@@ -50,16 +62,23 @@ export function NotificationPanel({ api, workspaceId }: { api: Api; workspaceId:
           api={api}
           path={path}
           initial={settings.value}
-          changed={changed}
+          changed={refreshAll}
         />
       ) : null}
       <p>
         Email delivery is held until an administrator configures an approved email provider and
         Account supplies your verified email. Saving a preference does not prove email delivery.
       </p>
-      <button type="button" onClick={changed}>
+      <button type="button" onClick={refreshAll}>
         Refresh updates
       </button>
+      <NotificationLive
+        key={workspaceId}
+        api={api}
+        workspaceId={workspaceId}
+        changed={changed}
+        available={!items.error && !settings.error}
+      />
       <Feedback data={items} />
       {items.value?.items.length === 0 ? (
         <p>No currently authorized updates in this page.</p>

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { z } from "zod";
 import { id } from "@visualsprint/contracts";
 import { Api, errorMessage, type Meeting } from "./api.js";
 import { Feedback, useCommand, useData } from "./ui.js";
+import { CaptureExtractionPanel } from "./capture-extraction-panel.js";
 const citation = z.object({ captureId: id, segmentId: id, revision: z.number().int().positive() });
 const claim = z.object({
   kind: z.enum(["discussion", "decision", "commitment"]),
@@ -30,12 +31,13 @@ const accepted = z.object({
   evidenceStatus: z.enum(["current", "changed", "unavailable"]).optional(),
 });
 type Item = z.infer<typeof accepted>;
-type Source = z.infer<typeof claim> & { jobId: string; claimIndex: number };
+type Source = z.infer<typeof claim> & { jobId: string; claimIndex: number; automatic?: boolean };
 type Props = { api: Api; workspaceId: string; meeting: Meeting; owner: boolean };
 export function CommitmentReview(props: Props) {
-  return <Review key={`${props.workspaceId}:${props.meeting.id}`} {...props} />;
+  return <Review key={`${props.workspaceId}:${props.meeting.id}:${props.owner}`} {...props} />;
 }
 function Review({ api, workspaceId, meeting, owner }: Props) {
+  const automaticSelected = useRef(false);
   const [revision, setRevision] = useState(0),
     [editing, setEditing] = useState<Item | null>(null),
     [kind, setKind] = useState<"decision" | "commitment">("commitment"),
@@ -80,6 +82,7 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
       : [],
   );
   function clear() {
+    automaticSelected.current = false;
     setEditing(null);
     setTitle("");
     setText("");
@@ -90,6 +93,7 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
     setConfirmed(false);
   }
   function useSource(source: Source) {
+    automaticSelected.current = source.automatic === true;
     setSelected(source);
     setText(source.text);
     setRefs([
@@ -102,6 +106,18 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
     setConfirmed(false);
     if (!editing) setKind(source.kind === "decision" ? "decision" : "commitment");
   }
+  const automaticUnavailable = useCallback(() => {
+    if (!automaticSelected.current) return;
+    automaticSelected.current = false;
+    setSelected(null);
+    setText("");
+    setTitle("");
+    setRefs([]);
+    setOwnerId("");
+    setDueDate("");
+    setConfirmed(false);
+    setEditing(null);
+  }, []);
   return (
     <section aria-label="Reviewed decisions and commitments">
       <h3>Reviewed decisions and commitments</h3>
@@ -151,6 +167,7 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
               <>
                 <button
                   onClick={() => {
+                    automaticSelected.current = false;
                     setEditing(item);
                     setKind(item.kind);
                     setTitle(item.title);
@@ -204,6 +221,18 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
       {status.error ? <p role="alert">{errorMessage(status.error)}</p> : null}
       {owner ? (
         <>
+          <CaptureExtractionPanel
+            api={api}
+            workspaceId={workspaceId}
+            meetingId={meeting.id}
+            owner={owner}
+            onReview={(item, jobId, claimIndex) => {
+              clear();
+              useSource({ ...item, jobId, claimIndex, automatic: true });
+              setKind(item.kind === "decision" ? "decision" : "commitment");
+            }}
+            onUnavailable={automaticUnavailable}
+          />
           <h4>Review source excerpts</h4>
           {summaries.loading ? (
             <p>Loading source proposals…</p>
@@ -256,9 +285,10 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
                     expectedMeetingVersion: meeting.version,
                     confirmed: true,
                     content,
-                    proposal: selected
-                      ? { jobId: selected.jobId, claimIndex: selected.claimIndex }
-                      : null,
+                    proposal:
+                      selected && !selected.automatic
+                        ? { jobId: selected.jobId, claimIndex: selected.claimIndex }
+                        : null,
                   };
               const target = `${path}/${kind === "decision" ? "decisions" : "commitments"}${editing ? "/" + editing.id : ""}`;
               void save.run(
@@ -273,6 +303,14 @@ function Review({ api, workspaceId, meeting, owner }: Props) {
             }}
           >
             <h4>{editing ? "Review and save correction" : "Accept a reviewed record"}</h4>
+            {selected?.automatic ? (
+              <p>
+                Reviewing automatic draft {selected.jobId}, claim {selected.claimIndex + 1}. This is
+                a human-reviewed evidence record, not AI verification. The service rechecks current
+                source text, citation revision and meeting access before acceptance. No automatic
+                proposal approval or external execution is performed.
+              </p>
+            ) : null}
             <fieldset disabled={save.busy}>
               <label>
                 Record kind
