@@ -2,9 +2,10 @@ param namespaceName string
 param topicName string
 param principalId string
 param receiver bool = false
+param subscriptionName string = 'notification'
 resource bus 'Microsoft.ServiceBus/namespaces@2024-01-01' existing = { name: namespaceName }
 resource topic 'Microsoft.ServiceBus/namespaces/topics@2024-01-01' existing = { parent: bus, name: topicName }
-resource subscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' existing = { parent: topic, name: 'notification' }
+resource subscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' existing = { parent: topic, name: subscriptionName }
 resource sender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!receiver) {
   name: guid(topic.id, principalId, 'sender')
   scope: topic

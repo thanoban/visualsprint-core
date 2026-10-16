@@ -4,6 +4,7 @@ param egressIp string
 param endpointsSubnetId string
 param blobDnsId string
 param pubsubDnsId string
+param enableCaptureExtraction bool = false
 
 resource bus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
   name: '${name}-bus'
@@ -27,6 +28,11 @@ resource subscriptions 'Microsoft.ServiceBus/namespaces/topics/subscriptions@202
   name: 'notification'
   properties: { maxDeliveryCount: 10, lockDuration: 'PT1M', deadLetteringOnMessageExpiration: true, requiresSession: false }
 }]
+resource extractionSubscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' = if (enableCaptureExtraction) {
+  parent: topics[indexOf(publishers, 'ingest')]
+  name: 'capture-extraction-v1'
+  properties: { maxDeliveryCount: 10, lockDuration: 'PT1M', deadLetteringOnMessageExpiration: true, requiresSession: false }
+}
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: replace('${name}text', '-', '')
   location: location

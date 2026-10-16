@@ -24,6 +24,7 @@ param enablePreparationWorker bool = false
 param enableIndexingWorker bool = false
 // Enable only after an owning native Intelligence events entrypoint is published and image-qualified.
 param enableIntelligenceEvents bool = false
+param enableCaptureExtractionWorker bool = false
 param runtimeConfig object = {}
 param migrationConfig object = {}
 param bootstrapConfig object = {}
@@ -64,7 +65,7 @@ module cell './modules/foundation.bicep' = {
 module dependencies './modules/cell-resources.bicep' = {
   name: 'regional-dependencies'
   scope: cellGroup
-  params: { name: cellName, location: location, egressIp: network.outputs.egressIp, endpointsSubnetId: network.outputs.endpointsSubnetId, blobDnsId: network.outputs.blobDnsId, pubsubDnsId: network.outputs.pubsubDnsId }
+  params: { name: cellName, location: location, egressIp: network.outputs.egressIp, endpointsSubnetId: network.outputs.endpointsSubnetId, blobDnsId: network.outputs.blobDnsId, pubsubDnsId: network.outputs.pubsubDnsId, enableCaptureExtraction: enableCaptureExtractionWorker }
 }
 
 var cellServices = ['workspace', 'ingest', 'integration', 'intelligence', 'workflow', 'notification', 'reporting', 'authz']
@@ -104,11 +105,13 @@ var workers = [
   { name: 'workspace-worker', service: 'workspace', entry: 'worker', extra: {} }
   { name: 'workspace-events', service: 'workspace', entry: 'events', extra: {} }
   { name: 'ingest-worker', service: 'ingest', entry: 'worker', extra: {} }
-  { name: 'ingest-events', service: 'ingest', entry: 'events', extra: {} }
+  { name: 'ingest-events', service: 'ingest', entry: 'events', extra: { INGEST_EVENT_WORKER_KIND: 'publisher' } }
+  { name: 'ingest-processing', service: 'ingest', entry: 'events', extra: { INGEST_EVENT_WORKER_KIND: 'processing' } }
   { name: 'integration-worker', service: 'integration', entry: 'worker', extra: {} }
   { name: 'intelligence-interactive', service: 'intelligence', entry: 'worker', extra: { INTELLIGENCE_WORKER_KIND: 'interactive' } }
   { name: 'intelligence-preparation', service: 'intelligence', entry: 'worker', extra: { INTELLIGENCE_WORKER_KIND: 'preparation' } }
   { name: 'intelligence-indexing', service: 'intelligence', entry: 'worker', extra: { INTELLIGENCE_WORKER_KIND: 'indexing' } }
+  { name: 'intelligence-extraction', service: 'intelligence', entry: 'worker', extra: { INTELLIGENCE_WORKER_KIND: 'extraction' } }
   { name: 'workflow-worker', service: 'workflow', entry: 'worker', extra: {} }
   { name: 'workflow-events', service: 'workflow', entry: 'events', extra: {} }
   { name: 'reporting-worker', service: 'reporting', entry: 'worker', extra: {} }
@@ -117,7 +120,7 @@ var workers = [
   { name: 'intelligence-events', service: 'intelligence', entry: 'events', extra: {} }
 ]
 // Preparation/indexing remain independently controlled by their native flags, never a fixture fallback.
-module workerApps './modules/runtime.bicep' = [for worker in workers: if (activateRuntime && (worker.name != 'intelligence-preparation' || enablePreparationWorker) && (worker.name != 'intelligence-indexing' || enableIndexingWorker) && (worker.name != 'intelligence-events' || enableIntelligenceEvents)) {
+module workerApps './modules/runtime.bicep' = [for worker in workers: if (activateRuntime && (worker.name != 'intelligence-preparation' || enablePreparationWorker) && (worker.name != 'intelligence-indexing' || enableIndexingWorker) && (worker.name != 'intelligence-events' || enableIntelligenceEvents) && (!contains(['intelligence-extraction', 'ingest-processing'], worker.name) || enableCaptureExtractionWorker)) {
   name: worker.name
   scope: cellGroup
   params: {
@@ -125,7 +128,7 @@ module workerApps './modules/runtime.bicep' = [for worker in workers: if (activa
     registryName: registryName, registryResourceGroup: registryResourceGroup, registrySubscriptionId: registrySubscriptionId
     image: runtimeConfig[worker.service].image, mode: 'worker', command: ['node', 'dist/${worker.entry}.mjs']
     env: concat(map(items(defaults), entry => { name: entry.key, value: entry.value }), filter(runtimeConfig[worker.service].env, entry => !contains(worker.extra, entry.name)), map(items(worker.extra), entry => { name: entry.key, value: entry.value }))
-    secretBindings: runtimeConfig[worker.service].secrets
+    secretBindings: worker.name == 'ingest-processing' ? filter(runtimeConfig[worker.service].secrets, binding => contains(['INGEST_DATABASE_URL', 'SERVICE_PRIVATE_JWK'], binding.env)) : runtimeConfig[worker.service].secrets
     minReplicas: 1, maxReplicas: 1
   }
 }]
@@ -142,6 +145,11 @@ module eventReceiver './modules/event-access.bicep' = [for producer in ['ingest'
   params: { namespaceName: '${cellName}-bus', topicName: 'vs-${producer}', principalId: workerApps[indexOf(workerNames, 'notification-events')]!.outputs.principalId, receiver: true }
 }]
 var migrationServices = ['account', 'workspace', 'authz', 'ingest', 'integration', 'intelligence', 'workflow', 'reporting', 'notification', 'openfga']
+module extractionReceiver './modules/event-access.bicep' = if (activateRuntime && enableIntelligenceEvents && enableCaptureExtractionWorker) {
+  name: 'ingest-extraction-reader'
+  scope: cellGroup
+  params: { namespaceName: '${cellName}-bus', topicName: 'vs-ingest', subscriptionName: 'capture-extraction-v1', principalId: workerApps[indexOf(workerNames, 'intelligence-events')]!.outputs.principalId, receiver: true }
+}
 module migrations './modules/runtime.bicep' = [for service in migrationServices: if (activateMigrationJobs) {
   name: '${service}-migration'
   scope: resourceGroup(service == 'account' ? globalGroup.name : cellGroup.name)

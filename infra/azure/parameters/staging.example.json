@@ -31,6 +31,7 @@
     "enablePreparationWorker": { "value": false },
     "enableIndexingWorker": { "value": false },
     "enableIntelligenceEvents": { "value": false },
+    "enableCaptureExtractionWorker": { "value": false },
     "runtimeConfig": { "value": {} },
     "migrationConfig": { "value": {} },
     "bootstrapConfig": { "value": {} }

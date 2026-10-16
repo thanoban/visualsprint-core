@@ -1,5 +1,30 @@
 # Secure runtime inventory
 
+## Optional consent-bound automatic extraction
+
+`enableCaptureExtractionWorker=false` remains the default. After qualifying the new owning
+Account/Ingest/Intelligence migrations and immutable images, enabling it also requires
+`activateRuntime=true` and `enableIntelligenceEvents=true`. The native flags must agree:
+
+- Account: `CAPTURE_PROCESSING_ENABLED=true`, `CAPTURE_MODEL_ADMISSION_ENABLED=true`.
+- Ingest: `CAPTURE_PROCESSING_ENABLED=true`, `CAPTURE_EXTRACTION_PUBLISH_ENABLED=true`.
+- Intelligence: `INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED=true`,
+  `INTELLIGENCE_MODEL_ADMISSION_ENABLED=true`.
+
+The separate `ingest-processing` process uses `events.mjs` with
+`INGEST_EVENT_WORKER_KIND=processing`; it authorizes metadata and commits the processing event.
+The existing Ingest publisher delivers the outbox. Intelligence events consumes the dedicated
+`vs-ingest/capture-extraction-v1` subscription using subscription-scoped Data Receiver, while a
+separate `INTELLIGENCE_WORKER_KIND=extraction` worker performs admitted processing. A custom
+subscription name is not accepted by this topology. Ingest processing receives only its runtime
+database/signing-key secrets, not Recall or model credentials.
+
+Account's `capture_extraction` purpose starts with zero allowed tokens/concurrency. An operator
+must explicitly approve a positive budget; setting feature flags does not authorize unlimited or
+free model usage. Exact consent, membership, source revision and deletion barriers still apply.
+Do not activate this chain on source/unit checks alone: owning database, signed composition,
+broker identity/delivery and approved model qualification remain release gates.
+
 Build and promote immutable `@sha256:` image references into an existing approved Azure Container Registry. Include the independently built frontend (`infra/containers/web.Dockerfile`), native services (`infra/containers/service.Dockerfile`), pinned OpenFGA 1.22.0 mirror and bootstrap image (`bootstrap/Dockerfile`, PostgreSQL 17 alpine input digest). Frontend WorkOS client/API-host build arguments are public identifiers, not API secrets. Native images must include current owning migrations/specs. Qualify each image; the template does not build/push it.
 
 Each `runtimeConfig.<service>` / `migrationConfig.<service>` / `bootstrapConfig.<db>` object contains `image`, `env: [{name,value}]` and `secrets: [{env,ref,secretName,version}]`. `version` is the actual 32-hex Key Vault version; immutable versions permit explicit rotation/rollback. Secrets are read with a distinct per-process identity and a role scoped to that individual secret. Do not share a filled deployment file or commit it.

@@ -226,6 +226,7 @@ export function validateParameters(document) {
     "enablePreparationWorker",
     "enableIndexingWorker",
     "enableIntelligenceEvents",
+    "enableCaptureExtractionWorker",
   ])
     assert(p[key] === undefined || typeof p[key] === "boolean", `FLAG_INVALID:${key}`);
   assert(
@@ -238,6 +239,10 @@ export function validateParameters(document) {
   assert(!p.enablePreparationWorker || p.activateRuntime, "PREPARATION_REQUIRES_RUNTIME");
   assert(!p.enableIndexingWorker || p.activateRuntime, "INDEXING_REQUIRES_RUNTIME");
   assert(!p.enableIntelligenceEvents || p.activateRuntime, "EVENTS_REQUIRES_RUNTIME");
+  assert(
+    !p.enableCaptureExtractionWorker || (p.activateRuntime && p.enableIntelligenceEvents),
+    "EXTRACTION_REQUIRES_RUNTIME_AND_EVENTS",
+  );
   const groups = [
     [p.activateRuntime, services, p.runtimeConfig, "runtime"],
     [
@@ -261,6 +266,35 @@ export function validateParameters(document) {
   if (p.activateMaintenanceJobs)
     for (const name of ["intelligence", "authz"])
       config(p.bootstrapConfig?.[name], p, name, "bootstrap");
+  if (p.enableCaptureExtractionWorker) {
+    const env = (name) =>
+      Object.fromEntries(
+        (p.runtimeConfig?.[name]?.env ?? []).map((entry) => [entry.name, entry.value]),
+      );
+    const account = env("account"),
+      ingest = env("ingest"),
+      intelligence = env("intelligence");
+    assert(
+      account.CAPTURE_PROCESSING_ENABLED === "true" &&
+        account.CAPTURE_MODEL_ADMISSION_ENABLED === "true",
+      "CAPTURE_ADMISSION_NOT_ENABLED",
+    );
+    assert(
+      ingest.CAPTURE_PROCESSING_ENABLED === "true" &&
+        ingest.CAPTURE_EXTRACTION_PUBLISH_ENABLED === "true",
+      "CAPTURE_PRODUCER_NOT_ENABLED",
+    );
+    assert(
+      intelligence.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED === "true" &&
+        intelligence.INTELLIGENCE_MODEL_ADMISSION_ENABLED === "true",
+      "CAPTURE_CONSUMER_NOT_ENABLED",
+    );
+    assert(
+      intelligence.INTELLIGENCE_CAPTURE_SUBSCRIPTION === undefined ||
+        intelligence.INTELLIGENCE_CAPTURE_SUBSCRIPTION === "capture-extraction-v1",
+      "CAPTURE_SUBSCRIPTION_MISMATCH",
+    );
+  }
   return {
     valid: true,
     stage: p.stage,

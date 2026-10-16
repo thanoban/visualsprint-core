@@ -138,3 +138,58 @@ test("edge keeps internal routes blocked without forwarding-placeholder paths", 
   assert.doesNotMatch(edge, /internal-disabled/);
   assert.match(edge, /certificateType: 'ManagedCertificate'/);
 });
+
+function extraction() {
+  const p = runtime();
+  p.parameters.enableIntelligenceEvents = { value: true };
+  p.parameters.enableCaptureExtractionWorker = { value: true };
+  const add = (name, values) =>
+    p.parameters.runtimeConfig.value[name].env.push(
+      ...Object.entries(values).map(([name, value]) => ({ name, value })),
+    );
+  add("account", { CAPTURE_PROCESSING_ENABLED: "true", CAPTURE_MODEL_ADMISSION_ENABLED: "true" });
+  add("ingest", { CAPTURE_PROCESSING_ENABLED: "true", CAPTURE_EXTRACTION_PUBLISH_ENABLED: "true" });
+  add("intelligence", {
+    INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED: "true",
+    INTELLIGENCE_MODEL_ADMISSION_ENABLED: "true",
+  });
+  return p;
+}
+test("extraction deployment requires native events and all three explicit service gates", () => {
+  assert.equal(validateParameters(extraction()).runtime, true);
+  const missingEvents = extraction();
+  missingEvents.parameters.enableIntelligenceEvents.value = false;
+  assert.throws(() => validateParameters(missingEvents), /EXTRACTION_REQUIRES_RUNTIME_AND_EVENTS/);
+  for (const [name, key, error] of [
+    ["account", "CAPTURE_MODEL_ADMISSION_ENABLED", /CAPTURE_ADMISSION_NOT_ENABLED/],
+    ["ingest", "CAPTURE_EXTRACTION_PUBLISH_ENABLED", /CAPTURE_PRODUCER_NOT_ENABLED/],
+    ["intelligence", "INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED", /CAPTURE_CONSUMER_NOT_ENABLED/],
+  ]) {
+    const p = extraction();
+    p.parameters.runtimeConfig.value[name].env.find((entry) => entry.name === key).value = "false";
+    assert.throws(() => validateParameters(p), error);
+  }
+});
+test("extraction subscription is native-aligned and scoped to its event worker identity", () => {
+  const p = extraction();
+  p.parameters.runtimeConfig.value.intelligence.env.push({
+    name: "INTELLIGENCE_CAPTURE_SUBSCRIPTION",
+    value: "wrong-subscription",
+  });
+  assert.throws(() => validateParameters(p), /CAPTURE_SUBSCRIPTION_MISMATCH/);
+  const main = readFileSync(new URL("../main.bicep", import.meta.url), "utf8");
+  assert.match(main, /name: 'intelligence-extraction', service: 'intelligence', entry: 'worker'/);
+  assert.match(main, /subscriptionName: 'capture-extraction-v1'/);
+  assert.match(
+    main,
+    /name: 'ingest-processing', service: 'ingest', entry: 'events', extra: \{ INGEST_EVENT_WORKER_KIND: 'processing' \}/,
+  );
+  assert.match(main, /worker.name == 'ingest-processing' \? filter/);
+  assert.match(main, /principalId: workerApps\[indexOf\(workerNames, 'intelligence-events'\)\]/);
+  const resources = readFileSync(
+    new URL("../modules/cell-resources.bicep", import.meta.url),
+    "utf8",
+  );
+  assert.match(resources, /parent: topics\[indexOf\(publishers, 'ingest'\)\]/);
+  assert.match(resources, /if \(enableCaptureExtraction\)/);
+});
