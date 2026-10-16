@@ -62,6 +62,7 @@ export class ModelUsageService {
     return this.repository.transaction(actor, async (tx) => {
       const reference = await tx.reservation(reservationId);
       if (!reference || reference.ownerId !== actor.actorId) throw new AppError("NOT_FOUND", 404);
+      if (reference.purpose === "capture_extraction") throw new AppError("FORBIDDEN", 403);
       await tx.lock(reference.operationId, reference.purpose);
       const current = await tx.reservation(reservationId);
       if (!current || current.ownerId !== actor.actorId) throw new AppError("NOT_FOUND", 404);

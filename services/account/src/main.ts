@@ -16,6 +16,12 @@ import { importJWK } from "jose";
 import { CaptureConsentService } from "./application/capture-consent.js";
 import { PostgresCaptureConsents } from "./infrastructure/capture-consent-store.js";
 import { IngestCaptureOwnerContext } from "./infrastructure/capture-owner-context.js";
+import {
+  CaptureModelUsageService,
+  type CaptureModelReadiness,
+} from "./application/capture-model-usage.js";
+import { PostgresCaptureModelUsage } from "./infrastructure/capture-model-store.js";
+import { IngestCaptureModelReadiness } from "./infrastructure/capture-model-readiness.js";
 const config = z
   .object({
     ACCOUNT_DATABASE_URL: z.string().min(1),
@@ -26,6 +32,7 @@ const config = z
     WORKOS_PROFILE_API_KEY: z.string().min(1).optional(),
     SERVICE_TRUSTED_JWKS: z.string().min(1),
     CAPTURE_PROCESSING_ENABLED: z.enum(["true", "false"]).default("false"),
+    CAPTURE_MODEL_ADMISSION_ENABLED: z.enum(["true", "false"]).default("false"),
     INGEST_INTERNAL_URL: z.string().url().optional(),
     SERVICE_PRIVATE_JWK: z.string().min(1).optional(),
     SERVICE_KEY_ID: z.string().min(1).optional(),
@@ -44,6 +51,25 @@ let captureConsents = new CaptureConsentService(new PostgresCaptureConsents(pool
     throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
   },
 });
+let captureReadiness: CaptureModelReadiness = {
+  async assertReady() {
+    throw new AppError("CAPTURE_MODEL_ADMISSION_NOT_CONFIGURED", 503);
+  },
+};
+if (
+  config.CAPTURE_MODEL_ADMISSION_ENABLED === "true" &&
+  config.CAPTURE_PROCESSING_ENABLED === "true"
+) {
+  if (!config.INGEST_INTERNAL_URL || !config.SERVICE_PRIVATE_JWK || !config.SERVICE_KEY_ID)
+    throw new Error("CAPTURE_MODEL_CONFIGURATION_INCOMPLETE");
+  const key = await importJWK(JSON.parse(config.SERVICE_PRIVATE_JWK), "EdDSA");
+  if (key instanceof Uint8Array) throw new Error("INVALID_SERVICE_SIGNING_KEY");
+  captureReadiness = new IngestCaptureModelReadiness(
+    config.INGEST_INTERNAL_URL,
+    key,
+    config.SERVICE_KEY_ID,
+  );
+}
 if (config.CAPTURE_PROCESSING_ENABLED === "true") {
   if (!config.INGEST_INTERNAL_URL || !config.SERVICE_PRIVATE_JWK || !config.SERVICE_KEY_ID)
     throw new Error("CAPTURE_PROCESSING_CONFIGURATION_INCOMPLETE");
@@ -64,6 +90,12 @@ const app = accountApp(
   new ServiceIdentity("account", JSON.parse(config.SERVICE_TRUSTED_JWKS)),
   new ModelUsageService(new PostgresModelUsage(pool)),
   captureConsents,
+  new CaptureModelUsageService(
+    new PostgresCaptureModelUsage(pool),
+    captureReadiness,
+    config.CAPTURE_MODEL_ADMISSION_ENABLED === "true" &&
+      config.CAPTURE_PROCESSING_ENABLED === "true",
+  ),
 );
 app.addHook("onClose", () => pool.end());
 for (const signal of ["SIGTERM", "SIGINT"] as const)

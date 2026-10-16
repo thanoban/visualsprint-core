@@ -1,6 +1,12 @@
 export type ModelOutcome = "succeeded" | "unknown" | "not_started";
 export type ModelReservationState = "held" | ModelOutcome;
-export type ModelPurpose = "preparation" | "summary" | "chat" | "indexing" | "retrieval";
+export type ModelPurpose =
+  | "preparation"
+  | "summary"
+  | "chat"
+  | "indexing"
+  | "retrieval"
+  | "capture_extraction";
 export type ModelUsageRequest = {
   operationId: string;
   purpose: ModelPurpose;

@@ -13,12 +13,14 @@ import {
 import type { AccountService } from "../application/account.js";
 import type { ModelUsageService } from "../application/model-usage.js";
 import type { CaptureConsentService } from "../application/capture-consent.js";
+import type { CaptureModelUsageService } from "../application/capture-model-usage.js";
 export function accountApp(
   service: AccountService,
   verifyUser: (token: string) => Promise<Identity>,
   serviceIdentity: ServiceIdentity,
   modelUsage?: ModelUsageService,
   captureConsents?: CaptureConsentService,
+  captureModels?: CaptureModelUsageService,
 ) {
   const app = Fastify({
     bodyLimit: 16_000,
@@ -60,6 +62,10 @@ export function accountApp(
         if (workspaceId !== hop.actor.workspaceId) throw new AppError("FORBIDDEN", 403);
         actors.set(request, hop.actor);
         callers.set(request, hop.caller);
+        if (request.routeOptions.url?.includes("/capture-processing/model-usage/")) {
+          if (hop.caller !== "intelligence") throw new AppError("FORBIDDEN", 403);
+          return;
+        }
         if (request.routeOptions.url?.includes("/capture-processing/")) {
           const path = request.routeOptions.url;
           const allowed = path.endsWith("/withdrawal-cleanup")
@@ -160,6 +166,23 @@ export function accountApp(
         if (!modelUsage) throw new AppError("MODEL_USAGE_UNAVAILABLE", 503);
         return modelUsage.reserve(actor(request), request.body);
       });
+      routes.post("/capture-processing/model-usage/reservations", (request, reply) => {
+        reply.header("cache-control", "no-store");
+        if (!captureModels) throw new AppError("CAPTURE_MODEL_ADMISSION_NOT_CONFIGURED", 503);
+        return captureModels.reserve(actor(request), request.body);
+      });
+      routes.post(
+        "/capture-processing/model-usage/reservations/:reservationId/record",
+        (request, reply) => {
+          reply.header("cache-control", "no-store");
+          if (!captureModels) throw new AppError("CAPTURE_MODEL_ADMISSION_NOT_CONFIGURED", 503);
+          return captureModels.record(
+            actor(request),
+            id.parse((request.params as { reservationId: string }).reservationId),
+            request.body,
+          );
+        },
+      );
       routes.post("/model-usage/reservations/:reservationId/record", (request) => {
         if (!modelUsage) throw new AppError("MODEL_USAGE_UNAVAILABLE", 503);
         return modelUsage.record(

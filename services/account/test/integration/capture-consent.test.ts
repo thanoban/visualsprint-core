@@ -9,6 +9,7 @@ import {
   assertRuntimeRole,
   ServiceIdentity,
   serviceToken,
+  AppError,
   type Actor,
 } from "@visualsprint/platform";
 import { PostgresAccount } from "../../src/infrastructure/store.js";
@@ -31,6 +32,65 @@ const account = new AccountService(new PostgresAccount(pool), "dev-cell"),
 before(async () => {
   await migrate(migration, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await assertRuntimeRole(pool);
+});
+
+test("disabled creation reader leaves signed withdrawal cleanup available after owner logout", async () => {
+  const f = await fixture();
+  const grant = await f.service.create(f.actor, randomUUID(), {
+    captureId: f.captureId,
+    consent: true,
+    policyVersion: "english-text-v1",
+  });
+  const disabled = new CaptureConsentService(repository, {
+    async read() {
+      throw new AppError("CAPTURE_PROCESSING_NOT_CONFIGURED", 503);
+    },
+  });
+  const keys = await generateKeyPair("EdDSA"),
+    publicKey = { ...(await exportJWK(keys.publicKey)), kid: "disabled-fixture" };
+  const identity = new ServiceIdentity("account", { ingest: [publicKey] });
+  const app = accountApp(account, async () => f.identity, identity, undefined, disabled);
+  const authorization = `Bearer ${await serviceToken({ caller: "ingest", audience: "account", actor: f.actor, privateKey: keys.privateKey, keyId: "disabled-fixture" })}`;
+  const path = `/internal/workspaces/${f.actor.workspaceId}/capture-processing`;
+  try {
+    const creation = await app.inject({
+      method: "POST",
+      url: `${path}/consents`,
+      headers: { authorization, "idempotency-key": randomUUID() },
+      payload: { captureId: randomUUID(), consent: true, policyVersion: "english-text-v1" },
+    });
+    assert.equal(creation.statusCode, 503);
+    await account.logout(f.identity);
+    const cleanup = await app.inject({
+      method: "POST",
+      url: `${path}/withdrawal-cleanup`,
+      headers: { authorization },
+      payload: { captureId: f.captureId, meetingId: f.meetingId, policyVersion: "english-text-v1" },
+    });
+    assert.equal(cleanup.statusCode, 200);
+    assert.equal(cleanup.json().consentId, grant.consentId);
+    assert.equal(cleanup.json().creationBlocked, true);
+    assert.equal(cleanup.json().active, false);
+    await assert.rejects(
+      f.service.authorize(
+        {
+          ...f.actor,
+          operationGrantId: grant.consentId,
+          sessionId: `operation:${grant.consentId}`,
+        },
+        {
+          consentId: grant.consentId,
+          expectedVersion: 1,
+          meetingId: f.meetingId,
+          captureId: f.captureId,
+          policyVersion: "english-text-v1",
+        },
+      ),
+      /FORBIDDEN/,
+    );
+  } finally {
+    await app.close();
+  }
 });
 after(async () => {
   await pool.end();

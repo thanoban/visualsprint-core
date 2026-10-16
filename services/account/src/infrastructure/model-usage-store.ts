@@ -25,7 +25,7 @@ function reservation(row: Record<string, unknown>): ModelReservation {
     state: row.state as ModelReservation["state"],
   };
 }
-class ModelTx implements ModelUsageTransaction {
+export class ModelTx implements ModelUsageTransaction {
   constructor(
     private readonly db: pg.PoolClient,
     private readonly actor: Actor,
