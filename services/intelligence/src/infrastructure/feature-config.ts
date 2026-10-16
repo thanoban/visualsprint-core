@@ -24,16 +24,24 @@ export async function installedFeatures(pool: pg.Pool) {
     preparation: boolean;
     extension: boolean;
     extraction: boolean;
+    extractionChunks: boolean;
   }>(`SELECT
     to_regclass('public.vector_index_jobs') IS NOT NULL AS vector,
     to_regclass('public.preparation_jobs') IS NOT NULL AS preparation,
     EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector') AS extension,
-    to_regclass('public.capture_extraction_jobs') IS NOT NULL AS extraction`);
+    to_regclass('public.capture_extraction_jobs') IS NOT NULL AS extraction,
+    to_regclass('public.capture_extraction_chunks') IS NOT NULL AS "extractionChunks"`);
   return result.rows[0]!;
 }
 export function validateFeatures(
   config: z.infer<typeof intelligenceFeatureConfig>,
-  installed: { vector: boolean; preparation: boolean; extension: boolean; extraction?: boolean },
+  installed: {
+    vector: boolean;
+    preparation: boolean;
+    extension: boolean;
+    extraction?: boolean;
+    extractionChunks?: boolean;
+  },
   modelConfigured: boolean,
 ) {
   if (
@@ -58,7 +66,10 @@ export function validateFeatures(
     throw new Error("PREPARATION_DISABLED");
   if (config.INTELLIGENCE_WORKER_KIND === "indexing" && !config.INTELLIGENCE_RETRIEVAL_ENABLED)
     throw new Error("RETRIEVAL_DISABLED");
-  if (config.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED && (!installed.extraction || !modelConfigured))
+  if (
+    config.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED &&
+    (!installed.extraction || !installed.extractionChunks || !modelConfigured)
+  )
     throw new Error("CAPTURE_EXTRACTION_CONFIGURATION_INCOMPLETE");
   if (
     config.INTELLIGENCE_WORKER_KIND === "extraction" &&

@@ -7,7 +7,9 @@ import {
   type CaptureExtractionJobs,
   type CaptureExtractionJob,
   type FinalizedCaptureProof,
+  type ExtractionChunkOutput,
 } from "../application/capture-extraction.js";
+import { modelClaims } from "../application/schemas.js";
 import type { Result } from "../domain/evidence.js";
 
 function view(row: Record<string, unknown>): CaptureExtractionJob {
@@ -16,6 +18,7 @@ function view(row: Record<string, unknown>): CaptureExtractionJob {
     proof: finalizedCaptureProof.parse(row.proof),
     status: row.status as CaptureExtractionJob["status"],
     attempts: Number(row.attempts),
+    completedChunks: Number(row.completed_chunks ?? 0),
     leaseToken: row.lease_token === null ? null : String(row.lease_token),
     leaseUntil: row.lease_until as Date | null,
     result: row.result as Result | null,
@@ -185,7 +188,7 @@ export class PostgresCaptureExtractions implements CaptureExtractionJobs {
     return this.scoped(workspaceId, async (db) => {
       const row = (
         await db.query(
-          "UPDATE capture_extraction_jobs SET status='running',attempts=attempts+1,lease_token=$3,lease_until=now()+interval '300 seconds' WHERE workspace_id=$1 AND id=$2 AND (status='queued' OR (status='running' AND lease_until<now())) RETURNING *",
+          "UPDATE capture_extraction_jobs SET status='running',attempts=attempts+1,lease_token=$3,lease_until=now()+interval '300 seconds' WHERE workspace_id=$1 AND id=$2 AND (status='queued' OR (status='running' AND lease_until<now())) RETURNING *,COALESCE((SELECT jsonb_array_length(c.outputs) FROM capture_extraction_chunks c WHERE c.workspace_id=capture_extraction_jobs.workspace_id AND c.job_id=capture_extraction_jobs.id),0) AS completed_chunks",
           [workspaceId, id.parse(jobId), randomUUID()],
         )
       ).rows[0];
@@ -206,6 +209,58 @@ export class PostgresCaptureExtractions implements CaptureExtractionJobs {
   }
   guard(job: CaptureExtractionJob) {
     return this.scoped(job.proof.workspaceId, (db) => this.fenced(db, job));
+  }
+  chunks(job: CaptureExtractionJob, plan: string, count: number) {
+    return this.scoped(job.proof.workspaceId, async (db) => {
+      await this.fenced(db, job);
+      await db.query(
+        "INSERT INTO capture_extraction_chunks(workspace_id,job_id,source_fingerprint,chunk_count) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        [job.proof.workspaceId, job.id, plan, count],
+      );
+      const row = (
+        await db.query(
+          "SELECT source_fingerprint,chunk_count,outputs FROM capture_extraction_chunks WHERE workspace_id=$1 AND job_id=$2",
+          [job.proof.workspaceId, job.id],
+        )
+      ).rows[0];
+      if (
+        !row ||
+        row.source_fingerprint !== plan ||
+        row.chunk_count !== count ||
+        !Array.isArray(row.outputs) ||
+        row.outputs.length > count
+      )
+        throw new AppError("SOURCE_CHANGED", 409);
+      return row.outputs.map((output: unknown) => modelClaims.parse(output));
+    });
+  }
+  checkpoint(
+    job: CaptureExtractionJob,
+    plan: string,
+    index: number,
+    output: ExtractionChunkOutput,
+  ) {
+    return this.scoped(job.proof.workspaceId, async (db) => {
+      await this.fenced(db, job);
+      const result = await db.query(
+        "UPDATE capture_extraction_chunks SET outputs=outputs || $5::jsonb WHERE workspace_id=$1 AND job_id=$2 AND source_fingerprint=$3 AND jsonb_array_length(outputs)=$4 AND chunk_count>$4 RETURNING job_id",
+        [job.proof.workspaceId, job.id, plan, index, JSON.stringify([modelClaims.parse(output)])],
+      );
+      if (!result.rowCount) throw new AppError("EXTRACTION_CHECKPOINT_CONFLICT", 409);
+    });
+  }
+  yield(job: CaptureExtractionJob) {
+    return this.scoped(job.proof.workspaceId, async (db) => {
+      await this.fenced(db, job);
+      await db.query(
+        "UPDATE capture_extraction_jobs SET status='queued',error_code=NULL,lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND id=$2",
+        [job.proof.workspaceId, job.id],
+      );
+      await db.query(
+        "UPDATE capture_extraction_work_index SET next_at=now() WHERE workspace_id=$1 AND job_id=$2",
+        [job.proof.workspaceId, job.id],
+      );
+    });
   }
   complete(job: CaptureExtractionJob, result: Result) {
     return this.scoped(job.proof.workspaceId, async (db) => {

@@ -159,7 +159,7 @@ function fixture() {
           claims: [
             {
               kind: "discussion",
-              text: input.evidence[0]!.text,
+              text: input.evidence[0]!.text.slice(0, 100),
               citation: {
                 meetingId: proof.meetingId,
                 captureId: proof.captureId,
@@ -331,4 +331,71 @@ test("owning lease expiry during the final source RPC prevents provider spend an
     ).rows[0].state,
     "not_started",
   );
+});
+
+test("multi-chunk checkpoints survive new worker instances, are tenant isolated and cascade on coordinated deletion", async () => {
+  const f = fixture();
+  f.snapshot.evidence = Array.from({ length: 4 }, (_, index) => ({
+    ...f.snapshot.evidence[0]!,
+    segmentId: randomUUID(),
+    text: `${index}: ${"meeting evidence ".repeat(6000)}`,
+    startMs: index * 1000,
+    endMs: (index + 1) * 1000,
+  }));
+  const jobId = (await f.service.consume(f.event)).id!;
+  await f.service.work(f.proof.workspaceId, jobId);
+  assert.equal(f.modelCalls, 1);
+  const checkpoint = (
+    await query(
+      f.proof.workspaceId,
+      "SELECT outputs,chunk_count FROM capture_extraction_chunks WHERE job_id=$1",
+      [jobId],
+    )
+  ).rows[0];
+  assert.equal(checkpoint.outputs.length, 1);
+  assert.equal(checkpoint.chunk_count, 4);
+  assert.equal(
+    (await query(randomUUID(), "SELECT 1 FROM capture_extraction_chunks WHERE job_id=$1", [jobId]))
+      .rowCount,
+    0,
+  );
+  // Recreating the store demonstrates that no in-memory progress is needed.
+  const recreated = new PostgresCaptureExtractions(pool);
+  for (let index = 1; index < 4; index++) await f.service.work(f.proof.workspaceId, jobId);
+  assert.equal((await recreated.load(f.actor, jobId))!.status, "complete");
+  assert.equal(f.modelCalls, 4);
+  assert.equal((await recreated.load(f.actor, jobId))!.result!.claims.length, 4);
+  await base.scoped(f.proof.workspaceId, (tx) =>
+    tx.purgeMeeting(f.proof.meetingId, randomUUID(), 1),
+  );
+  await recreated.purgeMeeting(f.proof.workspaceId, f.proof.meetingId);
+  assert.equal(
+    (
+      await query(f.proof.workspaceId, "SELECT 1 FROM capture_extraction_chunks WHERE job_id=$1", [
+        jobId,
+      ])
+    ).rowCount,
+    0,
+  );
+});
+
+test("checkpoint writes require current lease and exact durable source plan", async () => {
+  const f = fixture(),
+    jobId = (await f.service.consume(f.event)).id!;
+  const job = (await jobs.claim(f.proof.workspaceId, jobId))!;
+  assert.deepEqual(await jobs.chunks(job, "plan-a", 2), []);
+  await assert.rejects(jobs.chunks(job, "plan-b", 2), /SOURCE_CHANGED/);
+  await assert.rejects(jobs.chunks(job, "plan-a", 3), /SOURCE_CHANGED/);
+  const output = { claims: [], unsupported: true };
+  await jobs.checkpoint(job, "plan-a", 0, output);
+  await assert.rejects(jobs.checkpoint(job, "plan-a", 0, output), /EXTRACTION_CHECKPOINT_CONFLICT/);
+  await query(
+    f.proof.workspaceId,
+    "UPDATE capture_extraction_jobs SET lease_until=now()-interval '1 second' WHERE id=$1",
+    [jobId],
+  );
+  await assert.rejects(jobs.checkpoint(job, "plan-a", 1, output), /EXTRACTION_LEASE_LOST/);
+  await assert.rejects(jobs.yield(job), /EXTRACTION_LEASE_LOST/);
+  const resumed = (await jobs.claim(f.proof.workspaceId, jobId))!;
+  assert.deepEqual(await jobs.chunks(resumed, "plan-a", 2), [output]);
 });

@@ -36,6 +36,25 @@ test("native features default disabled and reject model bypass, missing extensio
   );
   assert.throws(() => intelligenceFeatureConfig.parse({ INTELLIGENCE_PREPARATION_ENABLED: "1" }));
 });
+test("chunked extraction requires its checkpoint migration but flag-off cleanup retains base extraction installation", () => {
+  const installed = {
+    vector: false,
+    extension: false,
+    preparation: false,
+    extraction: true,
+    extractionChunks: false,
+  };
+  validateFeatures(intelligenceFeatureConfig.parse({}), installed, false);
+  const config = intelligenceFeatureConfig.parse({
+    INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED: "true",
+    INTELLIGENCE_MODEL_ADMISSION_ENABLED: "true",
+  });
+  assert.throws(
+    () => validateFeatures(config, installed, true),
+    /CAPTURE_EXTRACTION_CONFIGURATION_INCOMPLETE/,
+  );
+  validateFeatures(config, { ...installed, extractionChunks: true }, true);
+});
 test("signed preparation context preserves human facts, excludes target and never fabricates verified completion", async () => {
   const { privateKey } = await generateKeyPair("EdDSA"),
     target = randomUUID(),

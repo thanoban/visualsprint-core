@@ -1,10 +1,18 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { eventEnvelope, id, type DomainEvent } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
 import { fingerprint, validateClaims, type Snapshot, type Result } from "../domain/evidence.js";
 import type { Model, Sources } from "./ports.js";
 import { modelClaims } from "./schemas.js";
 import { modelOperationId } from "./model-usage.js";
+import {
+  extractionChunks,
+  extractionInput,
+  extractionInputBound,
+  mergeExtractionClaims,
+} from "../domain/extraction-chunks.js";
+export type ExtractionChunkOutput = z.infer<typeof modelClaims>;
 
 export const finalizedCaptureProof = z
   .object({
@@ -24,6 +32,7 @@ export type CaptureExtractionJob = {
   proof: FinalizedCaptureProof;
   status: "queued" | "running" | "complete" | "failed" | "invalidated";
   attempts: number;
+  completedChunks?: number;
   leaseToken: string | null;
   leaseUntil: Date | null;
   result: Result | null;
@@ -43,6 +52,14 @@ export interface CaptureExtractionJobs {
   reject(event: DomainEvent, proof: FinalizedCaptureProof, code: string): Promise<void>;
   claim(workspaceId: string, id: string): Promise<CaptureExtractionJob | null>;
   guard(job: CaptureExtractionJob): Promise<void>;
+  chunks(job: CaptureExtractionJob, plan: string, count: number): Promise<ExtractionChunkOutput[]>;
+  checkpoint(
+    job: CaptureExtractionJob,
+    plan: string,
+    index: number,
+    output: ExtractionChunkOutput,
+  ): Promise<void>;
+  yield(job: CaptureExtractionJob): Promise<void>;
   complete(job: CaptureExtractionJob, result: Result): Promise<void>;
   fail(job: CaptureExtractionJob, code: string, retry: boolean): Promise<void>;
   due(): Promise<{ workspaceId: string; id: string }[]>;
@@ -140,20 +157,39 @@ export class DurableCaptureExtraction {
   async work(workspaceId: string, id: string) {
     const job = await this.jobs.claim(workspaceId, id);
     if (!job) return;
+    let completedChunks = job.completedChunks ?? 0;
     try {
       await this.evidence.authorize(job.proof);
       const snapshot = await this.evidence.read(job.proof);
       exactScope(job.proof, snapshot);
       const hash = fingerprint(snapshot),
-        input = { purpose: "summary" as const, question: null, evidence: snapshot.evidence };
-      const maxInputTokens = Buffer.byteLength(JSON.stringify(input), "utf8") + 4096;
-      if (maxInputTokens > 250000) throw new AppError("MODEL_INPUT_TOO_LARGE", 409);
-      let generated: z.infer<typeof modelClaims> = { claims: [], unsupported: true };
-      if (snapshot.evidence.length) {
-        const operationId = modelOperationId(job.id, "capture-extraction-v1");
+        chunks = extractionChunks(snapshot.evidence);
+      // Chunk boundaries are part of the durable plan. A deployment must not
+      // reinterpret already-spent operation IDs using a changed partition.
+      const plan = createHash("sha256")
+        .update("capture-chunks-v2:")
+        .update(hash)
+        .update(JSON.stringify(chunks))
+        .digest("hex");
+      const outputs = chunks.length ? await this.jobs.chunks(job, plan, chunks.length) : [];
+      completedChunks = outputs.length;
+      for (const [index, output] of outputs.entries()) {
+        modelClaims.parse(output);
+        validateClaims(output.claims, chunks[index]!);
+      }
+      if (outputs.length < chunks.length) {
+        const index = outputs.length,
+          chunk = chunks[index]!,
+          input = extractionInput(chunk);
+        // Chunk zero preserves the previous one-shot replay barrier for jobs
+        // which might have dispatched before the chunked worker was deployed.
+        const operationId = modelOperationId(
+          job.id,
+          index === 0 ? "capture-extraction-v1" : `capture-extraction-chunk-v2:${index}`,
+        );
         const reservation = await this.admission.reserve(job.proof, {
           operationId,
-          maxInputTokens,
+          maxInputTokens: extractionInputBound(chunk),
           maxOutputTokens: 6000,
         });
         if (reservation.replay || reservation.state !== "held")
@@ -184,28 +220,47 @@ export class DurableCaptureExtraction {
           throw new AppError("MODEL_DISPATCH_UNKNOWN", 409);
         }
         await this.admission.record(job.proof, operationId, reservation.reservationId, "succeeded");
-        generated = modelClaims.parse(output);
-        validateClaims(generated.claims, snapshot.evidence);
+        const generated = modelClaims.parse(output);
+        validateClaims(generated.claims, chunk);
+        if (Buffer.byteLength(JSON.stringify([...outputs, generated]), "utf8") > 3_000_000)
+          throw new AppError("EXTRACTION_OUTPUT_TOO_LARGE", 409);
+        await this.evidence.authorize(job.proof);
+        const after = await this.evidence.read(job.proof);
+        exactScope(job.proof, after);
+        if (fingerprint(after) !== hash) throw new AppError("SOURCE_CHANGED", 409);
+        await this.jobs.checkpoint(job, plan, index, generated);
+        outputs.push(generated);
+        completedChunks = outputs.length;
+        if (outputs.length < chunks.length) {
+          await this.jobs.yield(job);
+          return;
+        }
       }
+      const generated = mergeExtractionClaims(outputs);
       await this.evidence.authorize(job.proof);
       const current = await this.evidence.read(job.proof);
       exactScope(job.proof, current);
       if (fingerprint(current) !== hash) throw new AppError("SOURCE_CHANGED", 409);
       await this.jobs.guard(job);
-      await this.jobs.complete(job, {
+      const result: Result = {
         ...generated,
         partial: snapshot.versions.some((row) => row.coverage !== "complete"),
         sourceFingerprint: hash,
         sourceVersions: snapshot.versions,
         reviewRequired: true,
-      });
+      };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > 3_050_000)
+        throw new AppError("EXTRACTION_OUTPUT_TOO_LARGE", 409);
+      await this.jobs.complete(job, result);
     } catch (error) {
       const code = error instanceof AppError ? error.code : "EXTRACTION_VALIDATION_FAILED";
       // Admission/dispatch ambiguity is never retried as another paid model call.
       await this.jobs.fail(
         job,
         code,
-        error instanceof AppError && [429, 503].includes(error.status) && job.attempts < 3,
+        error instanceof AppError &&
+          [429, 503].includes(error.status) &&
+          job.attempts - completedChunks < 3,
       );
     }
   }

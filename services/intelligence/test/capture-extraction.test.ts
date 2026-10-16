@@ -10,6 +10,7 @@ import {
   type CaptureExtractionEvidence,
   type CaptureExtractionAdmission,
   type FinalizedCaptureProof,
+  type ExtractionChunkOutput,
 } from "../src/application/capture-extraction.js";
 import type { Snapshot } from "../src/domain/evidence.js";
 import type { Model } from "../src/application/ports.js";
@@ -99,7 +100,24 @@ function fixture() {
         throw new AppError("FORBIDDEN", 403);
     },
   };
+  let chunkPlan: string | null = null;
+  const chunkOutputs: ExtractionChunkOutput[] = [];
   const jobs: CaptureExtractionJobs = {
+    async chunks(_job, plan) {
+      if (chunkPlan && plan !== chunkPlan) throw new AppError("SOURCE_CHANGED", 409);
+      chunkPlan = plan;
+      return structuredClone(chunkOutputs);
+    },
+    async checkpoint(_job, plan, index, output) {
+      if (leaseLost) throw new AppError("EXTRACTION_LEASE_LOST", 409);
+      assert.equal(plan, chunkPlan);
+      assert.equal(index, chunkOutputs.length);
+      chunkOutputs.push(structuredClone(output));
+      job.completedChunks = chunkOutputs.length;
+    },
+    async yield() {
+      job.status = "queued";
+    },
     async accept() {
       accepts++;
       return { id: job.id };
@@ -177,7 +195,7 @@ function fixture() {
           claims: [
             {
               kind: "commitment",
-              text: input.evidence[0]!.text,
+              text: input.evidence[0]!.text.slice(0, 100),
               citation: {
                 meetingId: proof.meetingId,
                 captureId: proof.captureId,
@@ -373,4 +391,88 @@ test("owner-private draft reads enforce current normal authority and invalidate 
   await assert.rejects(f.service.load(actor, f.job.id), /SOURCE_CHANGED/);
   assert.equal(f.job.result, null);
   assert.equal(f.job.status, "invalidated");
+});
+
+function longFixture() {
+  const f = fixture();
+  f.snapshot = {
+    ...f.snapshot,
+    evidence: Array.from({ length: 4 }, (_, index) => ({
+      ...f.snapshot.evidence[0]!,
+      segmentId: randomUUID(),
+      text: `${index}: ${"long meeting evidence ".repeat(4500)}`,
+      startMs: index * 1000,
+      endMs: (index + 1) * 1000,
+    })),
+  };
+  return f;
+}
+test("long extraction durably yields after each chunk and resumes without repaying completed chunks", async () => {
+  const f = longFixture();
+  for (let index = 0; index < 4; index++) {
+    await f.service.work(f.proof.workspaceId, f.job.id);
+    assert.equal(f.modelCalls, index + 1);
+    assert.equal(f.job.status, index === 3 ? "complete" : "queued");
+  }
+  assert.equal(f.job.result!.claims.length, 4);
+  assert.equal(f.job.result!.partial, true);
+  assert.deepEqual(
+    new Set(f.job.result!.claims.map((claim) => claim.citation.segmentId)),
+    new Set(f.snapshot.evidence.map((row) => row.segmentId)),
+  );
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.modelCalls, 4);
+});
+test("crash after checkpoint but before yield resumes completed work without another paid call", async () => {
+  const f = longFixture(),
+    original = f.jobs.yield;
+  f.jobs.yield = async () => {
+    throw new AppError("DATABASE_UNAVAILABLE", 503);
+  };
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.modelCalls, 1);
+  f.jobs.yield = original;
+  while (f.job.status === "queued") await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.job.status, "complete");
+  assert.equal(f.modelCalls, 4);
+});
+test("withdrawal or correction between chunks prevents further spend and never publishes partial-looking-complete output", async () => {
+  for (const mode of ["withdraw", "correct"] as const) {
+    const f = longFixture();
+    await f.service.work(f.proof.workspaceId, f.job.id);
+    if (mode === "withdraw") f.authorityError = new AppError("PROCESSING_FORBIDDEN", 403);
+    else f.snapshot.evidence[0]!.text = "human correction";
+    await f.service.work(f.proof.workspaceId, f.job.id);
+    assert.equal(f.modelCalls, 1);
+    assert.equal(f.job.status, "failed");
+    assert.equal(f.job.result, null);
+  }
+});
+test("unknown outcome in a later chunk blocks only that generation and recovery never repeats paid dispatch", async () => {
+  const f = longFixture();
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  f.beforeModel = async () => {
+    throw new Error("lost second chunk response");
+  };
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.job.errorCode, "MODEL_DISPATCH_UNKNOWN");
+  f.job.status = "queued";
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.modelCalls, 2);
+  assert.equal(f.job.errorCode, "MODEL_RESERVATION_REPLAY");
+  assert.equal(f.job.result, null);
+});
+
+test("completed chunks do not consume transient pre-dispatch retry allowance", async () => {
+  const f = longFixture();
+  for (let index = 0; index < 3; index++) await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.job.attempts, 3);
+  f.authorityError = new AppError("AUTHORITY_UNAVAILABLE", 503);
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.job.status, "queued");
+  assert.equal(f.modelCalls, 3);
+  f.authorityError = null;
+  await f.service.work(f.proof.workspaceId, f.job.id);
+  assert.equal(f.job.status, "complete");
+  assert.equal(f.modelCalls, 4);
 });

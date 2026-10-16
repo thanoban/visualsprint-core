@@ -82,47 +82,75 @@ export function gatewayApp(
         throw new AppError("PROVIDER_CALLBACK_REJECTED", status);
       });
       async function forwardCalendar(request: FastifyRequest, reply: FastifyReply, token?: string) {
-        const params = z.object({ cellId: z.string().regex(/^[a-z0-9-]{1,100}$/),
-          provider: z.enum(["google", "microsoft"]) }).parse(request.params);
+        const params = z
+          .object({
+            cellId: z.string().regex(/^[a-z0-9-]{1,100}$/),
+            provider: z.enum(["google", "microsoft"]),
+          })
+          .parse(request.params);
         const origin = config.cells[params.cellId]?.integration;
         if (!origin) throw new AppError("NOT_FOUND", 404);
         const target = new URL(`/internal/calendar/webhooks/${params.provider}`, origin);
         if (token !== undefined) target.searchParams.set("validationToken", token);
         const headers: Record<string, string> = {};
-        if (params.provider === "google") for (const name of ["x-goog-channel-id", "x-goog-channel-token",
-          "x-goog-resource-id", "x-goog-resource-state", "x-goog-message-number", "x-goog-channel-expiration"]) {
-          const value = request.headers[name];
-          if (value !== undefined) headers[name] = z.string().max(2048).parse(value);
-        }
-        const body = token === undefined && Buffer.isBuffer(request.body) && request.body.length
-          ? new Uint8Array(request.body) : undefined;
+        if (params.provider === "google")
+          for (const name of [
+            "x-goog-channel-id",
+            "x-goog-channel-token",
+            "x-goog-resource-id",
+            "x-goog-resource-state",
+            "x-goog-message-number",
+            "x-goog-channel-expiration",
+          ]) {
+            const value = request.headers[name];
+            if (value !== undefined) headers[name] = z.string().max(2048).parse(value);
+          }
+        const body =
+          token === undefined && Buffer.isBuffer(request.body) && request.body.length
+            ? new Uint8Array(request.body)
+            : undefined;
         if (body) headers["content-type"] = "application/json";
         let response: Response;
-        try { response = await transport(target, { method: "POST", headers,
-          ...(body ? { body } : {}), redirect: "error", signal: AbortSignal.timeout(5000) }); }
-        catch { throw new AppError("UPSTREAM_UNAVAILABLE", 503); }
+        try {
+          response = await transport(target, {
+            method: "POST",
+            headers,
+            ...(body ? { body } : {}),
+            redirect: "error",
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch {
+          throw new AppError("UPSTREAM_UNAVAILABLE", 503);
+        }
         if (token !== undefined && response.status === 200) {
           const echoed = await boundedText(response, 4096);
           if (echoed !== token) throw new AppError("PROVIDER_CALLBACK_REJECTED", 503);
           return reply.type("text/plain; charset=utf-8").code(200).send(echoed);
         }
         await response.body?.cancel();
-        if (token === undefined && [202, 204].includes(response.status)) return reply.code(response.status).send();
-        throw new AppError("PROVIDER_CALLBACK_REJECTED",
-          [400, 401, 403, 404, 409, 413, 429].includes(response.status) ? response.status : 503);
+        if (token === undefined && [202, 204].includes(response.status))
+          return reply.code(response.status).send();
+        throw new AppError(
+          "PROVIDER_CALLBACK_REJECTED",
+          [400, 401, 403, 404, 409, 413, 429].includes(response.status) ? response.status : 503,
+        );
       }
-      routes.post("/cells/:cellId/calendars/:provider", {
-        bodyLimit: 24_000,
-        onRequest: async (request, reply) => {
-          const params = request.params as { provider: string };
-          const query = request.query as { validationToken?: unknown };
-          if (query.validationToken !== undefined) {
-            if (params.provider !== "microsoft") throw new AppError("INVALID_REQUEST", 400);
-            const token = z.string().min(1).max(2048).parse(query.validationToken);
-            await forwardCalendar(request, reply, token);
-          }
+      routes.post(
+        "/cells/:cellId/calendars/:provider",
+        {
+          bodyLimit: 24_000,
+          onRequest: async (request, reply) => {
+            const params = request.params as { provider: string };
+            const query = request.query as { validationToken?: unknown };
+            if (query.validationToken !== undefined) {
+              if (params.provider !== "microsoft") throw new AppError("INVALID_REQUEST", 400);
+              const token = z.string().min(1).max(2048).parse(query.validationToken);
+              await forwardCalendar(request, reply, token);
+            }
+          },
         },
-      }, async (request, reply) => forwardCalendar(request, reply));
+        async (request, reply) => forwardCalendar(request, reply),
+      );
     },
     { prefix: "/webhooks/v3" },
   );
@@ -149,12 +177,19 @@ export function gatewayApp(
       throw new AppError("UPSTREAM_UNAVAILABLE", 503);
     }
     const download = /\/exports\/[0-9a-f-]+\/download$/i.test(url.pathname) && method === "GET";
+    // Chunked drafts can exceed one model response. Keep this allowance narrow;
+    // ordinary APIs and mutation responses retain their original response bound.
+    const extraction =
+      method === "GET" &&
+      /^\/api\/v3\/workspaces\/[0-9a-f-]{36}\/intelligence\/capture-extractions\/[0-9a-f-]{36}$/i.test(
+        url.pathname,
+      );
     let data: unknown;
     try {
       data =
         download && response.ok && response.headers.get("content-type")?.startsWith("text/plain")
           ? await boundedText(response, 2_100_000)
-          : await boundedJson(response, download ? 2_100_000 : 1_000_000);
+          : await boundedJson(response, download ? 2_100_000 : extraction ? 3_100_000 : 1_000_000);
     } catch {
       throw new AppError("UPSTREAM_UNAVAILABLE", 503);
     }
