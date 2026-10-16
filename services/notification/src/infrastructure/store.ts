@@ -49,6 +49,10 @@ class Transaction implements NotificationTransaction {
       this.workspaceId + ":notification:" + reference,
     ]);
   }
+  private async clock() {
+    // Scheduling and lease fences must use the same clock. API/worker clocks can differ from PG.
+    return new Date((await this.db.query("SELECT clock_timestamp() AS now")).rows[0].now);
+  }
   async preferences(userId: string) {
     const row = (
       await this.db.query("SELECT * FROM preferences WHERE workspace_id=$1 AND user_id=$2", [
@@ -105,7 +109,7 @@ class Transaction implements NotificationTransaction {
       [this.workspaceId, userId, input.inApp, input.email],
     );
     if (input.email && current.deliveryHourUtc !== input.deliveryHourUtc) {
-      const at = nextDelivery(new Date(), input.deliveryHourUtc);
+      const at = nextDelivery(await this.clock(), input.deliveryHourUtc);
       await this.db.query(
         "WITH changed AS(UPDATE deliveries SET available_at=$3,version=version+1 WHERE workspace_id=$1 AND user_id=$2 AND channel='email' AND state IN('queued','held') RETURNING workspace_id,id) UPDATE delivery_work_index SET next_at=$3 FROM changed WHERE delivery_work_index.workspace_id=changed.workspace_id AND delivery_work_index.delivery_id=changed.id",
         [this.workspaceId, userId, at],
@@ -152,12 +156,12 @@ class Transaction implements NotificationTransaction {
     )
       return;
     const settings = await this.preferences(event.actorId);
+    const now = await this.clock();
     for (const channel of ["in_app", "email"] as const) {
       if (channel === "in_app" ? !settings.inApp : !settings.email || kind === "capture_updated")
         continue;
       const id = randomUUID();
-      const at =
-        channel === "in_app" ? new Date() : nextDelivery(new Date(), settings.deliveryHourUtc);
+      const at = channel === "in_app" ? now : nextDelivery(now, settings.deliveryHourUtc);
       await this.db.query(
         "INSERT INTO deliveries(workspace_id,id,user_id,meeting_id,event_id,kind,source_version,channel,state,available_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',$9)",
         [
@@ -198,16 +202,16 @@ class Transaction implements NotificationTransaction {
   }
   async claim(id: string) {
     const row = (
-      await this.db.query("SELECT * FROM deliveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [
-        this.workspaceId,
-        id,
-      ])
+      await this.db.query(
+        "SELECT *,clock_timestamp() AS database_now FROM deliveries WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+        [this.workspaceId, id],
+      )
     ).rows[0];
     if (
       !row ||
       ["delivered", "provider_sent", "failed", "cancelled"].includes(row.state) ||
-      new Date(row.available_at) > new Date() ||
-      (row.lease_until && new Date(row.lease_until) > new Date())
+      new Date(row.available_at) > new Date(row.database_now) ||
+      (row.lease_until && new Date(row.lease_until) > new Date(row.database_now))
     )
       return null;
     const reconcile = row.channel === "email" && ["dispatching", "unknown"].includes(row.state);
@@ -231,7 +235,7 @@ class Transaction implements NotificationTransaction {
     await this.lock("prefs:" + current.userId);
     const row = (
       await this.db.query(
-        "UPDATE deliveries SET state='dispatching',error_code=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND state IN('queued','held') AND channel='email' AND available_at<=now() AND EXISTS(SELECT 1 FROM preferences WHERE workspace_id=$1 AND user_id=$4 AND email=true) RETURNING id",
+        "UPDATE deliveries SET state='dispatching',error_code=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND lease_until>now() AND state IN('queued','held') AND channel='email' AND available_at<=now() AND EXISTS(SELECT 1 FROM preferences WHERE workspace_id=$1 AND user_id=$4 AND email=true) RETURNING id",
         [this.workspaceId, current.id, current.leaseToken, current.userId],
       )
     ).rows[0];
@@ -249,7 +253,7 @@ class Transaction implements NotificationTransaction {
   ) {
     const updated = (
       await this.db.query(
-        "UPDATE deliveries SET state=$4,error_code=$5,external_id=$6,version=version+1,lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND state NOT IN('cancelled','delivered','provider_sent','failed') RETURNING version",
+        "UPDATE deliveries SET state=$4,error_code=$5,external_id=$6,version=version+1,lease_token=NULL,lease_until=NULL WHERE workspace_id=$1 AND id=$2 AND lease_token=$3 AND lease_until>now() AND state NOT IN('cancelled','delivered','provider_sent','failed') RETURNING version",
         [this.workspaceId, current.id, current.leaseToken, state, code, externalId],
       )
     ).rows[0];
@@ -324,6 +328,16 @@ class Transaction implements NotificationTransaction {
       this.workspaceId,
       meetingId,
     ]);
+    // Retire both published metadata and leased, not-yet-published events. A running publisher
+    // must not restore the row or routing after this transaction commits.
+    await this.db.query(
+      "DELETE FROM outbox WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM jsonb_array_elements(event->'references') ref WHERE ref->>'kind'='meeting' AND ref->>'id'=$2)",
+      [this.workspaceId, meetingId],
+    );
+    await this.db.query(
+      "DELETE FROM event_work_index WHERE workspace_id=$1 AND NOT EXISTS(SELECT 1 FROM outbox WHERE workspace_id=$1 AND published_at IS NULL)",
+      [this.workspaceId],
+    );
   }
 }
 export class PostgresNotifications implements Repository {
@@ -412,12 +426,21 @@ export class PostgresNotifications implements Repository {
     try {
       await client.query("BEGIN");
       await client.query("SELECT set_config('app.workspace_id',$1,true)", [workspaceId]);
+      // Repair metadata left by a pre-fix deletion before claiming any external delivery.
+      await client.query(
+        "DELETE FROM outbox WHERE EXISTS(SELECT 1 FROM deletion_tombstones d JOIN jsonb_array_elements(outbox.event->'references') ref ON ref->>'kind'='meeting' AND ref->>'id'=d.meeting_id::text)",
+      );
       rows = (
         await client.query(
-          "WITH candidates AS(SELECT id FROM outbox WHERE published_at IS NULL AND(lease_until IS NULL OR lease_until<now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED) UPDATE outbox SET lease_token=$2,lease_until=now()+interval '30 seconds' FROM candidates WHERE outbox.id=candidates.id RETURNING outbox.id,outbox.event",
+          "WITH candidates AS(SELECT id FROM outbox WHERE published_at IS NULL AND(lease_until IS NULL OR lease_until<now()) ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED),claimed AS(UPDATE outbox SET lease_token=$2,lease_until=now()+interval '30 seconds' FROM candidates WHERE outbox.id=candidates.id RETURNING outbox.id,outbox.event,outbox.created_at) SELECT id,event FROM claimed ORDER BY created_at,id",
           [limit, token],
         )
       ).rows;
+      if (!rows.length)
+        await client.query(
+          "DELETE FROM event_work_index WHERE workspace_id=$1 AND NOT EXISTS(SELECT 1 FROM outbox WHERE published_at IS NULL)",
+          [workspaceId],
+        );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -427,7 +450,29 @@ export class PostgresNotifications implements Repository {
     }
     let count = 0;
     for (const row of rows) {
-      await publisher.publish(eventEnvelope.parse(row.event));
+      const event = eventEnvelope.parse(row.event);
+      if (event.workspaceId !== workspaceId) throw new Error("OUTBOX_TENANT_MISMATCH");
+      const lease = await this.pool.connect();
+      let live: number | null;
+      try {
+        await lease.query("BEGIN");
+        await lease.query("SELECT set_config('app.workspace_id',$1,true)", [workspaceId]);
+        live = (
+          await lease.query(
+            "UPDATE outbox SET lease_until=now()+interval '30 seconds' WHERE id=$1 AND lease_token=$2 AND lease_until>now() AND published_at IS NULL AND NOT EXISTS(SELECT 1 FROM deletion_tombstones d JOIN jsonb_array_elements(outbox.event->'references') ref ON ref->>'kind'='meeting' AND ref->>'id'=d.meeting_id::text) RETURNING id",
+            [row.id, token],
+          )
+        ).rowCount;
+        await lease.query("COMMIT");
+      } catch (error) {
+        await lease.query("ROLLBACK");
+        throw error;
+      } finally {
+        lease.release();
+      }
+      // Earlier I/O may have consumed this later row's lease, or deletion may have retired it.
+      if (!live) continue;
+      await publisher.publish(event);
       const ack = await this.pool.connect();
       try {
         await ack.query("BEGIN");
@@ -435,7 +480,7 @@ export class PostgresNotifications implements Repository {
         count +=
           (
             await ack.query(
-              "UPDATE outbox SET published_at=now(),lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2 AND published_at IS NULL",
+              "UPDATE outbox SET published_at=now(),lease_token=NULL,lease_until=NULL WHERE id=$1 AND lease_token=$2 AND lease_until>now() AND published_at IS NULL AND NOT EXISTS(SELECT 1 FROM deletion_tombstones d JOIN jsonb_array_elements(outbox.event->'references') ref ON ref->>'kind'='meeting' AND ref->>'id'=d.meeting_id::text)",
               [row.id, token],
             )
           ).rowCount ?? 0;

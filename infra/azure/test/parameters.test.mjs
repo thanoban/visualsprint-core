@@ -41,6 +41,39 @@ function runtime() {
 }
 test("foundations alone never imply runtime or paid-provider activation", () =>
   assert.equal(validateParameters(template()).runtime, false));
+
+test("realtime requires matching operator gate, native flag and generated resource endpoint", () => {
+  const p = runtime();
+  p.parameters.enableNotificationRealtime.value = true;
+  assert.throws(() => validateParameters(p), /REALTIME_ACTIVATION_MISMATCH/);
+  p.parameters.runtimeConfig.value.notification.env.push({
+    name: "NOTIFICATION_REALTIME_ENABLED",
+    value: "true",
+  });
+  assert.equal(validateParameters(p).runtime, true);
+  p.parameters.enableNotificationRealtime.value = false;
+  assert.throws(() => validateParameters(p), /REALTIME_ACTIVATION_MISMATCH/);
+  p.parameters.enableNotificationRealtime.value = true;
+  p.parameters.runtimeConfig.value.notification.env.push({
+    name: "AZURE_WEB_PUBSUB_ENDPOINT",
+    value: "https://other.webpubsub.azure.com",
+  });
+  assert.throws(() => validateParameters(p), /GENERATED_ENV_OVERRIDE/);
+  const disabled = template();
+  disabled.parameters.enableNotificationRealtime.value = true;
+  assert.throws(() => validateParameters(disabled), /REALTIME_REQUIRES_RUNTIME/);
+});
+
+test("realtime identities are scoped to Notification API/events on one cell resource", () => {
+  const main = readFileSync(new URL("../main.bicep", import.meta.url), "utf8");
+  const role = readFileSync(new URL("../modules/realtime-access.bicep", import.meta.url), "utf8");
+  assert.match(main, /activateRuntime && enableNotificationRealtime/);
+  assert.match(main, /apis\[indexOf\(services, 'notification'\)\]/);
+  assert.match(main, /workerApps\[indexOf\(workerNames, 'notification-events'\)\]/);
+  assert.match(role, /scope: pubsub/);
+  assert.match(role, /12cf5a90-567b-43ae-8102-96cf46c7d9b4/);
+  assert.doesNotMatch(role, /scope: resourceGroup\(/);
+});
 test("all independently configured native APIs accept pinned fixture references", () =>
   assert.equal(validateParameters(runtime()).runtime, true));
 test("refuses raw administrator secrets", () => {

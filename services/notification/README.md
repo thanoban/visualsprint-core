@@ -40,6 +40,10 @@ Base `/api/v3/workspaces/{workspaceId}`; gateway-delegated normal user actors on
 - `GET /notifications?after={uuid}` returns bounded authorized in-app references and `nextCursor`.
 - `POST /notifications/{id}/read`, `Idempotency-Key`, `{expectedVersion}`. Reading is naturally
   idempotent; after the first successful read a matching old retry does not repeat a side effect.
+- Optional `POST /realtime/negotiate`, no body or query. Returns an uncacheable two-minute
+  recipient-only WebSocket URL after current normal-session membership checks before and after
+  issuance. No client-selected user, workspace, group or publish role is accepted. See
+  [REALTIME_SETUP.md](REALTIME_SETUP.md); ordinary authorized polling remains the fallback.
 
 ## Internal authority and messaging
 
@@ -59,6 +63,13 @@ Signed event HTTP: `POST /internal/workspaces/{ws}/events`. Only Intelligence su
 Workflow action-completed and Ingest capture-state event issuers are accepted for their owned types.
 Native `events.mjs` consumes those fixed `vs-*` source topics (subscription `notification`) and publishes
 `notification.delivery.changed.v1` on `vs-notification`; all payloads satisfy the metadata-only envelope.
+
+Outbox claims explicitly preserve chronological order after `UPDATE RETURNING`. Each row renews only a
+live owned lease before external I/O; expired later rows cannot dispatch, and expired in-flight work
+cannot acknowledge. Deletion purges matching event rows and obsolete routing, and the publisher repairs
+metadata left behind by pre-fix deletion tombstones. An already-started network send cannot be recalled;
+its late acknowledgement cannot recreate deleted data. Scheduling and claim/send fences use the same
+PostgreSQL clock, avoiding host/DB skew causing early sends or false stale-worker failures.
 
 Deletion: pinned Workspace calls `POST /internal/workspaces/{ws}/deletions/{id}` with
 `{meetingId,sourceVersion}`. After owned purge commit:

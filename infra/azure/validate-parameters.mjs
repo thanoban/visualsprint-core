@@ -41,6 +41,7 @@ const generated = new Set([
   "AUTHZ_INTERNAL_URL",
   "OPENFGA_URL",
   "SERVICE_BUS_NAMESPACE",
+  "AZURE_WEB_PUBSUB_ENDPOINT",
   "CELL_ROUTES",
   "DEFAULT_CELL_ID",
 ]);
@@ -227,6 +228,7 @@ export function validateParameters(document) {
     "enableIndexingWorker",
     "enableIntelligenceEvents",
     "enableCaptureExtractionWorker",
+    "enableNotificationRealtime",
   ])
     assert(p[key] === undefined || typeof p[key] === "boolean", `FLAG_INVALID:${key}`);
   assert(
@@ -239,6 +241,7 @@ export function validateParameters(document) {
   assert(!p.enablePreparationWorker || p.activateRuntime, "PREPARATION_REQUIRES_RUNTIME");
   assert(!p.enableIndexingWorker || p.activateRuntime, "INDEXING_REQUIRES_RUNTIME");
   assert(!p.enableIntelligenceEvents || p.activateRuntime, "EVENTS_REQUIRES_RUNTIME");
+  assert(!p.enableNotificationRealtime || p.activateRuntime, "REALTIME_REQUIRES_RUNTIME");
   assert(
     !p.enableCaptureExtractionWorker || (p.activateRuntime && p.enableIntelligenceEvents),
     "EXTRACTION_REQUIRES_RUNTIME_AND_EVENTS",
@@ -266,6 +269,17 @@ export function validateParameters(document) {
   if (p.activateMaintenanceJobs)
     for (const name of ["intelligence", "authz"])
       config(p.bootstrapConfig?.[name], p, name, "bootstrap");
+  const realtimeFlag = (p.runtimeConfig?.notification?.env ?? []).find(
+    (entry) => entry.name === "NOTIFICATION_REALTIME_ENABLED",
+  )?.value;
+  assert(
+    realtimeFlag === undefined || ["true", "false"].includes(realtimeFlag),
+    "REALTIME_FLAG_INVALID",
+  );
+  assert(
+    Boolean(p.enableNotificationRealtime) === (realtimeFlag === "true"),
+    "REALTIME_ACTIVATION_MISMATCH",
+  );
   if (p.enableCaptureExtractionWorker) {
     const env = (name) =>
       Object.fromEntries(

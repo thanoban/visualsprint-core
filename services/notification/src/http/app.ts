@@ -54,6 +54,12 @@ export function notificationApp(
         actors.set(request, actor);
       });
       const actor = (request: object) => actors.get(request)!;
+      routes.post("/realtime/negotiate", async (request, reply) => {
+        zEmpty(request.body, request.query);
+        reply.header("cache-control", "no-store");
+        reply.header("pragma", "no-cache");
+        return service.negotiate(actor(request));
+      });
       const key = (request: { headers: Record<string, unknown> }) => {
         const value = request.headers["idempotency-key"];
         if (typeof value !== "string") throw new AppError("IDEMPOTENCY_KEY_REQUIRED", 400);
@@ -78,4 +84,13 @@ export function notificationApp(
     { prefix: "/api/v3/workspaces/:workspaceId" },
   );
   return app;
+}
+function zEmpty(body: unknown, query: unknown) {
+  if (
+    (body !== undefined &&
+      body !== null &&
+      (typeof body !== "object" || Array.isArray(body) || Object.keys(body).length)) ||
+    (query && Object.keys(query).length)
+  )
+    throw new AppError("INVALID_REALTIME_REQUEST", 400);
 }

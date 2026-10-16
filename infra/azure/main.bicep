@@ -25,6 +25,7 @@ param enableIndexingWorker bool = false
 // Enable only after an owning native Intelligence events entrypoint is published and image-qualified.
 param enableIntelligenceEvents bool = false
 param enableCaptureExtractionWorker bool = false
+param enableNotificationRealtime bool = false
 param runtimeConfig object = {}
 param migrationConfig object = {}
 param bootstrapConfig object = {}
@@ -83,6 +84,7 @@ var defaults = {
   AUTHZ_INTERNAL_URL: cellOrigins.authz
   OPENFGA_URL: 'https://${cellRuntimeName}-openfga.${cell.outputs.defaultDomain}'
   SERVICE_BUS_NAMESPACE: dependencies.outputs.namespaceHost
+  AZURE_WEB_PUBSUB_ENDPOINT: 'https://${dependencies.outputs.pubsubHost}'
 }
 var services = ['account', 'gateway', 'web', 'openfga', 'workspace', 'authz', 'ingest', 'integration', 'intelligence', 'workflow', 'reporting', 'notification']
 module apis './modules/runtime.bicep' = [for service in services: if (activateRuntime) {
@@ -145,6 +147,16 @@ module eventReceiver './modules/event-access.bicep' = [for producer in ['ingest'
   params: { namespaceName: '${cellName}-bus', topicName: 'vs-${producer}', principalId: workerApps[indexOf(workerNames, 'notification-events')]!.outputs.principalId, receiver: true }
 }]
 var migrationServices = ['account', 'workspace', 'authz', 'ingest', 'integration', 'intelligence', 'workflow', 'reporting', 'notification', 'openfga']
+module realtimeApiAccess './modules/realtime-access.bicep' = if (activateRuntime && enableNotificationRealtime) {
+  name: 'notification-realtime-api-access'
+  scope: cellGroup
+  params: { resourceName: '${cellName}-pubsub', principalId: apis[indexOf(services, 'notification')]!.outputs.principalId }
+}
+module realtimeEventAccess './modules/realtime-access.bicep' = if (activateRuntime && enableNotificationRealtime) {
+  name: 'notification-realtime-events-access'
+  scope: cellGroup
+  params: { resourceName: '${cellName}-pubsub', principalId: workerApps[indexOf(workerNames, 'notification-events')]!.outputs.principalId }
+}
 module extractionReceiver './modules/event-access.bicep' = if (activateRuntime && enableIntelligenceEvents && enableCaptureExtractionWorker) {
   name: 'ingest-extraction-reader'
   scope: cellGroup

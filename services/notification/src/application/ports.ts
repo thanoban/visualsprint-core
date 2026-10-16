@@ -26,6 +26,12 @@ export interface EmailPort {
   }): Promise<EmailResult>;
   lookup(deliveryId: string): Promise<EmailLookup>;
 }
+/** Only a content-free invalidation hint. Source data always uses authorized HTTP reads. */
+export interface RealtimePort {
+  readonly configured: boolean;
+  negotiate(workspaceId: string, userId: string): Promise<{ url: string; expiresAt: string }>;
+  invalidate(workspaceId: string, userId: string): Promise<void>;
+}
 export interface NotificationTransaction {
   preferences(userId: string): Promise<Preferences>;
   savePreferences(

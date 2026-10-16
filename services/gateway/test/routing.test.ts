@@ -15,5 +15,8 @@ test("capture routes never become Workspace commands and unknown routes cannot s
   assert.equal(routeService("intelligence/preparations/job-id"), "intelligence");
   assert.equal(routeService("commitments/commitment-id"), "workspace");
   assert.equal(routeService("operations/operation-id"), "workflow");
+  assert.equal(routeService("realtime/negotiate"), "notification");
+  assert.equal(routeService("realtime/publish"), undefined);
+  assert.equal(routeService("realtime/negotiate/other"), undefined);
   assert.equal(routeService("https://evil.example.com"), undefined);
 });

@@ -4,6 +4,7 @@ import { databasePool, assertRuntimeRole } from "@visualsprint/platform";
 import { PostgresNotifications } from "./infrastructure/store.js";
 import { NotificationAuthority } from "./infrastructure/authorities.js";
 import { configuredEmail } from "./infrastructure/email-runtime.js";
+import { configuredRealtime } from "./infrastructure/realtime-runtime.js";
 import { NotificationService } from "./application/notification.js";
 export async function runtime() {
   const config = z
@@ -16,6 +17,8 @@ export async function runtime() {
       AZURE_EMAIL_SENDER: z.string().min(1).optional(),
       AZURE_CLIENT_ID: z.string().uuid().optional(),
       ALLOW_LOCAL_EMAIL_AZURE_CLI: z.enum(["true", "false"]).default("false"),
+      NOTIFICATION_REALTIME_ENABLED: z.enum(["true", "false"]).default("false"),
+      AZURE_WEB_PUBSUB_ENDPOINT: z.string().url().optional(),
       SERVICE_PRIVATE_JWK: z.string().min(1),
       SERVICE_KEY_ID: z.string().min(1),
     })
@@ -44,6 +47,11 @@ export async function runtime() {
         allowLocalAzureCli: config.ALLOW_LOCAL_EMAIL_AZURE_CLI === "true",
       }),
       config.WEB_APP_ORIGIN,
+      configuredRealtime({
+        enabled: config.NOTIFICATION_REALTIME_ENABLED === "true",
+        endpoint: config.AZURE_WEB_PUBSUB_ENDPOINT,
+        identityClientId: config.AZURE_CLIENT_ID,
+      }),
     ),
   };
 }

@@ -7,6 +7,7 @@ export type CellService =
   | "reporting"
   | "notification";
 export function routeService(path: string): CellService | undefined {
+  if (path === "realtime/negotiate") return "notification";
   if (/^(?:notifications|notification-preferences)(?:\/|$)/.test(path)) return "notification";
   if (
     /^(?:captures|transcripts|imports)(?:\/|$)/.test(path) ||

@@ -32,6 +32,7 @@
     "enableIndexingWorker": { "value": false },
     "enableIntelligenceEvents": { "value": false },
     "enableCaptureExtractionWorker": { "value": false },
+    "enableNotificationRealtime": { "value": false },
     "runtimeConfig": { "value": {} },
     "migrationConfig": { "value": {} },
     "bootstrapConfig": { "value": {} }

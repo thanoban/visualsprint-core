@@ -2,6 +2,7 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import type pg from "pg";
 import {
   AppError,
   databasePool,
@@ -562,4 +563,280 @@ test("public owner and tenant barriers prevent delivery IDs becoming source-read
     /NOT_FOUND/,
   );
   await assert.rejects(f.service.receive({ ...f.event, aggregateVersion: 2 }), /EVENT_ID_CONFLICT/);
+});
+
+async function scoped<T>(workspaceId: string, work: (db: pg.PoolClient) => Promise<T>) {
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    await db.query("SELECT set_config('app.workspace_id',$1,true)", [workspaceId]);
+    const result = await work(db);
+    await db.query("COMMIT");
+    return result;
+  } catch (error) {
+    await db.query("ROLLBACK");
+    throw error;
+  } finally {
+    db.release();
+  }
+}
+async function seedOutbox(
+  f: ReturnType<typeof fixture>,
+  meetings = [f.meetingId, f.meetingId, f.meetingId],
+) {
+  const events = meetings.map((meetingId) =>
+    eventEnvelope.parse({
+      ...f.event,
+      eventId: randomUUID(),
+      type: "notification.delivery.changed.v1",
+      references: [{ kind: "meeting", id: meetingId }],
+    }),
+  );
+  // Deliberately insert in reverse physical order. UPDATE RETURNING does not promise CTE order.
+  await scoped(f.actor.workspaceId, async (db) => {
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = events[index]!;
+      await db.query("INSERT INTO outbox(workspace_id,id,event,created_at) VALUES($1,$2,$3,$4)", [
+        f.actor.workspaceId,
+        event.eventId,
+        JSON.stringify(event),
+        new Date(Date.UTC(2026, 9, 13, 0, 0, index)),
+      ]);
+    }
+    await db.query("INSERT INTO event_work_index(workspace_id) VALUES($1) ON CONFLICT DO NOTHING", [
+      f.actor.workspaceId,
+    ]);
+  });
+  return events;
+}
+
+test("outbox preserves chronological order regardless of heap order", async () => {
+  const f = fixture();
+  const events = await seedOutbox(f);
+  const sent: string[] = [];
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        sent.push(event.eventId);
+      },
+    }),
+    3,
+  );
+  assert.deepEqual(
+    sent,
+    events.map((event) => event.eventId),
+  );
+});
+
+test("outbox fences expired later-row dispatch and expired in-flight acknowledgement, then safely replays", async () => {
+  const f = fixture();
+  const events = await seedOutbox(f, [f.meetingId, f.meetingId]);
+  const first: string[] = [];
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        first.push(event.eventId);
+        await scoped(f.actor.workspaceId, async (db) => {
+          await db.query(
+            "UPDATE outbox SET lease_until=now()-interval '1 second' WHERE workspace_id=$1",
+            [f.actor.workspaceId],
+          );
+        });
+      },
+    }),
+    0,
+  );
+  assert.deepEqual(first, [events[0]!.eventId]);
+  assert.equal(
+    await scoped(
+      f.actor.workspaceId,
+      async (db) =>
+        (await db.query("SELECT 1 FROM outbox WHERE published_at IS NOT NULL")).rowCount,
+    ),
+    0,
+  );
+  const replay: string[] = [];
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        replay.push(event.eventId);
+      },
+    }),
+    2,
+  );
+  assert.deepEqual(
+    replay,
+    events.map((event) => event.eventId),
+  );
+});
+
+test("deletion while another row publishes retires claimed later metadata without dispatch or resurrection", async () => {
+  const f = fixture(),
+    laterMeeting = randomUUID();
+  const events = await seedOutbox(f, [f.meetingId, laterMeeting]);
+  const sent: string[] = [];
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish(event) {
+        sent.push(event.eventId);
+        await f.service.deleteMeeting(f.actor, randomUUID(), {
+          meetingId: laterMeeting,
+          sourceVersion: 1,
+        });
+      },
+    }),
+    1,
+  );
+  assert.deepEqual(sent, [events[0]!.eventId]);
+  assert.equal(
+    await scoped(
+      f.actor.workspaceId,
+      async (db) =>
+        (await db.query("SELECT 1 FROM outbox WHERE id=$1", [events[1]!.eventId])).rowCount,
+    ),
+    0,
+  );
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish() {
+        throw new Error("DELETED_ROW_RESURRECTED");
+      },
+    }),
+    0,
+  );
+});
+
+test("deletion during in-flight publish prevents acknowledgement and clears final routing and metadata", async () => {
+  const f = fixture();
+  await seedOutbox(f, [f.meetingId]);
+  const deletionId = randomUUID();
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish() {
+        // Network I/O already underway cannot be recalled, but neither row nor acknowledgement may return.
+        await f.service.deleteMeeting(f.actor, deletionId, {
+          meetingId: f.meetingId,
+          sourceVersion: 1,
+        });
+      },
+    }),
+    0,
+  );
+  await scoped(f.actor.workspaceId, async (db) => {
+    assert.equal((await db.query("SELECT 1 FROM outbox")).rowCount, 0);
+    assert.equal(
+      (
+        await db.query("SELECT 1 FROM event_work_index WHERE workspace_id=$1", [
+          f.actor.workspaceId,
+        ])
+      ).rowCount,
+      0,
+    );
+  });
+  await f.service.receive({ ...f.event, eventId: randomUUID() });
+  assert.equal((await f.refs()).length, 0);
+});
+
+test("publisher repairs historical metadata left behind by an already-completed deletion", async () => {
+  const f = fixture();
+  await f.service.deleteMeeting(f.actor, randomUUID(), {
+    meetingId: f.meetingId,
+    sourceVersion: 1,
+  });
+  // Simulate the pre-fix implementation retaining its old metadata/routing after deletion ACK.
+  await seedOutbox(f, [f.meetingId]);
+  assert.equal(
+    await repository.publish(f.actor.workspaceId, {
+      async publish() {
+        throw new Error("HISTORICAL_DELETED_METADATA_DISPATCHED");
+      },
+    }),
+    0,
+  );
+  await scoped(f.actor.workspaceId, async (db) => {
+    assert.equal((await db.query("SELECT 1 FROM outbox")).rowCount, 0);
+    assert.equal(
+      (
+        await db.query("SELECT 1 FROM event_work_index WHERE workspace_id=$1", [
+          f.actor.workspaceId,
+        ])
+      ).rowCount,
+      0,
+    );
+  });
+});
+
+test("expired delivery leases cannot record completion or create a new external-send intent", async () => {
+  const f = fixture();
+  await f.prefs();
+  await f.service.receive(f.event);
+  for (const deliveryId of await f.refs()) {
+    const claimed = await repository.transaction(f.actor.workspaceId, (tx) => tx.claim(deliveryId));
+    assert.ok(claimed);
+    await scoped(f.actor.workspaceId, async (db) => {
+      await db.query("UPDATE deliveries SET lease_until=now()-interval '1 second' WHERE id=$1", [
+        deliveryId,
+      ]);
+    });
+    await assert.rejects(
+      repository.transaction(f.actor.workspaceId, (tx) =>
+        tx.finish(claimed, "delivered", null, null),
+      ),
+      /STALE_WORKER/,
+    );
+    if (claimed.channel === "email")
+      await assert.rejects(
+        repository.transaction(f.actor.workspaceId, (tx) => tx.startEmail(claimed)),
+        /STALE_WORKER/,
+      );
+  }
+  assert.equal(
+    await scoped(
+      f.actor.workspaceId,
+      async (db) => (await db.query("SELECT 1 FROM outbox")).rowCount,
+    ),
+    0,
+  );
+});
+
+test("notification scheduling and claims use the database clock despite an offset worker clock", async () => {
+  const f = fixture();
+  await f.prefs(false);
+  await f.service.receive(f.event);
+  const deliveryId = (await f.refs())[0]!;
+  const NativeDate = globalThis.Date;
+  let offset = 2 * 3600000;
+  class ShiftedDate extends NativeDate {
+    constructor(value?: string | number | Date) {
+      super(value instanceof NativeDate ? value.getTime() : (value ?? NativeDate.now() + offset));
+    }
+    static override now() {
+      return NativeDate.now() + offset;
+    }
+  }
+  try {
+    globalThis.Date = ShiftedDate as DateConstructor;
+    await scoped(f.actor.workspaceId, async (db) => {
+      await db.query(
+        "UPDATE deliveries SET available_at=clock_timestamp()+interval '1 hour' WHERE id=$1",
+        [deliveryId],
+      );
+    });
+    // A fast worker clock must not dispatch the future schedule early.
+    assert.equal(
+      await repository.transaction(f.actor.workspaceId, (tx) => tx.claim(deliveryId)),
+      null,
+    );
+    offset = -2 * 3600000;
+    await scoped(f.actor.workspaceId, async (db) => {
+      await db.query(
+        "UPDATE deliveries SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+        [deliveryId],
+      );
+    });
+    // A slow worker clock must not hide work that is already due on the authority clock.
+    assert.ok(await repository.transaction(f.actor.workspaceId, (tx) => tx.claim(deliveryId)));
+  } finally {
+    globalThis.Date = NativeDate;
+  }
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eventEnvelope, id, type DomainEvent } from "@visualsprint/contracts";
 import { AppError, type Actor } from "@visualsprint/platform";
-import type { Authority, EmailPort, Repository } from "./ports.js";
+import type { Authority, EmailPort, Repository, RealtimePort } from "./ports.js";
 import type { Delivery } from "../domain/notification.js";
 export class NotificationService {
   constructor(
@@ -9,6 +9,7 @@ export class NotificationService {
     private readonly authority: Authority,
     private readonly email: EmailPort,
     private readonly appOrigin: string,
+    private readonly realtime?: RealtimePort,
   ) {
     const url = new URL(appOrigin);
     if (
@@ -29,6 +30,14 @@ export class NotificationService {
   private async user(actor: Actor) {
     if (actor.operationGrantId) throw new AppError("FORBIDDEN", 403);
     await this.authority.requireSession(actor);
+  }
+  async negotiate(actor: Actor) {
+    await this.user(actor);
+    if (!this.realtime?.configured) throw new AppError("REALTIME_NOT_CONFIGURED", 503);
+    const connection = await this.realtime.negotiate(actor.workspaceId, actor.actorId);
+    // Token issuance may take time. Revocation in that interval must prevent returning it.
+    await this.user(actor);
+    return connection;
   }
   async preferences(actor: Actor) {
     await this.user(actor);

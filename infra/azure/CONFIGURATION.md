@@ -80,6 +80,27 @@ DSN shape: `postgres://ROLE:URL_ENCODED_PASSWORD@PRIVATE_SERVER.postgres.databas
 
 ## Azure and operational gates
 
+### Optional private realtime notifications
+
+`enableNotificationRealtime` defaults to false. Enabling it requires `activateRuntime=true` and
+`runtimeConfig.notification.env` containing `NOTIFICATION_REALTIME_ENABLED=true`; either side
+being enabled alone fails validation. `AZURE_WEB_PUBSUB_ENDPOINT` is generated from this cell's
+resource and cannot be overridden in runtime configuration. No access key is provisioned.
+
+Only the Notification API and Notification events process receive resource-scoped **Web PubSub
+Service Owner** data-plane grants. This built-in role is broader than generate-token/send-to-user
+alone; it is not subscription/RG Owner, but a reviewed split custom-role policy may further reduce
+permissions before production. [Microsoft's role definition](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/web-and-mobile#web-pubsub-service-owner)
+and [managed-identity client-token requirements](https://learn.microsoft.com/en-us/azure/azure-web-pubsub/howto-generate-client-access-url)
+are the operator reference. Other service identities receive no PubSub grants.
+
+The gateway routes only `realtime/negotiate` to Notification. The native implementation issues
+short-lived role-free recipient tokens and sends content-free invalidation hints, never meeting
+content or membership grants. Existing sockets are not forcibly expired by token TTL; browser
+teardown and permission-checked refetch remain required. See
+[the native setup and qualification guide](../../services/notification/REALTIME_SETUP.md).
+Qualify both private managed-identity REST and public authorized WSS paths before activation.
+
 Supply actual approved subscription/RG/ACR IDs, globally unique 3–8 character lowercase prefix, stage, region and distinct supported HA zones. Examples use placeholder identifiers deliberately. Account/cell provisioning passwords use ARM Key Vault references to an existing operator-controlled provisioning vault; infrastructure outputs expose hosts/URIs, never secret values. Populating private vaults requires an authorized VNet-reachable operator or deployment agent; no public-vault/network bypass is acceptable.
 
 The image registry may require existing networking and trusted ACA managed-identity pull support. AcrPull assumes an ordinary RBAC registry, not ABAC-only repository permissions; ABAC registries need explicitly reviewed repository-reader assignments. Bootstrap/jobs and APIs use different identities; no API can read the provisioning secret. Optional model/email/storage roles are not automatically granted to every service.
