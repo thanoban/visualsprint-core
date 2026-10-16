@@ -55,7 +55,11 @@ export class ReportingService {
       throw new AppError("EXPORT_SOURCE_CHANGED", 409);
     await this.source.authorize(actor, job.meetingId);
     const fence = await this.repository.get(actor.workspaceId, exportId);
-    if (fence?.state !== "complete" || fence.version !== job.version)
+    if (
+      fence?.state !== "complete" ||
+      fence.version !== job.version ||
+      fence.expiresAt <= this.now()
+    )
       throw new AppError("EXPORT_NOT_AVAILABLE", 409);
     return { content: job.content, format: job.format, id: job.id };
   }

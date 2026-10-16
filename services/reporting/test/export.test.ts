@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { render, evidenceFingerprint, type Evidence } from "../src/domain/export.js";
 import { exportInput } from "../src/application/contracts.js";
 const evidence: Evidence = {
-  meetingId: randomUUID(),
+  meetingId: "11111111-1111-4111-8111-111111111111",
   version: 1,
   title: "Customer meeting",
   notes: "Owner notes",
@@ -26,6 +26,15 @@ const evidence: Evidence = {
       ],
     },
   ],
+  reviewed: {
+    schemaVersion: 1,
+    complete: true,
+    meetingId: "11111111-1111-4111-8111-111111111111",
+    meetingVersion: 1,
+    decisions: [],
+    commitments: [],
+    agendas: [],
+  },
 };
 test("exports carry observed coverage, evidence identity/revision and uncertain speakers", () => {
   const output = render(evidence, "text");
@@ -34,7 +43,7 @@ test("exports carry observed coverage, evidence identity/revision and uncertain 
   assert.match(output, /revision 2/);
   assert.match(output, /not reconstructed/);
   const json = JSON.parse(render(evidence, "json"));
-  assert.equal(json.schemaVersion, 1);
+  assert.equal(json.schemaVersion, 2);
   assert.equal(json.captures[0].segments[0].text, "Ship Friday");
 });
 test("source revisions/content invalidate export fingerprint and output is bounded", () => {

@@ -116,7 +116,7 @@ export class PostgresExports implements ExportRepository {
       await this.lock(tx, job.workspaceId, job.meetingId);
       const rows = (
         await tx.execute(
-          sql`UPDATE exports SET state=${result.state},content=${result.content ?? null},fingerprint=${result.fingerprint ?? null},error_code=${result.errorCode ?? null},lease_token=NULL,lease_until=NULL,version=version+1 WHERE id=${job.id} AND lease_token=${job.leaseToken} AND state='running' AND expires_at>${now.toISOString()} AND NOT EXISTS(SELECT 1 FROM deletion_tombstones d WHERE d.meeting_id=exports.meeting_id) RETURNING id`,
+          sql`UPDATE exports SET state=${result.state},content=${result.content ?? null},fingerprint=${result.fingerprint ?? null},error_code=${result.errorCode ?? null},lease_token=NULL,lease_until=NULL,version=version+1 WHERE id=${job.id} AND lease_token=${job.leaseToken} AND lease_until>${now.toISOString()} AND state='running' AND expires_at>${now.toISOString()} AND NOT EXISTS(SELECT 1 FROM deletion_tombstones d WHERE d.meeting_id=exports.meeting_id) RETURNING id`,
         )
       ).rows;
       if (!rows.length) return;

@@ -12,7 +12,8 @@ import {
 import { PostgresExports } from "../../src/infrastructure/store.js";
 import { ReportingService } from "../../src/application/reporting.js";
 import { reportingApp } from "../../src/http/app.js";
-import type { Evidence } from "../../src/domain/export.js";
+import type { Evidence, ReviewedContext } from "../../src/domain/export.js";
+import { reviewedContext } from "../fixtures/evidence.js";
 const migration = databasePool(
     "postgres://vs_reporting_migration:local-migration-only@127.0.0.1:55439/reporting",
     1,
@@ -40,11 +41,12 @@ function fixture() {
     revision = 1,
     clock = new Date();
   const meetingId = randomUUID();
+  const reviewed = reviewedContext(meetingId);
   const source = {
     async authorize() {
       if (!active) throw new AppError("FORBIDDEN", 403);
     },
-    async load() {
+    async load(): Promise<Evidence> {
       await this.authorize();
       return {
         meetingId,
@@ -52,6 +54,7 @@ function fixture() {
         title: "Test customer",
         notes: "Private notes",
         captures: [],
+        reviewed: { ...structuredClone(reviewed), meetingVersion: revision },
       } satisfies Evidence;
     },
   };
@@ -70,6 +73,10 @@ function fixture() {
       clock = new Date(clock.getTime() + 90000000);
     },
     now: () => clock,
+    review: (change: (value: ReviewedContext) => void) => change(reviewed),
+    advanceBy: (milliseconds: number) => {
+      clock = new Date(clock.getTime() + milliseconds);
+    },
   };
 }
 test("durable request idempotency, authorized attachment and changed revision fail closed", async () => {
@@ -125,7 +132,7 @@ test("revoked generation is blocked; wrong owner/tenant cannot read; expiry purg
     });
   await second.service.work(second.actor.workspaceId, ready.id);
   second.advance();
-  await repository.expire(second.now());
+  await repository.expireWorkspace(second.actor.workspaceId, second.now());
   const expired = await repository.get(second.actor.workspaceId, ready.id);
   assert.equal(expired?.state, "expired");
   assert.equal(expired?.content, null);
@@ -155,4 +162,102 @@ test("deletion atomically purges exports and fences stale workers and new intent
     f.service.delete(f.actor.workspaceId, deletionId, { ...body, meetingId: randomUUID() }),
     (e) => e instanceof AppError && e.code === "DELETION_TARGET_CONFLICT",
   );
+});
+test("accepted corrections and approved agenda edits invalidate an otherwise unchanged meeting export", async () => {
+  for (const kind of ["commitment", "agenda", "evidence"]) {
+    const f = fixture(),
+      job = await f.service.create(f.actor, `reviewed-export-${kind}`, {
+        meetingId: f.meetingId,
+        format: "json",
+      });
+    await f.service.work(f.actor.workspaceId, job.id);
+    const artifact = await f.service.download(f.actor, job.id),
+      json = JSON.parse(artifact.content);
+    assert.equal(json.schemaVersion, 2);
+    assert.equal(json.reviewed.commitments[0].state, "completed");
+    assert.equal(json.externalTaskVerification, "not_included");
+    assert.equal(json.reviewed.agendas[0].reviewed, true);
+    f.review((value) => {
+      if (kind === "commitment") {
+        value.commitments[0]!.version++;
+        value.commitments[0]!.text = "Corrected human statement";
+      } else if (kind === "agenda") {
+        value.agendas[0]!.version++;
+        value.agendas[0]!.body = "Updated approved agenda";
+      } else value.decisions[0]!.evidenceStatus = "unavailable";
+    });
+    await assert.rejects(
+      f.service.download(f.actor, job.id),
+      (error) => error instanceof AppError && error.code === "EXPORT_SOURCE_CHANGED",
+    );
+  }
+});
+test("review changes, access revocation and owning deletion during generation cannot publish artifacts", async () => {
+  for (const change of ["review", "permission", "deletion"]) {
+    const f = fixture(),
+      job = await f.service.create(f.actor, `publication-race-${change}`, {
+        meetingId: f.meetingId,
+      }),
+      read = f.source.load.bind(f.source);
+    let calls = 0;
+    f.source.load = async () => {
+      calls++;
+      if (calls === 2) {
+        if (change === "review") f.review((value) => value.agendas[0]!.version++);
+        if (change === "permission") f.revoke();
+        if (change === "deletion")
+          await f.service.delete(f.actor.workspaceId, randomUUID(), {
+            meetingId: f.meetingId,
+            sourceVersion: 2,
+          });
+      }
+      return read();
+    };
+    await f.service.work(f.actor.workspaceId, job.id);
+    const stored = await repository.get(f.actor.workspaceId, job.id);
+    assert.equal(stored?.content, null);
+    assert.equal(
+      stored?.state,
+      change === "review" ? "queued" : change === "permission" ? "blocked" : "deleted",
+    );
+  }
+});
+test("expired worker lease cannot publish and another claim can recover the same durable job", async () => {
+  const f = fixture(),
+    job = await f.service.create(f.actor, "lease-expiry-export", { meetingId: f.meetingId }),
+    claim = await repository.claim(f.actor.workspaceId, job.id, f.now());
+  assert.ok(claim);
+  f.advanceBy(120001);
+  await repository.finish(
+    claim,
+    { state: "complete", content: "Expired worker must not publish", fingerprint: "stale" },
+    f.now(),
+  );
+  const after = await repository.get(f.actor.workspaceId, job.id);
+  assert.equal(after?.state, "running");
+  assert.equal(after?.content, null);
+  await f.service.work(f.actor.workspaceId, job.id);
+  assert.equal((await f.service.status(f.actor, job.id)).state, "complete");
+});
+test("expiry or deletion during source validation prevents download even before periodic purge", async () => {
+  for (const mode of ["expiry", "deletion"]) {
+    const f = fixture(),
+      job = await f.service.create(f.actor, `download-fence-${mode}`, { meetingId: f.meetingId });
+    await f.service.work(f.actor.workspaceId, job.id);
+    const read = f.source.load.bind(f.source);
+    f.source.load = async () => {
+      const evidence = await read();
+      if (mode === "expiry") f.advance();
+      else
+        await f.service.delete(f.actor.workspaceId, randomUUID(), {
+          meetingId: f.meetingId,
+          sourceVersion: 2,
+        });
+      return evidence;
+    };
+    await assert.rejects(
+      f.service.download(f.actor, job.id),
+      (error) => error instanceof AppError && error.code === "EXPORT_NOT_AVAILABLE",
+    );
+  }
 });
