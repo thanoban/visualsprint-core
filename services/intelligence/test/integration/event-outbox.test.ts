@@ -175,6 +175,22 @@ test("tenant mismatch fails before broker dispatch and deletion cancels pending 
   await assert.rejects(repository.defer(f.workspaceId, 0), /INVALID_RETRY/);
 });
 
+test("claimed rows preserve chronological order even when heap insertion order differs", async () => {
+  const f = await fixture();
+  const earlier = { ...f.event, eventId: randomUUID(), aggregateId: randomUUID() };
+  await scoped(f.workspaceId, (db) =>
+    db.query(
+      "INSERT INTO outbox(workspace_id,id,event,created_at) VALUES($1,$2,$3,now()-interval '1 day')",
+      [f.workspaceId, randomUUID(), earlier],
+    ),
+  );
+  const seen: string[] = [];
+  assert.equal(await repository.publish(f.workspaceId, {
+    async publish(event) { seen.push(event.eventId); },
+  }), 2);
+  assert.deepEqual(seen, [earlier.eventId, f.event.eventId]);
+});
+
 test("a claimed later row is not sent after lease expiry or deletion during earlier delivery", async () => {
   for (const change of ["expire", "delete"] as const) {
     const f = await fixture(),

@@ -52,8 +52,11 @@ export class IntelligenceEventOutbox {
             `WITH candidates AS (
         SELECT id FROM outbox WHERE published_at IS NULL AND (lease_until IS NULL OR lease_until<now())
         ORDER BY created_at,id LIMIT $1 FOR UPDATE SKIP LOCKED
-      ) UPDATE outbox SET lease_token=$2,lease_until=now()+interval '30 seconds'
-        FROM candidates WHERE outbox.id=candidates.id RETURNING outbox.id,outbox.event`,
+      ), claimed AS (
+        UPDATE outbox SET lease_token=$2,lease_until=now()+interval '30 seconds'
+        FROM candidates WHERE outbox.id=candidates.id
+        RETURNING outbox.id,outbox.event,outbox.created_at
+      ) SELECT id,event FROM claimed ORDER BY created_at,id`,
             [limit, token],
           )
         ).rows,
