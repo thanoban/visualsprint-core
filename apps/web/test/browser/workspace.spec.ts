@@ -44,6 +44,7 @@ async function fixture(page: Page, captureEnabled = false, futureMode = false) {
     const url = new URL(request.url());
     expect(request.headers().authorization).toBe("Bearer controlled-browser-fixture");
     const path = url.pathname;
+    if (path.endsWith("/agendas") && request.method() === "GET") return route.fulfill({ json: [] });
     if (path.endsWith(`/meetings/${meetingId}/captures`) && request.method() === "GET")
       return route.fulfill({ json: currentCapture ? [currentCapture] : [] });
     if (path.endsWith(`/captures/${captureId}`) && request.method() === "GET")

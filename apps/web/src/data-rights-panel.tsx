@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { Api, errorMessage, type Meeting } from "./api.js";
 import { Form, useCommand } from "./ui.js";
+import { exportArtifact } from "./export-model.js";
 const exportJob = z.object({
   id: z.string().uuid(),
   meetingId: z.string().uuid(),
@@ -18,37 +19,12 @@ const deletionJob = z.object({
   required: z.array(z.string()),
   completed: z.array(z.string()),
 });
-const artifact = z.object({
-  schemaVersion: z.literal(1),
-  meetingId: z.string().uuid(),
-  version: z.number().int().positive(),
-  title: z.string(),
-  notes: z.string(),
-  captures: z.array(
-    z.object({
-      id: z.string().uuid(),
-      version: z.number().int(),
-      state: z.string(),
-      coverage: z.string(),
-      segments: z.array(
-        z.object({
-          id: z.string().uuid(),
-          revision: z.number().int(),
-          startMs: z.number(),
-          endMs: z.number(),
-          text: z.string(),
-          speakerLabel: z.string().nullable(),
-        }),
-      ),
-    }),
-  ),
-});
 type Props = {
   api: Api;
   workspaceId: string;
   meeting: Meeting;
   owner: boolean;
-  onDeletionAccepted?: (jobId:string) => void;
+  onDeletionAccepted?: (jobId: string) => void;
 };
 export function DataRightsPanel(props: Props) {
   return <ScopedRights key={`${props.workspaceId}:${props.meeting.id}`} {...props} />;
@@ -57,6 +33,7 @@ function ScopedRights({ api, workspaceId, meeting, owner, onDeletionAccepted }: 
   const [exported, setExported] = useState<z.infer<typeof exportJob>>(),
     [deletion, setDeletion] = useState<z.infer<typeof deletionJob>>(),
     [confirmation, setConfirmation] = useState(""),
+    [downloadedVersion, setDownloadedVersion] = useState<1 | 2>(),
     [error, setError] = useState("");
   const abort = useRef(new AbortController());
   const create = useCommand(),
@@ -117,9 +94,11 @@ function ScopedRights({ api, workspaceId, meeting, owner, onDeletionAccepted }: 
     <section aria-label="Meeting data rights">
       <h3>Export and deletion</h3>
       <p>
-        English text only. Exports contain notes, transcript revisions and capture-coverage labels;
-        no recordings or screenshots. Artifacts expire after 24 hours and fresh permission checks
-        apply to downloads.
+        English text only. Current schema-2 exports include reviewed decisions, commitments and
+        owner-reviewed agendas alongside notes, transcript revisions and capture-coverage labels.
+        Legacy schema-1 artifacts contain only notes/transcripts, not complete reviewed records. No
+        recordings or screenshots. Artifacts expire after 24 hours and fresh permission checks apply
+        to downloads.
       </p>
       {error ? <p role="alert">{error}</p> : null}
       {!deletion ? (
@@ -164,12 +143,13 @@ function ScopedRights({ api, workspaceId, meeting, owner, onDeletionAccepted }: 
             disabled={download.busy}
             onClick={() => {
               const signal = abort.current.signal;
+              setDownloadedVersion(undefined);
               void download.run(
                 exported.id,
                 async () => {
                   const content = await api.request(
                     `${path}/exports/${exported.id}/download`,
-                    artifact,
+                    exportArtifact,
                     { signal },
                   );
                   if (content.meetingId !== meeting.id) throw new Error("EXPORT_SCOPE_MISMATCH");
@@ -177,6 +157,7 @@ function ScopedRights({ api, workspaceId, meeting, owner, onDeletionAccepted }: 
                 },
                 (content) => {
                   if (signal.aborted) return;
+                  setDownloadedVersion(content.schemaVersion);
                   const url = URL.createObjectURL(
                     new Blob([JSON.stringify(content, null, 2)], { type: "application/json" }),
                   );
@@ -192,6 +173,13 @@ function ScopedRights({ api, workspaceId, meeting, owner, onDeletionAccepted }: 
             Download authorized export
           </button>
           {download.error ? <p role="alert">{errorMessage(download.error)}</p> : null}
+          {downloadedVersion ? (
+            <p role="status">
+              {downloadedVersion === 1
+                ? "Legacy schema-1 artifact downloaded: reviewed decisions, commitments and agendas are not included."
+                : "Schema-2 artifact downloaded with its complete authorized reviewed snapshot. External task verification and generated drafts are not included."}
+            </p>
+          ) : null}
         </>
       ) : null}
       {owner && !deletion ? (

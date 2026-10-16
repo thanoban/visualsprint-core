@@ -14,6 +14,7 @@ import { WorkflowPanel } from "./workflow-panel.js";
 import { IntelligencePanel } from "./intelligence-panel.js";
 import { CommitmentReview } from "./commitment-review.js";
 import { PreparationPanel } from "./preparation-panel.js";
+import { AgendaPanel } from "./agenda-panel.js";
 
 export function MeetingPanel({
   api,
@@ -32,12 +33,13 @@ export function MeetingPanel({
   reload: () => void;
   onDeleted?: (jobId: string) => void;
 }) {
+  const [meetingRevision, setMeetingRevision] = useState(0);
   const data = useData(
     async (signal) => ({
       meeting: await api.meeting(workspaceId, meetingId, signal),
       members: await api.members(workspaceId, signal),
     }),
-    [api, workspaceId, meetingId],
+    [api, workspaceId, meetingId, meetingRevision],
   );
   return (
     <section className="meeting-detail" aria-label="Meeting details">
@@ -52,6 +54,10 @@ export function MeetingPanel({
           userId={userId}
           projects={projects}
           reload={reload}
+          refreshMeeting={() => {
+            setMeetingRevision((value) => value + 1);
+            reload();
+          }}
           {...(onDeleted ? { onDeleted } : {})}
         />
       ) : null}
@@ -67,6 +73,7 @@ function MeetingEditor({
   members,
   reload,
   onDeleted,
+  refreshMeeting,
 }: {
   api: Api;
   workspaceId: string;
@@ -76,6 +83,7 @@ function MeetingEditor({
   members: Member[];
   reload: () => void;
   onDeleted?: (jobId: string) => void;
+  refreshMeeting: () => void;
 }) {
   const [meeting, setMeeting] = useState(initial);
   const [deleted, setDeleted] = useState(false);
@@ -132,6 +140,13 @@ function MeetingEditor({
         meeting={meeting}
         owner={owner}
         projects={projects}
+      />
+      <AgendaPanel
+        api={api}
+        workspaceId={workspaceId}
+        meeting={meeting}
+        owner={owner}
+        onMeetingReload={refreshMeeting}
       />
       <DataRightsPanel
         key={`rights/${workspaceId}/${meeting.id}`}
