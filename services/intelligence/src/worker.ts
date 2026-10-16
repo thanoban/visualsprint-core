@@ -9,6 +9,8 @@ const {
   preparationRepository,
   indexing,
   indexRepository,
+  extraction,
+  extractionRepository,
 } = await runtime();
 const abort = new AbortController();
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => abort.abort());
@@ -16,11 +18,13 @@ try {
   while (!abort.signal.aborted) {
     try {
       const target =
-        features.INTELLIGENCE_WORKER_KIND === "preparation"
-          ? { repository: preparationRepository!, service: preparation! }
-          : features.INTELLIGENCE_WORKER_KIND === "indexing"
-            ? { repository: indexRepository!, service: indexing! }
-            : { repository, service };
+        features.INTELLIGENCE_WORKER_KIND === "extraction"
+          ? { repository: extractionRepository!, service: extraction! }
+          : features.INTELLIGENCE_WORKER_KIND === "preparation"
+            ? { repository: preparationRepository!, service: preparation! }
+            : features.INTELLIGENCE_WORKER_KIND === "indexing"
+              ? { repository: indexRepository!, service: indexing! }
+              : { repository, service };
       const due = await target.repository.due();
       for (let offset = 0; offset < due.length && !abort.signal.aborted; offset += 2)
         await Promise.all(

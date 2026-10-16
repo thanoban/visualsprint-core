@@ -24,6 +24,13 @@ import { EvidenceIndexing } from "./application/indexing.js";
 import { AzureEmbeddings } from "./infrastructure/azure-embeddings.js";
 import { PostgresModelDispatch } from "./infrastructure/model-dispatch.js";
 import { IndexedChatEvidence } from "./application/indexed-chat.js";
+import { DurableCaptureExtraction } from "./application/capture-extraction.js";
+import { PostgresCaptureExtractions } from "./infrastructure/capture-extraction-store.js";
+import {
+  CaptureProcessingClient,
+  AuthorizedCaptureExtractionEvidence,
+  CaptureModelAdmission,
+} from "./infrastructure/capture-processing-client.js";
 export async function runtime() {
   const features = intelligenceFeatureConfig.parse(process.env);
   const config = z
@@ -36,6 +43,7 @@ export async function runtime() {
       SERVICE_KEY_ID: z.string().min(1),
       GATEWAY_PUBLIC_JWKS: z.string().min(1),
       WORKSPACE_PUBLIC_JWKS: z.string().optional(),
+      INGEST_PUBLIC_JWKS: z.string().optional(),
       AZURE_OPENAI_ENDPOINT: z.preprocess(
         (value) => (value === "" ? undefined : value),
         z.string().url().optional(),
@@ -128,6 +136,27 @@ export async function runtime() {
     : new UnconfiguredModelUsageAdmission();
   const preparationRepository = installed.preparation ? new PostgresPreparation(pool) : undefined;
   const indexRepository = installed.vector ? new PostgresVectorIndexes(pool) : undefined;
+  const extractionRepository = installed.extraction
+    ? new PostgresCaptureExtractions(pool)
+    : undefined;
+  const captureClient = new CaptureProcessingClient(
+    {
+      account: config.ACCOUNT_INTERNAL_URL,
+      workspace: config.WORKSPACE_INTERNAL_URL,
+      ingest: config.INGEST_INTERNAL_URL,
+    },
+    privateKey,
+    config.SERVICE_KEY_ID,
+  );
+  const extraction = features.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED
+    ? new DurableCaptureExtraction(
+        extractionRepository!,
+        new AuthorizedCaptureExtractionEvidence(captureClient),
+        model,
+        new CaptureModelAdmission(captureClient, new PostgresModelDispatch(pool)),
+        sources,
+      )
+    : undefined;
   const preparation = features.INTELLIGENCE_PREPARATION_ENABLED
     ? new DurablePreparation(
         preparationRepository!,
@@ -179,9 +208,16 @@ export async function runtime() {
     indexing,
     preparationRepository,
     indexRepository,
+    extraction,
+    extractionRepository,
+    captureIdentity: new ServiceIdentity(
+      "intelligence",
+      config.INGEST_PUBLIC_JWKS ? { ingest: JSON.parse(config.INGEST_PUBLIC_JWKS).keys } : {},
+    ),
     purgeDerived: async (workspaceId: string, meetingId: string) => {
       await preparationRepository?.purgeMeeting(workspaceId, meetingId);
       await indexRepository?.purgeMeeting(workspaceId, meetingId);
+      await extractionRepository?.purgeMeeting(workspaceId, meetingId);
     },
     identity,
     deletionIdentity,

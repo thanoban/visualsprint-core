@@ -8,6 +8,8 @@ import type { DurablePreparation } from "../application/preparation-jobs.js";
 import type { EvidenceIndexing } from "../application/indexing.js";
 import { registerPreparationRoutes } from "./preparation-app.js";
 import { registerIndexRoutes } from "./index-routes.js";
+import { registerCaptureExtractionRoutes } from "./capture-extraction-routes.js";
+import type { DurableCaptureExtraction } from "../application/capture-extraction.js";
 
 export function intelligenceApp(
   service: IntelligenceService,
@@ -17,6 +19,8 @@ export function intelligenceApp(
   features?: {
     preparation?: DurablePreparation;
     indexing?: EvidenceIndexing;
+    extraction?: DurableCaptureExtraction;
+    authenticateCaptureEvent?: (token: string) => Promise<Actor>;
     purgeDerived?: (workspaceId: string, meetingId: string) => Promise<void>;
   },
 ) {
@@ -28,6 +32,12 @@ export function intelligenceApp(
   app.get("/health", async () => ({ status: "ok", service: "intelligence" }));
   registerPreparationRoutes(app, features?.preparation, authenticate);
   registerIndexRoutes(app, features?.indexing, authenticate);
+  registerCaptureExtractionRoutes(
+    app,
+    features?.extraction,
+    authenticate,
+    features?.authenticateCaptureEvent,
+  );
   app.post("/internal/workspaces/:workspaceId/deletions/:deletionId", async (request) => {
     if (!authenticateDeletion) throw new AppError("UNAUTHENTICATED_SERVICE", 401);
     const actor = await authenticateDeletion(bearer(request.headers.authorization));

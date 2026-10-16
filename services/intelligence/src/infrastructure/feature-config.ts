@@ -12,8 +12,9 @@ export const intelligenceFeatureConfig = z.object({
   INTELLIGENCE_PREPARATION_ENABLED: enabled,
   INTELLIGENCE_RETRIEVAL_ENABLED: enabled,
   INTELLIGENCE_MODEL_ADMISSION_ENABLED: enabled,
+  INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED: enabled,
   INTELLIGENCE_WORKER_KIND: z
-    .enum(["interactive", "preparation", "indexing"])
+    .enum(["interactive", "preparation", "indexing", "extraction"])
     .default("interactive"),
   AZURE_OPENAI_EMBEDDING_DEPLOYMENT: optional,
 });
@@ -22,20 +23,23 @@ export async function installedFeatures(pool: pg.Pool) {
     vector: boolean;
     preparation: boolean;
     extension: boolean;
+    extraction: boolean;
   }>(`SELECT
     to_regclass('public.vector_index_jobs') IS NOT NULL AS vector,
     to_regclass('public.preparation_jobs') IS NOT NULL AS preparation,
-    EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector') AS extension`);
+    EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector') AS extension,
+    to_regclass('public.capture_extraction_jobs') IS NOT NULL AS extraction`);
   return result.rows[0]!;
 }
 export function validateFeatures(
   config: z.infer<typeof intelligenceFeatureConfig>,
-  installed: { vector: boolean; preparation: boolean; extension: boolean },
+  installed: { vector: boolean; preparation: boolean; extension: boolean; extraction?: boolean },
   modelConfigured: boolean,
 ) {
   if (
     (config.INTELLIGENCE_PREPARATION_ENABLED ||
       config.INTELLIGENCE_RETRIEVAL_ENABLED ||
+      config.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED ||
       modelConfigured) &&
     !config.INTELLIGENCE_MODEL_ADMISSION_ENABLED
   )
@@ -54,4 +58,11 @@ export function validateFeatures(
     throw new Error("PREPARATION_DISABLED");
   if (config.INTELLIGENCE_WORKER_KIND === "indexing" && !config.INTELLIGENCE_RETRIEVAL_ENABLED)
     throw new Error("RETRIEVAL_DISABLED");
+  if (config.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED && (!installed.extraction || !modelConfigured))
+    throw new Error("CAPTURE_EXTRACTION_CONFIGURATION_INCOMPLETE");
+  if (
+    config.INTELLIGENCE_WORKER_KIND === "extraction" &&
+    !config.INTELLIGENCE_CAPTURE_EXTRACTION_ENABLED
+  )
+    throw new Error("CAPTURE_EXTRACTION_DISABLED");
 }
