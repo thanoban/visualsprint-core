@@ -41,7 +41,7 @@ before(async () => {
   await migrate(migration, fileURLToPath(new URL("../../migrations", import.meta.url)));
   await migration.query("GRANT USAGE ON SCHEMA public TO vs_commitment_test_runtime");
   await migration.query(
-    "REVOKE ALL ON schema_migrations FROM vs_commitment_test_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON meetings,meeting_readers,meeting_assignments,outbox,event_work_index,accepted_items,calendar_meetings,commands,deletion_jobs,deletion_commands,deletion_work_index TO vs_commitment_test_runtime; GRANT SELECT,INSERT ON accepted_commands TO vs_commitment_test_runtime",
+    "REVOKE ALL ON schema_migrations FROM vs_commitment_test_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON meetings,meeting_readers,meeting_assignments,outbox,event_work_index,accepted_items,reviewed_agendas,agenda_commands,calendar_meetings,commands,deletion_jobs,deletion_commands,deletion_work_index TO vs_commitment_test_runtime; GRANT SELECT,INSERT ON accepted_commands TO vs_commitment_test_runtime",
   );
   await assertRuntimeRole(pool);
 });

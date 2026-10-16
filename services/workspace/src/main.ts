@@ -17,6 +17,10 @@ import { CaptureProcessingContext } from "./application/capture-processing-conte
 import { PostgresProcessingMeetings } from "./infrastructure/processing-meetings.js";
 import { AccountCaptureProcessing } from "./infrastructure/account-processing-client.js";
 import { captureProcessingContextRoutes } from "./http/capture-processing-context-routes.js";
+import { AgendasService } from "./application/agendas.js";
+import { PostgresAgendas } from "./infrastructure/agenda-store.js";
+import { WorkspaceExportContext } from "./application/export-context.js";
+import { agendaRoutes, exportContextRoutes } from "./http/agenda-routes.js";
 
 const config = z
   .object({
@@ -175,6 +179,26 @@ commitmentRoutes(
     : undefined,
 );
 app.addHook("onClose", () => pool.end());
+const agendas = new PostgresAgendas(pool);
+agendaRoutes(
+  app,
+  new AgendasService(agendas, service),
+  async (token) => (await identity.verify(token)).actor,
+);
+exportContextRoutes(
+  app,
+  new WorkspaceExportContext(service, agendas, commitments),
+  async (token) => {
+    const hop = await new ServiceIdentity(
+      "workspace",
+      config.REPORTING_PUBLIC_JWKS
+        ? { reporting: JSON.parse(config.REPORTING_PUBLIC_JWKS).keys }
+        : {},
+    ).verify(token);
+    if (hop.caller !== "reporting") throw new AppError("FORBIDDEN", 403);
+    return hop.actor;
+  },
+);
 preparationContextRoutes(
   app,
   new WorkspacePreparationContext(service, commitments),

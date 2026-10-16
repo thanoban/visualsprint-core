@@ -83,6 +83,8 @@ export class PostgresDeletions implements DeletionRepository {
       await tx.execute(sql`DELETE FROM meeting_readers WHERE meeting_id=${input.meetingId}`);
       await tx.execute(sql`DELETE FROM meeting_assignments WHERE meeting_id=${input.meetingId}`);
       await tx.execute(sql`DELETE FROM accepted_items WHERE meeting_id=${input.meetingId}`);
+      await tx.execute(sql`DELETE FROM reviewed_agendas WHERE meeting_id=${input.meetingId}`);
+      await tx.execute(sql`DELETE FROM agenda_commands WHERE meeting_id=${input.meetingId}`);
       await tx.execute(
         sql`UPDATE calendar_meetings SET last_title='',fingerprint='deleted',starts_at=NULL,ends_at=NULL WHERE meeting_id=${input.meetingId}`,
       );
